@@ -65,8 +65,9 @@ const state = {
     const page = pages[0];
     await page.setViewport({ width: 1920, height: 1080 });
 
-    // Show GUI to get URL if not passed as CLI argument
-    const startUrl = process.argv[2] || await showGui(page);
+    // Show GUI to get URL if not passed as a valid CLI argument
+    const cliArg = process.argv[2];
+    const startUrl = (cliArg && cliArg.startsWith("http")) ? cliArg : await showGui(page);
 
     page.on("response", async (response) => {
       const url = response.url();
