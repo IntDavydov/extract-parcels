@@ -26,7 +26,12 @@
     },
     "linux": {
       "target": "AppImage"
-    }
+    },
+    "asarUnpack": [
+      "script.js",
+      "gui.html",
+      "src/**"
+    ]
   },
   "keywords": [],
   "author": "",

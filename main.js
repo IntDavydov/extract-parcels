@@ -1,11 +1,17 @@
-'use strict';
-
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
 let mainWindow;
 let scrapingProcess = null;
+
+// When packaged, script.js is in app.asar.unpacked — not inside the asar archive
+function getUnpackedPath(...parts) {
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : __dirname;
+  return path.join(base, ...parts);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -58,7 +64,7 @@ ipcMain.on('start-scraping', (event, { url, outputPath }) => {
     : path.join(process.cwd(), 'oster_plots.json');
   event.sender.send('log', `💾 Output will be saved to: ${savePath}`);
 
-  const args = [path.join(__dirname, 'script.js')];
+  const args = [getUnpackedPath('script.js')];
   if (url) args.push(url);
 
   scrapingProcess = spawn(process.execPath, args, { env });
@@ -91,7 +97,7 @@ ipcMain.on('stop-scraping', () => {
 
 // IPC: fetch OSM data
 ipcMain.handle('fetch-osm', async (event, options) => {
-  const { fetchOSM } = require('./src/osm.js');
+  const { fetchOSM } = require(getUnpackedPath('src', 'osm.js'));
   try {
     const resultPath = await fetchOSM(
       options.territory,
