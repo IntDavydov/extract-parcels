@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Land Management</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ── Tab bar ─────────────────────────────────────────── -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="parcels">📍 Parcels (Kadastr)</button>
+  <button class="tab-btn"        data-tab="osm">🗺 OSM Data</button>
+</div>
+
+<!-- ── Tab panels ──────────────────────────────────────── -->
+<div class="tab-panels">
+
+  <!-- TAB 1: Parcels / Kadastr scraper -->
+  <div class="tab-panel active" id="tab-parcels">
+
+    <div class="card">
+      <h2>Kadastr Scraper</h2>
+
+      <div class="field">
+        <label for="kadastr-url">Map URL</label>
+        <input type="text" id="kadastr-url"
+          value="https://kadastr.live/#13.95/46.64265/31.4905"
+          placeholder="https://kadastr.live/#…" />
+      </div>
+
+      <div class="row">
+        <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Output folder</button>
+        <span class="path-display" id="output-folder-display">not selected — saves next to script</span>
+      </div>
+
+      <div class="row">
+        <button class="btn btn-primary" id="btn-start-scraping">▶ Start Scraping</button>
+        <button class="btn btn-danger"  id="btn-stop-scraping" disabled>⏹ Stop</button>
+      </div>
+    </div>
+
+    <div class="card" style="flex:1;display:flex;flex-direction:column;">
+      <h2>Log</h2>
+      <div class="log-area" id="scraping-log"></div>
+    </div>
+
+  </div><!-- /tab-parcels -->
+
+  <!-- TAB 2: OSM Data -->
+  <div class="tab-panel" id="tab-osm">
+
+    <div class="card">
+      <h2>OSM Data Fetcher</h2>
+
+      <div class="field">
+        <label for="osm-territory">Territory — enter hromada or city name (e.g. Остерська громада, Чернігів)</label>
+        <input type="text" id="osm-territory" placeholder="Остерська громада" />
+      </div>
+
+      <div class="field">
+        <label>Output format</label>
+        <div class="radio-group">
+          <label><input type="radio" name="osm-format" value="kmz" checked /> KMZ</label>
+          <label><input type="radio" name="osm-format" value="geojson" /> GeoJSON</label>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="btn btn-secondary btn-sm" id="btn-pick-osm-output">📁 Output file</button>
+        <span class="path-display" id="osm-output-display">not selected</span>
+      </div>
+
+      <div class="field">
+        <label style="margin-bottom:8px;">Layers to fetch</label>
+        <div class="checkbox-grid">
+          <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
+          <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
+          <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
+          <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
+          <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
+          <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
+          <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
+          <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
+        </div>
+
+        <div class="row" style="margin-bottom:0;">
+          <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:4px;">
+        <button class="btn btn-primary" id="btn-fetch-osm">⬇ Fetch Data</button>
+      </div>
+    </div>
+
+    <div class="card" style="flex:1;display:flex;flex-direction:column;">
+      <h2>Log</h2>
+      <div class="log-area" id="osm-log"></div>
+    </div>
+
+  </div><!-- /tab-osm -->
+
+</div><!-- /tab-panels -->
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -27,7 +27,9 @@ function getChromePath() {
 
 // Configuration
 const CONFIG = {
-  filePath: "oster_plots.json",
+  filePath: process.env.OUTPUT_PATH
+    ? path.join(process.env.OUTPUT_PATH, "land_plots.json")
+    : path.join(process.cwd(), "land_plots.json"),
   // Pass a custom URL as the first CLI argument, e.g.:
   //   node script.js "https://kadastr.live/#13.95/46.64265/31.4905"
   startUrl: process.argv[2] || "https://kadastr.live/#13.95/46.64265/31.4905",
