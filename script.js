@@ -54,6 +54,7 @@ const state = {
       headless: false,
       ignoreHTTPSErrors: true,
       executablePath: chromePath,
+      defaultViewport: null, // use actual window size, don't override
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -63,7 +64,6 @@ const state = {
 
     const pages = await browser.pages();
     const page = pages[0];
-    await page.setViewport({ width: 1920, height: 1080 });
 
     // Show GUI to get URL if not passed as a valid CLI argument
     const cliArg = process.argv[2];
