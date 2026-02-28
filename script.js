@@ -64,6 +64,7 @@ const state = {
 
     const pages = await browser.pages();
     const page = pages[0];
+    page.setDefaultNavigationTimeout(60000);
 
     // Show GUI to get URL if not passed as a valid CLI argument
     const cliArg = process.argv[2];
@@ -82,7 +83,7 @@ const state = {
     const statsInterval = setInterval(reportStats, CONFIG.statsInterval);
 
     console.log("--- ПЕРЕХВАТ ЗАПУЩЕН. ДВИГАЙ КАРТУ ---");
-    await page.goto(startUrl);
+    await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
   } catch (error) {
     console.error("Critical error during startup:", error.message);
     process.exit(1);
@@ -239,6 +240,6 @@ async function showGui(page) {
   const guiUrl = pathToFileURL(path.join(__dirname, "gui.html")).href;
   return new Promise(async (resolve) => {
     await page.exposeFunction("__startScraping", (url) => resolve(url));
-    await page.goto(guiUrl);
+    await page.goto(guiUrl, { timeout: 60000 });
   });
 }
