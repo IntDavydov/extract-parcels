@@ -57,17 +57,21 @@ const state = {
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--window-size=1920,1080",
+        "--window-size=700,520",
+        "--window-position=200,150",
       ],
     });
 
     const pages = await browser.pages();
     const page = pages[0];
-    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setViewport({ width: 700, height: 520 });
 
     // Show GUI to get URL if not passed as a valid CLI argument
     const cliArg = process.argv[2];
     const startUrl = (cliArg && cliArg.startsWith("http")) ? cliArg : await showGui(page);
+
+    // Expand to full size for scraping
+    await page.setViewport({ width: 1920, height: 1080 });
 
     page.on("response", async (response) => {
       const url = response.url();
