@@ -74,7 +74,10 @@ ipcMain.on('start-scraping', (event, { url, outputPath }) => {
   const args = [getUnpackedPath('script.js')];
   if (url) args.push(url);
 
-  scrapingProcess = spawn(process.execPath, args, { env });
+  scrapingProcess = spawn(process.execPath, args, {
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 
   scrapingProcess.stdout.on('data', (chunk) => {
     chunk.toString().split('\n').filter(Boolean).forEach((line) => {
@@ -95,10 +98,20 @@ ipcMain.on('start-scraping', (event, { url, outputPath }) => {
   });
 });
 
-// IPC: stop scraping
+// IPC: stop scraping — write SHUTDOWN to stdin for graceful save, then force-kill after 15s
 ipcMain.on('stop-scraping', () => {
   if (scrapingProcess) {
-    try { scrapingProcess.kill('SIGINT'); } catch (_) {}
+    try {
+      scrapingProcess.stdin.write('SHUTDOWN\n');
+    } catch (_) {
+      try { scrapingProcess.kill(); } catch (_) {}
+    }
+    // Force kill after 15s if still running
+    setTimeout(() => {
+      if (scrapingProcess) {
+        try { scrapingProcess.kill(); } catch (_) {}
+      }
+    }, 15000);
   }
 });
 

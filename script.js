@@ -218,6 +218,14 @@ function setupGracefulShutdown(browser) {
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  // Windows-safe graceful stop: parent writes "SHUTDOWN\n" to our stdin
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (data) => {
+    if (data.trim() === "SHUTDOWN") shutdown("STDIN");
+  });
+
   process.on("exit", () => {
     if (!state.fileClosed) {
       try {
