@@ -56,7 +56,14 @@ ipcMain.on('start-scraping', (event, { url, outputPath }) => {
     scrapingProcess = null;
   }
 
-  const env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
+  const nodeModulesPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar', 'node_modules')
+    : path.join(__dirname, 'node_modules');
+
+  const env = Object.assign({}, process.env, {
+    ELECTRON_RUN_AS_NODE: '1',
+    NODE_PATH: nodeModulesPath,
+  });
   if (outputPath) env.OUTPUT_PATH = outputPath;
 
   const savePath = outputPath
