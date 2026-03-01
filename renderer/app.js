@@ -21,7 +21,7 @@ window.api.onLog((msg) => appendLog(msg));
 let outputFolder      = '';
 let boundaryFilterPath = '';
 let boundaryUrl       = '';
-let userStopped       = false;
+let userStopped = false;
 
 // ── Boundary picker ────────────────────────────────────────
 document.getElementById('btn-pick-boundary').addEventListener('click', async () => {
@@ -40,6 +40,7 @@ document.getElementById('btn-pick-boundary').addEventListener('click', async () 
       boundaryUrl = '';
       if (bbox && bbox.error) appendLog(`⚠ Could not read boundary bbox: ${bbox.error}`);
     }
+    checkStartReady();
   }
 });
 
@@ -48,6 +49,7 @@ document.getElementById('btn-clear-boundary').addEventListener('click', () => {
   boundaryUrl = '';
   document.getElementById('boundary-display').textContent = 'not selected';
   document.getElementById('btn-clear-boundary').style.display = 'none';
+  checkStartReady();
 });
 
 // ── Output folder picker ───────────────────────────────────
@@ -56,6 +58,7 @@ document.getElementById('btn-pick-folder').addEventListener('click', async () =>
   if (!result.canceled && result.filePaths.length) {
     outputFolder = result.filePaths[0];
     document.getElementById('output-folder-display').textContent = outputFolder;
+    checkStartReady();
   }
 });
 
@@ -63,38 +66,43 @@ document.getElementById('btn-pick-folder').addEventListener('click', async () =>
 document.getElementById('btn-select-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = true);
   document.getElementById('wind-settings').style.display = 'block';
+  checkStartReady();
 });
 
 document.getElementById('btn-clear-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = false);
   document.getElementById('wind-settings').style.display = 'none';
+  checkStartReady();
 });
 
 document.getElementById('layer-wind').addEventListener('change', (e) => {
   document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
 });
 
+// Track every individual checkbox change
+document.querySelectorAll('input[name="layer"]').forEach(cb => {
+  cb.addEventListener('change', checkStartReady);
+});
+
 // ── Start / Stop ───────────────────────────────────────────
-function setBusy(busy) {
-  document.getElementById('btn-start').disabled = busy;
-  document.getElementById('btn-stop').disabled  = !busy;
+function hasAnything() {
+  const hasBoundary = !!boundaryFilterPath;
+  const hasLayers   = document.querySelectorAll('input[name="layer"]:checked').length > 0;
+  return hasBoundary || hasLayers;
 }
 
-document.getElementById('btn-stop').addEventListener('click', () => {
-  userStopped = true;
-  window.api.stopScraping();
-  appendLog('Stop signal sent…');
-  document.getElementById('btn-stop').disabled = true;
-});
+function checkStartReady() {
+  const ready = !!outputFolder && hasAnything();
+  document.getElementById('btn-start').disabled = !ready;
+}
+
+function setBusy(busy) {
+  document.getElementById('btn-start').disabled = busy;
+}
+
 
 document.getElementById('btn-start').addEventListener('click', async () => {
   // ── Validate ──
-  if (!boundaryFilterPath) {
-    appendLog('⚠ Please attach a KMZ/KML boundary file.'); return;
-  }
-  if (!boundaryUrl) {
-    appendLog('⚠ Boundary file could not be parsed — please re-attach a valid KMZ/KML.'); return;
-  }
   if (!outputFolder) {
     appendLog('⚠ Please select an output folder.'); return;
   }
@@ -102,7 +110,21 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const territory = document.getElementById('area-name').value.trim();
   const layers    = [...document.querySelectorAll('input[name="layer"]:checked')].map(cb => cb.value);
 
-  if (layers.length > 0 && !territory) {
+  // Without boundary: OSM-only mode — need area name + at least one layer
+  if (!boundaryFilterPath) {
+    if (!territory) {
+      appendLog('⚠ Please enter an area name (required when no boundary is attached).'); return;
+    }
+    if (!layers.length) {
+      appendLog('⚠ Please select at least one layer (no boundary means Kadastr scraping is skipped).'); return;
+    }
+  }
+
+  // With boundary but with OSM layers: need area name for Overpass
+  if (boundaryFilterPath && !boundaryUrl) {
+    appendLog('⚠ Boundary file could not be parsed — please re-attach a valid KMZ/KML.'); return;
+  }
+  if (boundaryFilterPath && layers.length > 0 && !territory) {
     appendLog('⚠ Please enter an area name to fetch OSM layers (used for Overpass query).'); return;
   }
 
@@ -121,28 +143,33 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   setBusy(true);
   userStopped = false;
 
-  const safeFilename  = sanitizeFilename(territory);
-  const kadastrTemp   = outputFolder + '/land_plots.kmz';
-  const osmTemp       = outputFolder + '/_osm_temp.kmz';
-  const finalOutput   = outputFolder + '/' + safeFilename + '.kmz';
+  const safeFilename = sanitizeFilename(territory || 'land_plots');
+  const kadastrTemp  = outputFolder + '/land_plots.kmz';
+  const osmTemp      = outputFolder + '/_osm_temp.kmz';
+  const finalOutput  = outputFolder + '/' + safeFilename + '.kmz';
 
-  // ── Phase 1: Kadastr scraper ──
-  appendLog('━━━ Phase 1/2: Kadastr parcels ━━━');
-  const scrapeResult = await window.api.startScraping(
-    boundaryUrl, outputFolder,
-    { headless: true, boundaryFilter: boundaryFilterPath }
-  );
-  appendLog(`Scraper exited (code ${scrapeResult.code})`);
+  let hasKadastr = false;
 
-  if (userStopped) {
-    appendLog('ℹ Stopped — output saved as land_plots.kmz in the output folder.');
-    setBusy(false);
-    return;
+  // ── Phase 1: Kadastr scraper (only when boundary provided) ──
+  if (boundaryFilterPath) {
+    appendLog(`━━━ Phase 1: Kadastr parcels ━━━`);
+    const scrapeResult = await window.api.startScraping(
+      boundaryUrl, outputFolder,
+      { headless: true, boundaryFilter: boundaryFilterPath }
+    );
+    appendLog(`Scraper exited (code ${scrapeResult.code})`);
+    hasKadastr = true;
+
+    if (userStopped) {
+      appendLog('ℹ Stopped — Kadastr output saved as land_plots.kmz');
+      setBusy(false);
+      return;
+    }
   }
 
-  // ── Phase 2: OSM layers (optional) ──
+  // ── Phase 2: OSM layers (when layers are selected) ──
   if (layers.length > 0) {
-    appendLog(`\n━━━ Phase 2/2: OSM layers [${layers.join(', ')}] ━━━`);
+    appendLog(`\n━━━ Phase 2: OSM layers [${layers.join(', ')}] ━━━`);
     const osmResult = await window.api.fetchOSM({
       territory,
       layers,
@@ -153,30 +180,32 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     if (!osmResult.success) {
       appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);
-      appendLog(`ℹ Kadastr data saved as land_plots.kmz`);
+      if (hasKadastr) appendLog(`ℹ Kadastr data saved as land_plots.kmz`);
       setBusy(false);
       return;
     }
 
-    // ── Phase 3: Merge ──
-    appendLog('\n📦 Merging KMZ files…');
-    const mergeResult = await window.api.mergeKmz(
-      [kadastrTemp, osmTemp],
-      finalOutput,
-      true   // cleanup temp files
-    );
-
-    if (mergeResult.success) {
-      appendLog(`\n✅ Done → ${finalOutput}`);
+    if (hasKadastr) {
+      // ── Phase 3: Merge Kadastr + OSM ──
+      appendLog('\n📦 Merging KMZ files…');
+      const mergeResult = await window.api.mergeKmz([kadastrTemp, osmTemp], finalOutput, true);
+      if (mergeResult.success) {
+        appendLog(`\n✅ Done → ${finalOutput}`);
+      } else {
+        appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
+      }
     } else {
-      appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
+      // OSM only — just rename the temp file
+      const renameResult = await window.api.mergeKmz([osmTemp], finalOutput, true);
+      if (renameResult.success) {
+        appendLog(`\n✅ Done → ${finalOutput}`);
+      } else {
+        appendLog(`[ERROR] ${renameResult.error}`);
+      }
     }
   } else {
-    // No OSM layers — rename kadastr output to final name
-    const fs = null; // can't use fs in renderer; call a rename via main if needed
-    // Emit log, output is already at kadastrTemp
+    // Kadastr only, no OSM layers
     appendLog(`\n✅ Done → ${kadastrTemp}`);
-    appendLog(`ℹ (No OSM layers selected — output is land_plots.kmz)`);
   }
 
   setBusy(false);

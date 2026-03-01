@@ -679,32 +679,46 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }];
   }
 
-  // 2. Build + run Overpass query
-  const query = buildQuery(layers, bbox);
-  onProgress('📡 Sending query to Overpass API…');
-  const rawResponse = await httpPost('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query)}`);
+  // 2. Build + run Overpass query (only if there are OSM vector layers to fetch)
+  const osmLayers = layers.filter(l => l !== 'wind');
+  if (osmLayers.length > 0) {
+    const query = buildQuery(osmLayers, bbox);
+    onProgress('📡 Sending query to Overpass API…');
 
-  let osmData;
-  try { osmData = JSON.parse(rawResponse); }
-  catch (_) { throw new Error('Invalid response from Overpass API'); }
+    let rawResponse;
+    try {
+      rawResponse = await httpPost('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query)}`);
+    } catch (_) {
+      // Try mirror
+      onProgress('  ⚠ Primary endpoint failed, trying mirror…');
+      rawResponse = await httpPost('https://overpass.kumi.systems/api/interpreter', `data=${encodeURIComponent(query)}`);
+    }
 
-  if (osmData.remark) onProgress(`ℹ Overpass remark: ${osmData.remark}`);
-  onProgress(`✅ Got ${osmData.elements?.length || 0} OSM elements`);
+    let osmData;
+    try { osmData = JSON.parse(rawResponse); }
+    catch (_) {
+      const preview = rawResponse.slice(0, 300).replace(/\n/g, ' ');
+      throw new Error(`Overpass returned non-JSON: ${preview}`);
+    }
 
-  // 3. Convert to GeoJSON
-  onProgress('🔄 Converting to GeoJSON…');
-  const geojson = osmtogeojson(osmData);
-  onProgress(`  → ${geojson.features.length} features`);
+    if (osmData.remark) onProgress(`ℹ Overpass remark: ${osmData.remark}`);
+    onProgress(`✅ Got ${osmData.elements?.length || 0} OSM elements`);
 
-  // 4. Split into layers — skip settlements and emerald (fetched from better sources)
-  for (const f of geojson.features) {
-    const layerName = classifyFeature(f.properties);
-    if (!layerName || layerName === 'Emerald Network' || layerName === 'Settlements') continue;
-    if (!layerMap[layerName]) layerMap[layerName] = [];
-    f.properties._layer = layerName;
-    f.properties._type  = layerName.toLowerCase();
-    layerMap[layerName].push(f);
-  }
+    // 3. Convert to GeoJSON
+    onProgress('🔄 Converting to GeoJSON…');
+    const geojson = osmtogeojson(osmData);
+    onProgress(`  → ${geojson.features.length} features`);
+
+    // 4. Split into layers — skip settlements and emerald (fetched from better sources)
+    for (const f of geojson.features) {
+      const layerName = classifyFeature(f.properties);
+      if (!layerName || layerName === 'Emerald Network' || layerName === 'Settlements') continue;
+      if (!layerMap[layerName]) layerMap[layerName] = [];
+      f.properties._layer = layerName;
+      f.properties._type  = layerName.toLowerCase();
+      layerMap[layerName].push(f);
+    }
+  } // end osmLayers block
 
   // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
   if (layers.includes('settlements')) {

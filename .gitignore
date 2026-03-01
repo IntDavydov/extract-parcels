@@ -4,4 +4,5 @@ dist
 dist/
 *.env
 .env
-.*exe
+*.exe
+*.png

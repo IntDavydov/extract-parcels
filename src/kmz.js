@@ -6,11 +6,11 @@ const path  = require('path');
 
 // KML color format: aabbggrr (alpha, blue, green, red)
 const LAYER_STYLES = {
-  'Boundary Filter':    { poly: '00000000', line: 'ff0064ff', width: 3 },
-  'Territory Boundary': { poly: '00000000', line: 'ff6435ff', width: 4 },
-  'Land Parcels':       { poly: '4000aaff', line: 'ff00aaff' },
+  'Boundary Filter':    { poly: '00000000', line: 'ffffff55', width: 3 },
+  'Territory Boundary': { poly: '00000000', line: 'ffffffff', width: 4 },
+  'Land Parcels':       { poly: '00000000', line: 'ffffffff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
-  'Towers':             { point: 'ff0088ff' },
+  'Towers':             { point: 'ff00ffff' },
   'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
   'Roads':              { line: 'ff000000' },
   'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
@@ -25,7 +25,6 @@ const LAYER_STYLES = {
 // Layers rendered first appear underneath — forests/emerald below settlements
 const LAYER_ORDER = [
   'Boundary Filter',
-  'Territory Boundary',
   'Wind Speed',
   'Forests',
   'Emerald Network',
@@ -37,6 +36,8 @@ const LAYER_ORDER = [
   'Settlements',
   'Settlement Buffers',
   'Settlement Pins',
+  'Land Parcels',
+  'Territory Boundary',
 ];
 
 function coordsToKml(coords, depth = 0) {
@@ -151,6 +152,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
     const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
     return `<GroundOverlay>
   <name>Wind Speed ${ov.hubHeight}m</name>
+  <altitudeMode>clampToSeaFloor</altitudeMode>
   <Icon><href>${fname}</href></Icon>
   <LatLonBox>
     <north>${ov.north}</north><south>${ov.south}</south>

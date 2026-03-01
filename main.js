@@ -172,6 +172,15 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
 
     if (!parsedKmls.length) throw new Error('No valid KMZ files found to merge');
 
+    // Single-file case: just copy to outputPath
+    if (parsedKmls.length === 1 && allZips.length === 1) {
+      fs.copyFileSync(paths.find(p => fs.existsSync(p)), outputPath);
+      if (cleanup) {
+        for (const p of paths) { try { if (p !== outputPath) fs.unlinkSync(p); } catch (_) {} }
+      }
+      return { success: true };
+    }
+
     // Collect all styles (dedup by id), ground overlays, and folders
     const seenIds    = new Set();
     const styles     = [];
