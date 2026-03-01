@@ -22,6 +22,7 @@ let outputFolder      = '';
 let boundaryFilterPath = '';
 let boundaryUrl       = '';
 let userStopped = false;
+let proxyCache  = null; // cached after first successful proxy search
 
 // ── Boundary picker ────────────────────────────────────────
 document.getElementById('btn-pick-boundary').addEventListener('click', async () => {
@@ -153,9 +154,16 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // ── Phase 1: Kadastr scraper (only when boundary provided) ──
   if (boundaryFilterPath) {
     appendLog(`━━━ Phase 1: Kadastr parcels ━━━`);
+
+    // Auto-find proxy if not already cached
+    if (!proxyCache) {
+      appendLog('🔎 Searching for a free working proxy for kadastr.live…');
+      proxyCache = await window.api.findProxy();
+    }
+
     const scrapeResult = await window.api.startScraping(
       boundaryUrl, outputFolder,
-      { headless: true, boundaryFilter: boundaryFilterPath }
+      { headless: true, boundaryFilter: boundaryFilterPath, proxy: proxyCache || '' }
     );
     appendLog(`Scraper exited (code ${scrapeResult.code})`);
     hasKadastr = true;

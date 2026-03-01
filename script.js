@@ -107,6 +107,7 @@ const CONFIG = {
   startUrl: process.argv[2] || "https://kadastr.live/#13.95/46.64265/31.4905",
   headless: process.env.HEADLESS === "1",
   boundaryFilter: process.env.BOUNDARY_FILTER || null,
+  proxy: process.env.KADASTR_PROXY || null,
   maxRetries: 3,
   statsInterval: 5000,
 };
@@ -125,6 +126,22 @@ async function waitForTilesToSettle(quietMs = 4000) {
       }
     };
     setTimeout(check, quietMs);
+  });
+}
+
+// Wait for the first tile to arrive (or timeout), then settle
+async function waitForFirstTile(maxWaitMs = 30000) {
+  if (state.processedTiles.size > 0) return;
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const poll = () => {
+      if (state.processedTiles.size > 0 || Date.now() - start >= maxWaitMs) {
+        resolve();
+      } else {
+        setTimeout(poll, 500);
+      }
+    };
+    setTimeout(poll, 500);
   });
 }
 
@@ -154,6 +171,7 @@ const state = {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         ...(isHeadless ? [] : ["--start-maximized"]),
+        ...(CONFIG.proxy ? [`--proxy-server=${CONFIG.proxy}`] : []),
       ],
     });
 
@@ -179,9 +197,13 @@ const state = {
     if (isHeadless) {
       // ── Headless mode: load URL, wait for visible tiles, auto-save ──
       console.log(`🤖 Headless mode — loading ${startUrl}`);
+      if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
       await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
-      console.log("  → Page loaded, waiting for tiles to settle…");
-      await waitForTilesToSettle(4000);
+      console.log("  → Page loaded, waiting for tiles to start…");
+      await waitForFirstTile(30000);
+      if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
+      console.log("  → Tiles arriving, waiting to settle…");
+      await waitForTilesToSettle(CONFIG.proxy ? 8000 : 4000);
       console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
       clearInterval(statsInterval);
       process.emit("SIGINT");

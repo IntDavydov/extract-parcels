@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('api', {
   readKmlBbox: (filePath) =>
     ipcRenderer.invoke('read-kml-bbox', filePath),
 
+  findProxy: () =>
+    ipcRenderer.invoke('find-proxy'),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
 });
