@@ -105,28 +105,45 @@ function downloadFile(url, destPath, onProgress) {
   });
 }
 
-// Extract one file from a zip buffer using Node built-ins (no external deps)
-// Returns the file content as a Buffer
+// Extract one file from a zip using JSZip (cross-platform, no system deps)
 function extractFileFromZip(zipPath, fileName) {
-  // Use the system unzip command for simplicity — works on all platforms
-  const { execSync } = require('child_process');
-  const tmpOut = path.join(os.tmpdir(), fileName);
-  try {
-    execSync(`unzip -p "${zipPath}" "${fileName}" > "${tmpOut}"`, { stdio: 'pipe' });
-    const data = fs.readFileSync(tmpOut);
-    try { fs.unlinkSync(tmpOut); } catch (_) {}
-    return data;
-  } catch (_) {
-    // fallback: try with forward slashes
-    try {
-      execSync(`unzip -p "${zipPath}" ${fileName} > "${tmpOut}"`, { shell: true, stdio: 'pipe' });
-      const data = fs.readFileSync(tmpOut);
-      try { fs.unlinkSync(tmpOut); } catch (_) {}
-      return data;
-    } catch (e) {
-      throw new Error(`Cannot extract ${fileName} from zip: ${e.message}`);
+  const JSZip = require('jszip');
+  const zipData = fs.readFileSync(zipPath);
+  // JSZip is async — use a sync workaround via a temp promise resolution trick
+  // We do it synchronously by running in a blocking-wait pattern via a shared buffer
+  // Since Node doesn't have sync Promise resolution, write to tmp file from async context
+  // — but callers can be made async. For now we use a sync-compatible approach:
+  // Read zip synchronously using a simple PK/ZIP parser for single-file extraction.
+
+  // Find the file entry using ZIP local file header parsing
+  const buf = zipData;
+  let offset = 0;
+  while (offset < buf.length - 4) {
+    const sig = buf.readUInt32LE(offset);
+    if (sig !== 0x04034b50) break; // local file header signature
+    const flags      = buf.readUInt16LE(offset + 6);
+    const compression= buf.readUInt16LE(offset + 8);
+    const compSize   = buf.readUInt32LE(offset + 18);
+    const uncompSize = buf.readUInt32LE(offset + 22);
+    const fnLen      = buf.readUInt16LE(offset + 26);
+    const extraLen   = buf.readUInt16LE(offset + 28);
+    const entryName  = buf.slice(offset + 30, offset + 30 + fnLen).toString('utf8');
+    const dataOffset = offset + 30 + fnLen + extraLen;
+
+    if (entryName === fileName || entryName.endsWith('/' + fileName)) {
+      const compData = buf.slice(dataOffset, dataOffset + compSize);
+      if (compression === 0) return compData; // stored
+      if (compression === 8) {               // deflate
+        const zlib = require('zlib');
+        return zlib.inflateRawSync(compData);
+      }
+      throw new Error(`Unsupported ZIP compression method ${compression} for ${fileName}`);
     }
+    offset = dataOffset + compSize;
+    // skip data descriptor if present
+    if (flags & 0x08) offset += 16;
   }
+  throw new Error(`Cannot extract ${fileName} from zip: file not found in archive`);
 }
 
 async function ensureHumdataZip(onProgress) {
