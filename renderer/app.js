@@ -39,6 +39,8 @@ window.api.onOsmDone((data) => {
 
 // ── Tab 1: Kadastr Scraper ─────────────────────────────────
 let outputFolder = '';
+let boundaryFilterPath = '';
+let boundaryUrl = '';
 
 document.getElementById('btn-pick-folder').addEventListener('click', async () => {
   const result = await window.api.openFolderDialog();
@@ -48,17 +50,54 @@ document.getElementById('btn-pick-folder').addEventListener('click', async () =>
   }
 });
 
+document.getElementById('btn-pick-boundary').addEventListener('click', async () => {
+  const result = await window.api.openKmlDialog();
+  if (!result.canceled && result.filePaths.length) {
+    boundaryFilterPath = result.filePaths[0];
+    const name = boundaryFilterPath.split(/[\\/]/).pop();
+    document.getElementById('boundary-display').textContent = name;
+    document.getElementById('btn-clear-boundary').style.display = '';
+
+    // Compute kadastr URL from boundary bbox
+    const bbox = await window.api.readKmlBbox(boundaryFilterPath);
+    if (bbox && !bbox.error) {
+      boundaryUrl = `https://kadastr.live/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
+      appendLog('scraping-log', `📍 URL from boundary: zoom=${bbox.zoom}, center=${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}`);
+    } else if (bbox && bbox.error) {
+      boundaryUrl = '';
+      appendLog('scraping-log', `⚠ Could not read boundary bbox: ${bbox.error}`);
+    }
+  }
+});
+
+document.getElementById('btn-clear-boundary').addEventListener('click', () => {
+  boundaryFilterPath = '';
+  boundaryUrl = '';
+  document.getElementById('boundary-display').textContent = 'not selected';
+  document.getElementById('btn-clear-boundary').style.display = 'none';
+});
+
 document.getElementById('btn-start-scraping').addEventListener('click', () => {
-  const url = document.getElementById('kadastr-url').value.trim();
-  if (!url.startsWith('http')) {
-    appendLog('scraping-log', '⚠ Please enter a valid URL.');
+  if (!boundaryFilterPath) {
+    appendLog('scraping-log', '⚠ Please attach a KMZ/KML boundary file.');
     return;
   }
+  if (!boundaryUrl) {
+    appendLog('scraping-log', '⚠ Boundary file could not be parsed — please re-attach a valid KMZ/KML.');
+    return;
+  }
+  if (!outputFolder) {
+    appendLog('scraping-log', '⚠ Please select an output folder.');
+    return;
+  }
+  const headless = true; // always headless
+
   document.getElementById('scraping-log').textContent = '';
   document.getElementById('btn-start-scraping').disabled = true;
   document.getElementById('btn-stop-scraping').disabled  = false;
-  appendLog('scraping-log', `Starting scraper → ${url}`);
-  window.api.startScraping(url, outputFolder || null);
+  appendLog('scraping-log', `🗂 Boundary filter: ${boundaryFilterPath.split(/[\\/]/).pop()}`);
+  appendLog('scraping-log', `Starting scraper (headless)…`);
+  window.api.startScraping(boundaryUrl, outputFolder, { headless, boundaryFilter: boundaryFilterPath });
 });
 
 document.getElementById('btn-stop-scraping').addEventListener('click', () => {
@@ -71,12 +110,9 @@ document.getElementById('btn-stop-scraping').addEventListener('click', () => {
 let osmOutputPath = '';
 
 document.getElementById('btn-pick-osm-output').addEventListener('click', async () => {
-  const format = document.querySelector('input[name="osm-format"]:checked').value;
   const result = await window.api.saveDialog({
     title: 'Save OSM data as…',
-    filters: format === 'kmz'
-      ? [{ name: 'KMZ', extensions: ['kmz'] }]
-      : [{ name: 'GeoJSON', extensions: ['geojson', 'json'] }],
+    filters: [{ name: 'KMZ', extensions: ['kmz'] }],
   });
   if (!result.canceled && result.filePath) {
     osmOutputPath = result.filePath;
@@ -114,7 +150,7 @@ document.getElementById('btn-fetch-osm').addEventListener('click', async () => {
     appendLog('osm-log', '⚠ Please select an output file path.');
     return;
   }
-  const format = document.querySelector('input[name="osm-format"]:checked').value;
+  const format = 'kmz';
 
   const windOptions = layers.includes('wind') ? {
     apiKey:    document.getElementById('wind-api-key').value.trim(),

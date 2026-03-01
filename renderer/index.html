@@ -25,15 +25,20 @@
         <h2>Kadastr Scraper</h2>
 
         <div class="field">
-          <label for="kadastr-url">Map URL</label>
-          <input type="text" id="kadastr-url"
-            value="https://kadastr.live/#13.95/46.64265/31.4905"
-            placeholder="https://kadastr.live/#…" />
+          <label>Boundary filter KMZ/KML <span style="color:#e05;">*required</span></label>
+          <div class="row" style="margin-top:4px;">
+            <button class="btn btn-secondary btn-sm" id="btn-pick-boundary">📎 Attach KMZ/KML</button>
+            <span class="path-display" id="boundary-display">not selected</span>
+            <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;">✕</button>
+          </div>
         </div>
 
-        <div class="row">
-          <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Output folder</button>
-          <span class="path-display" id="output-folder-display">not selected — saves next to script</span>
+        <div class="field">
+          <label>Output folder <span style="color:#e05;">*required</span></label>
+          <div class="row" style="margin-top:4px;">
+            <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
+            <span class="path-display" id="output-folder-display">not selected</span>
+          </div>
         </div>
 
         <div class="row">
@@ -64,13 +69,6 @@
           <input type="text" id="osm-territory" placeholder="Остерська громада" />
         </div>
 
-        <div class="field">
-          <label>Output format</label>
-          <div class="radio-group">
-            <label><input type="radio" name="osm-format" value="kmz" checked /> KMZ</label>
-            <label><input type="radio" name="osm-format" value="geojson" /> GeoJSON</label>
-          </div>
-        </div>
 
         <div class="row">
           <button class="btn btn-secondary btn-sm" id="btn-pick-osm-output">📁 Output file</button>

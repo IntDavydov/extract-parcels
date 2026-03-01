@@ -6,7 +6,9 @@ const path  = require('path');
 
 // KML color format: aabbggrr (alpha, blue, green, red)
 const LAYER_STYLES = {
+  'Boundary Filter':    { poly: '00000000', line: 'ff0064ff', width: 3 },
   'Territory Boundary': { poly: '00000000', line: 'ff6435ff', width: 4 },
+  'Land Parcels':       { poly: '4000aaff', line: 'ff00aaff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
   'Towers':             { point: 'ff0088ff' },
   'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
@@ -22,7 +24,9 @@ const LAYER_STYLES = {
 
 // Layers rendered first appear underneath — forests/emerald below settlements
 const LAYER_ORDER = [
+  'Boundary Filter',
   'Territory Boundary',
+  'Wind Speed',
   'Forests',
   'Emerald Network',
   'Water',
@@ -33,7 +37,6 @@ const LAYER_ORDER = [
   'Settlements',
   'Settlement Buffers',
   'Settlement Pins',
-  'Wind Speed',
 ];
 
 function coordsToKml(coords, depth = 0) {

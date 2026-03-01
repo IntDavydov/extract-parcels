@@ -1,5 +1,4 @@
 const puppeteer = require("puppeteer");
-const fs = require("fs").promises;
 const fsSync = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -9,6 +8,81 @@ const turfUnion = require("@turf/union");
 const turfBuffer = require("@turf/buffer");
 
 const SNAP_BUFFER_KM = 0.000005; // ~5mm — closes tile-boundary gaps without distorting shapes
+
+// ── KMZ/KML boundary filter ────────────────────────────────
+
+// Extract all polygon rings from KML text as arrays of [lng, lat] pairs
+function parseKmlRings(kml) {
+  const rings = [];
+  const re = /<coordinates>([\s\S]*?)<\/coordinates>/g;
+  let m;
+  while ((m = re.exec(kml)) !== null) {
+    const coords = m[1].trim().split(/\s+/)
+      .map(c => { const p = c.split(','); return [parseFloat(p[0]), parseFloat(p[1])]; })
+      .filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+    if (coords.length >= 3) rings.push(coords);
+  }
+  return rings;
+}
+
+// Returns { rings, features } — rings for spatial filter, features for KMZ layer
+async function loadBoundary(filePath) {
+  if (!filePath) return null;
+  let kmlText;
+  try {
+    if (filePath.toLowerCase().endsWith('.kmz')) {
+      const JSZip = require('jszip');
+      const buf = fsSync.readFileSync(filePath);
+      const zip = await JSZip.loadAsync(buf);
+      const kmlName = Object.keys(zip.files).find(n => n.toLowerCase().endsWith('.kml'));
+      if (!kmlName) throw new Error('No .kml file found inside KMZ');
+      kmlText = await zip.files[kmlName].async('text');
+    } else {
+      kmlText = fsSync.readFileSync(filePath, 'utf8');
+    }
+  } catch (e) {
+    console.error(`⚠ Could not load boundary file: ${e.message}`);
+    return null;
+  }
+  const rings = parseKmlRings(kmlText);
+  const features = rings.map((ring, i) => ({
+    type: 'Feature',
+    geometry: { type: 'Polygon', coordinates: [ring] },
+    properties: { name: `Boundary ${i + 1}` },
+  }));
+  console.log(`🗂 Boundary loaded: ${rings.length} polygon(s) from ${path.basename(filePath)}`);
+  return { rings, features };
+}
+
+// Ray-casting point-in-polygon for a single ring [[lng,lat],...]
+function pointInRing(point, ring) {
+  const [px, py] = point;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+      inside = !inside;
+  }
+  return inside;
+}
+
+// Returns true if the feature's centroid falls inside any boundary ring
+function featureInBoundary(feature, rings) {
+  // Collect all coordinate rings from the feature geometry
+  const geom = feature.geometry;
+  const outerRings = geom.type === 'Polygon'
+    ? [geom.coordinates[0]]
+    : geom.type === 'MultiPolygon'
+      ? geom.coordinates.map(p => p[0])
+      : [];
+  for (const fRing of outerRings) {
+    // Compute centroid of this ring
+    const centroid = fRing.reduce((acc, c) => [acc[0] + c[0], acc[1] + c[1]], [0, 0])
+      .map(v => v / fRing.length);
+    if (rings.some(r => pointInRing(centroid, r))) return true;
+  }
+  return false;
+}
 
 // Resolve Chrome executable path for the current platform
 function getChromePath() {
@@ -27,15 +101,32 @@ function getChromePath() {
 
 // Configuration
 const CONFIG = {
-  filePath: process.env.OUTPUT_PATH
-    ? path.join(process.env.OUTPUT_PATH, "land_plots.json")
-    : path.join(process.cwd(), "land_plots.json"),
-  // Pass a custom URL as the first CLI argument, e.g.:
-  //   node script.js "https://kadastr.live/#13.95/46.64265/31.4905"
+  kmzPath: process.env.OUTPUT_PATH
+    ? path.join(process.env.OUTPUT_PATH, "land_plots.kmz")
+    : path.join(process.cwd(), "land_plots.kmz"),
   startUrl: process.argv[2] || "https://kadastr.live/#13.95/46.64265/31.4905",
+  headless: process.env.HEADLESS === "1",
+  boundaryFilter: process.env.BOUNDARY_FILTER || null,
   maxRetries: 3,
   statsInterval: 5000,
 };
+
+// Wait until no new tiles arrive for `quietMs` milliseconds in a row
+async function waitForTilesToSettle(quietMs = 4000) {
+  let prevSize = state.processedTiles.size;
+  return new Promise((resolve) => {
+    const check = () => {
+      const cur = state.processedTiles.size;
+      if (cur === prevSize) {
+        resolve();
+      } else {
+        prevSize = cur;
+        setTimeout(check, quietMs);
+      }
+    };
+    setTimeout(check, quietMs);
+  });
+}
 
 // Global map: cadnum -> { properties, fragments: [GeoJSON feature, ...] }
 // Collecting all tile fragments so we can union them at the end
@@ -52,15 +143,17 @@ const state = {
 (async () => {
   try {
     const chromePath = getChromePath();
+    const isHeadless = CONFIG.headless;
+
     const browser = await puppeteer.launch({
-      headless: false,
+      headless: isHeadless,
       ignoreHTTPSErrors: true,
       executablePath: chromePath,
-      defaultViewport: null, // use actual window size, don't override
+      defaultViewport: isHeadless ? { width: 1600, height: 900 } : null,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--start-maximized",
+        ...(isHeadless ? [] : ["--start-maximized"]),
       ],
     });
 
@@ -68,10 +161,9 @@ const state = {
     const page = pages[0];
     page.setDefaultNavigationTimeout(60000);
 
-    // Show GUI to get URL if not passed as a valid CLI argument
+    // In headless mode the URL must be provided; otherwise show GUI
     const cliArg = process.argv[2];
     const startUrl = (cliArg && cliArg.startsWith("http")) ? cliArg : await showGui(page);
-
 
     page.on("response", async (response) => {
       const url = response.url();
@@ -84,8 +176,28 @@ const state = {
 
     const statsInterval = setInterval(reportStats, CONFIG.statsInterval);
 
-    console.log("--- ПЕРЕХВАТ ЗАПУЩЕН. ДВИГАЙ КАРТУ ---");
-    await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
+    if (isHeadless) {
+      // ── Headless mode: load URL, wait for visible tiles, auto-save ──
+      console.log(`🤖 Headless mode — loading ${startUrl}`);
+      await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
+      console.log("  → Page loaded, waiting for tiles to settle…");
+      await waitForTilesToSettle(4000);
+      console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
+      clearInterval(statsInterval);
+      process.emit("SIGINT");
+    } else {
+      // ── Interactive mode ─────────────────────────────────
+      console.log("--- ПЕРЕХВАТ ЗАПУЩЕН. ДВИГАЙ КАРТУ. Автозбереження через 10с після останнього тайлу. ---");
+      await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
+      // Auto-stop after 10 s of no new tiles (resets every time a new tile arrives)
+      waitForTilesToSettle(10000).then(() => {
+        if (!state.fileClosed) {
+          console.log("\n⏱ No new tiles for 10s — auto-saving…");
+          clearInterval(statsInterval);
+          process.emit("SIGINT");
+        }
+      });
+    }
   } catch (error) {
     console.error("Critical error during startup:", error.message);
     process.exit(1);
@@ -140,7 +252,7 @@ async function processTileResponse(response, url) {
   }
 }
 
-function mergeAndSerializeFeatures() {
+function mergeFeatures() {
   const unionFn = turfUnion.default || turfUnion;
   const bufferFn = turfBuffer.default || turfBuffer;
   const results = [];
@@ -154,32 +266,18 @@ function mergeAndSerializeFeatures() {
         finalFeature = fragments[0];
         single++;
       } else {
-        // Buffer each fragment slightly outward to close sub-mm gaps at tile
-        // boundaries caused by floating-point differences in coordinate conversion,
-        // then union, then shrink back to original size.
         const buffered = fragments.map(f => {
           try { return bufferFn(f, SNAP_BUFFER_KM, { units: "kilometers" }); }
           catch (_) { return f; }
         });
-
-        // @turf/union v7 takes a FeatureCollection
         const fc = { type: "FeatureCollection", features: buffered.filter(Boolean) };
         let unioned;
-        try {
-          unioned = unionFn(fc);
-        } catch (_) {
-          unioned = buffered[0];
-        }
-
-        // Shrink back
-        try {
-          unioned = bufferFn(unioned, -SNAP_BUFFER_KM, { units: "kilometers" }) || unioned;
-        } catch (_) {}
-
+        try { unioned = unionFn(fc); } catch (_) { unioned = buffered[0]; }
+        try { unioned = bufferFn(unioned, -SNAP_BUFFER_KM, { units: "kilometers" }) || unioned; } catch (_) {}
         finalFeature = { ...unioned, properties };
         merged++;
       }
-      results.push(JSON.stringify(finalFeature));
+      results.push(finalFeature);
     } catch (err) {
       console.warn(`Failed to merge parcel ${cadnum}:`, err.message);
     }
@@ -191,23 +289,39 @@ function mergeAndSerializeFeatures() {
 
 function setupGracefulShutdown(browser) {
   const shutdown = async (signal) => {
-    console.log(`\nReceived ${signal}, writing output...`);
+    if (state.fileClosed) return;
+    state.fileClosed = true;
+    console.log(`\nReceived ${signal}, building KMZ…`);
 
     try {
-      const features = mergeAndSerializeFeatures();
-      const content = '{"type":"FeatureCollection","features":[\n' +
-        features.join(",\n") +
-        "\n]}";
-      await fs.writeFile(CONFIG.filePath, content);
-      state.fileClosed = true;
+      let features = mergeFeatures();
+
+      // Apply boundary filter if provided
+      const boundary = await loadBoundary(CONFIG.boundaryFilter);
+      if (boundary && boundary.rings.length > 0) {
+        const before = features.length;
+        features = features.filter(f => featureInBoundary(f, boundary.rings));
+        console.log(`🔍 Boundary filter: ${features.length} of ${before} parcels kept`);
+      }
 
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
       console.log(`\nFinal stats:`);
       console.log(`  Tiles processed: ${state.processedTiles.size}`);
-      console.log(`  Parcels written: ${features.length}`);
+      console.log(`  Parcels: ${features.length}`);
       console.log(`  Errors: ${state.errorCount}`);
       console.log(`  Time: ${elapsed}s`);
-      console.log(`File ${CONFIG.filePath} saved. Open in Mapshaper!`);
+
+      if (features.length > 0) {
+        console.log(`📦 Building KMZ → ${CONFIG.kmzPath}`);
+        const { exportKMZ } = require(path.join(__dirname, 'src', 'kmz.js'));
+        const layers = {};
+        if (boundary && boundary.features.length > 0) layers['Boundary Filter'] = boundary.features;
+        layers['Land Parcels'] = features;
+        await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg));
+        console.log(`💾 Saved → ${CONFIG.kmzPath}`);
+      } else {
+        console.log('⚠ No parcels to export.');
+      }
     } catch (error) {
       console.error("Error during shutdown:", error.message);
     } finally {
@@ -224,18 +338,6 @@ function setupGracefulShutdown(browser) {
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (data) => {
     if (data.trim() === "SHUTDOWN") shutdown("STDIN");
-  });
-
-  process.on("exit", () => {
-    if (!state.fileClosed) {
-      try {
-        const features = mergeAndSerializeFeatures();
-        const content = '{"type":"FeatureCollection","features":[\n' +
-          features.join(",\n") +
-          "\n]}";
-        fsSync.writeFileSync(CONFIG.filePath, content);
-      } catch (_) {}
-    }
   });
 }
 

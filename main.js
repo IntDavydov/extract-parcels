@@ -50,7 +50,7 @@ app.on('window-all-closed', () => {
 });
 
 // IPC: start kadastr scraping
-ipcMain.on('start-scraping', (event, { url, outputPath }) => {
+ipcMain.on('start-scraping', (event, { url, outputPath, headless, boundaryFilter }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -65,11 +65,13 @@ ipcMain.on('start-scraping', (event, { url, outputPath }) => {
     NODE_PATH: nodeModulesPath,
   });
   if (outputPath) env.OUTPUT_PATH = outputPath;
+  if (headless)        env.HEADLESS = '1';
+  if (boundaryFilter)  env.BOUNDARY_FILTER = boundaryFilter;
 
-  const savePath = outputPath
-    ? path.join(outputPath, 'oster_plots.json')
-    : path.join(process.cwd(), 'oster_plots.json');
-  event.sender.send('log', `💾 Output will be saved to: ${savePath}`);
+  const kmzPath = outputPath
+    ? path.join(outputPath, 'land_plots.kmz')
+    : path.join(process.cwd(), 'land_plots.kmz');
+  event.sender.send('log', `💾 Output will be saved to: ${kmzPath}`);
 
   const args = [getUnpackedPath('script.js')];
   if (url) args.push(url);
@@ -147,4 +149,57 @@ ipcMain.handle('open-folder-dialog', async () => {
     properties: ['openDirectory'],
   });
   return result;
+});
+
+ipcMain.handle('open-kml-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'KMZ / KML', extensions: ['kmz', 'kml'] }],
+  });
+  return result;
+});
+
+ipcMain.handle('read-kml-bbox', async (_event, filePath) => {
+  const fs   = require('fs');
+  const JSZip = require('jszip');
+  try {
+    let kmlText;
+    if (filePath.toLowerCase().endsWith('.kmz')) {
+      const buf = fs.readFileSync(filePath);
+      const zip = await JSZip.loadAsync(buf);
+      const kmlName = Object.keys(zip.files).find(n => n.toLowerCase().endsWith('.kml'));
+      if (!kmlName) throw new Error('No .kml inside KMZ');
+      kmlText = await zip.files[kmlName].async('text');
+    } else {
+      kmlText = fs.readFileSync(filePath, 'utf8');
+    }
+
+    // Extract all coordinate pairs
+    const all = [];
+    const re = /<coordinates>([\s\S]*?)<\/coordinates>/g;
+    let m;
+    while ((m = re.exec(kmlText)) !== null) {
+      m[1].trim().split(/\s+/).forEach(c => {
+        const [lon, lat] = c.split(',').map(Number);
+        if (!isNaN(lon) && !isNaN(lat)) all.push([lon, lat]);
+      });
+    }
+    if (!all.length) throw new Error('No coordinates found in file');
+
+    const lons = all.map(c => c[0]), lats = all.map(c => c[1]);
+    const west  = Math.min(...lons), east  = Math.max(...lons);
+    const south = Math.min(...lats), north = Math.max(...lats);
+    const centerLat = (north + south) / 2;
+    const centerLng = (west  + east)  / 2;
+
+    // Zoom to fit the bbox in a 1600×900 headless viewport (256px tiles)
+    const zoomLng = Math.log2(1600 / 256 * 360 / (east - west));
+    const zoomLat = Math.log2(900  / 256 * 180 / (north - south));
+    // Cap at 14 (parcel detail level) — lower if territory is large
+    const zoom = Math.min(14, Math.floor(Math.min(zoomLng, zoomLat) * 10) / 10);
+
+    return { centerLat, centerLng, zoom, west, south, east, north };
+  } catch (e) {
+    return { error: e.message };
+  }
 });
