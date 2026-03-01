@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   showInFolder: (filePath) =>
     ipcRenderer.invoke('show-in-folder', filePath),
 
+  resolveOutputPath: (folder, baseName) =>
+    ipcRenderer.invoke('resolve-output-path', folder, baseName),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
 });

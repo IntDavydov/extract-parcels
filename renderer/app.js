@@ -155,7 +155,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const safeFilename = sanitizeFilename(territory || 'land_plots');
   const kadastrTemp  = outputFolder + '/land_plots.kmz';
   const osmTemp      = outputFolder + '/_osm_temp.kmz';
-  const finalOutput  = outputFolder + '/' + safeFilename + '.kmz';
+  const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
 
   let hasKadastr = false;
 

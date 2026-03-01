@@ -356,6 +356,18 @@ ipcMain.handle('show-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
 });
 
+ipcMain.handle('resolve-output-path', (_event, folder, baseName) => {
+  const fs   = require('fs');
+  const path = require('path');
+  let candidate = path.join(folder, baseName + '.kmz');
+  if (!fs.existsSync(candidate)) return candidate;
+  for (let i = 1; i < 1000; i++) {
+    candidate = path.join(folder, `${baseName}_${i}.kmz`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return candidate;
+});
+
 ipcMain.handle('read-kml-bbox', async (_event, filePath) => {
   const fs   = require('fs');
   const JSZip = require('jszip');
