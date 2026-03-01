@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -82,9 +82,13 @@ ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFi
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
+  let tilesProcessed = 0;
+
   scrapingProcess.stdout.on('data', (chunk) => {
     chunk.toString().split('\n').filter(Boolean).forEach((line) => {
       event.sender.send('log', line);
+      const m = line.match(/Tiles processed:\s*(\d+)/);
+      if (m) tilesProcessed = parseInt(m[1]);
     });
   });
 
@@ -97,7 +101,7 @@ ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFi
   return new Promise((resolve) => {
     scrapingProcess.on('close', (code) => {
       scrapingProcess = null;
-      resolve({ code });
+      resolve({ code, tiles: tilesProcessed });
     });
   });
 });
@@ -129,7 +133,8 @@ ipcMain.handle('fetch-osm', async (event, options) => {
       options.outputPath,
       options.format,
       (msg) => event.sender.send('log', msg),
-      options.windOptions || null
+      options.windOptions || null,
+      options.fallbackBbox || null
     );
     return { success: true, path: resultPath };
   } catch (err) {
@@ -241,7 +246,7 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
 });
 
 // IPC: find working proxy for kadastr.live
-ipcMain.handle('find-proxy', async (event) => {
+ipcMain.handle('find-proxy', async (event, excludeList = []) => {
   const https = require('https');
   const http  = require('http');
   const net   = require('net');
@@ -300,7 +305,8 @@ ipcMain.handle('find-proxy', async (event) => {
     } catch (_) {}
   }
 
-  proxies = [...new Set(proxies)].slice(0, 200);
+  const excluded = new Set((excludeList || []).map(p => p.replace(/^https?:\/\//, '')));
+  proxies = [...new Set(proxies)].filter(p => !excluded.has(p)).slice(0, 200);
   event.sender.send('log', `🔍 Testing ${proxies.length} proxies for kadastr.live…`);
 
   // Test in parallel batches of 20
@@ -344,6 +350,10 @@ ipcMain.handle('open-kml-dialog', async () => {
     filters: [{ name: 'KMZ / KML', extensions: ['kmz', 'kml'] }],
   });
   return result;
+});
+
+ipcMain.handle('show-in-folder', (_event, filePath) => {
+  shell.showItemInFolder(filePath);
 });
 
 ipcMain.handle('read-kml-bbox', async (_event, filePath) => {

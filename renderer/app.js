@@ -21,8 +21,10 @@ window.api.onLog((msg) => appendLog(msg));
 let outputFolder      = '';
 let boundaryFilterPath = '';
 let boundaryUrl       = '';
+let boundaryBbox      = null; // {west,south,east,north} from KMZ, used as Nominatim fallback
 let userStopped = false;
-let proxyCache  = null; // cached after first successful proxy search
+let proxyCache     = null;  // currently active proxy
+let usedProxies    = new Set(); // proxies tried this session
 
 // ── Boundary picker ────────────────────────────────────────
 document.getElementById('btn-pick-boundary').addEventListener('click', async () => {
@@ -35,10 +37,12 @@ document.getElementById('btn-pick-boundary').addEventListener('click', async () 
 
     const bbox = await window.api.readKmlBbox(boundaryFilterPath);
     if (bbox && !bbox.error) {
-      boundaryUrl = `https://kadastr.live/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
+      boundaryUrl  = `https://kadastr.live/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
+      boundaryBbox = { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north };
       appendLog(`📍 URL from boundary: zoom=${bbox.zoom}, center=${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}`);
     } else {
-      boundaryUrl = '';
+      boundaryUrl  = '';
+      boundaryBbox = null;
       if (bbox && bbox.error) appendLog(`⚠ Could not read boundary bbox: ${bbox.error}`);
     }
     checkStartReady();
@@ -48,6 +52,7 @@ document.getElementById('btn-pick-boundary').addEventListener('click', async () 
 document.getElementById('btn-clear-boundary').addEventListener('click', () => {
   boundaryFilterPath = '';
   boundaryUrl = '';
+  boundaryBbox = null;
   document.getElementById('boundary-display').textContent = 'not selected';
   document.getElementById('btn-clear-boundary').style.display = 'none';
   checkStartReady();
@@ -80,6 +85,8 @@ document.getElementById('layer-wind').addEventListener('change', (e) => {
   document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
 });
 
+document.getElementById('area-name').addEventListener('input', checkStartReady);
+
 // Track every individual checkbox change
 document.querySelectorAll('input[name="layer"]').forEach(cb => {
   cb.addEventListener('change', checkStartReady);
@@ -93,7 +100,8 @@ function hasAnything() {
 }
 
 function checkStartReady() {
-  const ready = !!outputFolder && hasAnything();
+  const territory = document.getElementById('area-name').value.trim();
+  const ready = !!outputFolder && !!territory && hasAnything();
   document.getElementById('btn-start').disabled = !ready;
 }
 
@@ -132,7 +140,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const windOptions = layers.includes('wind') ? {
     apiKey:    'hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ',
     hubHeight: document.getElementById('wind-hub-height').value,
-    year:      document.getElementById('wind-year').value,
+    year:      '2019',
   } : null;
 
   if (windOptions && !windOptions.apiKey) {
@@ -155,17 +163,45 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (boundaryFilterPath) {
     appendLog(`━━━ Phase 1: Kadastr parcels ━━━`);
 
-    // Auto-find proxy if not already cached
-    if (!proxyCache) {
-      appendLog('🔎 Searching for a free working proxy for kadastr.live…');
-      proxyCache = await window.api.findProxy();
+    let tilesGot = 0;
+
+    // Two rounds: first 3 attempts with current proxy pool, then 3 more with fresh refetch
+    for (let round = 1; round <= 2 && tilesGot === 0; round++) {
+      if (round === 2) {
+        appendLog('🔄 Refetching proxy list from external sources…');
+        // Clear cache but keep usedProxies so we don't reuse the same ones
+        proxyCache = null;
+      }
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (!proxyCache) {
+          appendLog(`🔎 Searching for a working proxy (round ${round}, attempt ${attempt}/3)…`);
+          proxyCache = await window.api.findProxy([...usedProxies]);
+          if (proxyCache) usedProxies.add(proxyCache);
+        }
+
+        const scrapeResult = await window.api.startScraping(
+          boundaryUrl, outputFolder,
+          { headless: true, boundaryFilter: boundaryFilterPath, proxy: proxyCache || '' }
+        );
+        appendLog(`Scraper exited (code ${scrapeResult.code})`);
+        tilesGot = scrapeResult.tiles || 0;
+
+        if (tilesGot > 0) break;
+
+        if (attempt < 3) {
+          appendLog(`⚠ No tiles — trying next proxy (round ${round}, attempt ${attempt + 1}/3)…`);
+          proxyCache = null;
+        }
+      }
     }
 
-    const scrapeResult = await window.api.startScraping(
-      boundaryUrl, outputFolder,
-      { headless: true, boundaryFilter: boundaryFilterPath, proxy: proxyCache || '' }
-    );
-    appendLog(`Scraper exited (code ${scrapeResult.code})`);
+    if (tilesGot === 0) {
+      appendLog('❌ No tiles captured after 6 proxy attempts — kadastr.live may be unreachable. Stopping.');
+      setBusy(false);
+      return;
+    }
+
     hasKadastr = true;
 
     if (userStopped) {
@@ -184,6 +220,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       outputPath: osmTemp,
       format: 'kmz',
       windOptions,
+      fallbackBbox: boundaryBbox,
     });
 
     if (!osmResult.success) {
@@ -199,6 +236,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const mergeResult = await window.api.mergeKmz([kadastrTemp, osmTemp], finalOutput, true);
       if (mergeResult.success) {
         appendLog(`\n✅ Done → ${finalOutput}`);
+        window.api.showInFolder(finalOutput);
       } else {
         appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
       }
@@ -207,6 +245,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const renameResult = await window.api.mergeKmz([osmTemp], finalOutput, true);
       if (renameResult.success) {
         appendLog(`\n✅ Done → ${finalOutput}`);
+        window.api.showInFolder(finalOutput);
       } else {
         appendLog(`[ERROR] ${renameResult.error}`);
       }
@@ -214,6 +253,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   } else {
     // Kadastr only, no OSM layers
     appendLog(`\n✅ Done → ${kadastrTemp}`);
+    window.api.showInFolder(kadastrTemp);
   }
 
   setBusy(false);

@@ -16,8 +16,8 @@
       <h2>🗺 Land Management</h2>
 
       <div class="field">
-        <label for="area-name">Area name (used for OSM query &amp; output filename)</label>
-        <input type="text" id="area-name" placeholder="e.g. Остерська громада" />
+        <label for="area-name">Area name <span style="color:#e05;">*required</span></label>
+        <input type="text" id="area-name" placeholder="e.g. Kyiv city" />
       </div>
 
       <div class="field">
@@ -53,25 +53,14 @@
 
         <!-- Wind settings — shown only when wind checkbox is checked -->
         <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-          <div class="field" style="margin-bottom:8px;">
-            <label for="wind-hub-height" style="font-size:12px;">Hub height (m)</label>
+          <div class="field" style="margin-bottom:0;">
+            <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· 2019 data</span></label>
             <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
               <option value="80">80 m</option>
               <option value="100" selected>100 m (recommended)</option>
               <option value="120">120 m</option>
               <option value="160">160 m</option>
               <option value="200">200 m</option>
-            </select>
-          </div>
-          <div class="field" style="margin-bottom:0;">
-            <label for="wind-year" style="font-size:12px;">Data year</label>
-            <select id="wind-year" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-              <option value="2019" selected>2019</option>
-              <option value="2018">2018</option>
-              <option value="2017">2017</option>
-              <option value="2016">2016</option>
-              <option value="2015">2015</option>
-              <option value="2014">2014</option>
             </select>
           </div>
         </div>

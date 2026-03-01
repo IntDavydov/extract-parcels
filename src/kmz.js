@@ -17,8 +17,8 @@ const LAYER_STYLES = {
   'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
   'Settlement Buffers': { poly: 'ccc9c9ff', line: 'ffc9c9ff' },
   'Water':              { poly: 'ccff6600', line: 'ccff6600' },
-  'Forests':            { poly: 'cc7fff00', line: 'cc7fff00' },
-  'Emerald Network':    { poly: 'cc7fff00', line: 'cc7fff00' },
+  'Forests':            { poly: 'cc7fff00', line: '007fff00' },
+  'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
   'Wind Speed':         { point: 'ff00d7ff' },
 };
 

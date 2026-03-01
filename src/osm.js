@@ -185,7 +185,13 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
     for (const f of admin3.features) {
       if (!f.geometry) continue;
       const p = f.properties;
-      const cl = p.center_lon, clat = p.center_lat;
+      // Compute centroid from geometry coordinates
+      const coords = f.geometry.type === 'Polygon'
+        ? f.geometry.coordinates[0]
+        : f.geometry.coordinates[0][0]; // MultiPolygon
+      let sumLon = 0, sumLat = 0, count = 0;
+      for (const [lon, lat] of coords) { sumLon += lon; sumLat += lat; count++; }
+      const cl = sumLon / count, clat = sumLat / count;
       if (cl >= bbox.west && cl <= bbox.east && clat >= bbox.south && clat <= bbox.north) {
         matchedPcode = p.adm3_pcode;
         matchedFeature = f;
@@ -258,17 +264,96 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
 
   return { boundaries, pins, buffers };
 }
-async function getBbox(territory, onProgress) {
-  onProgress(`🔍 Looking up "${territory}" via Nominatim…`);
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(territory)}&format=json&limit=1&addressdetails=1&countrycodes=ua&polygon_geojson=1`;
-  const raw = await httpGet(url);
-  const results = JSON.parse(raw);
-  if (!results.length) throw new Error(`Territory "${territory}" not found on Nominatim`);
-  const r = results[0];
-  const [south, north, west, east] = r.boundingbox.map(Number);
-  onProgress(`📍 Found: ${r.display_name}`);
-  onProgress(`📦 Bbox: S${south} W${west} N${north} E${east}`);
-  return { south, north, west, east, boundaryGeojson: r.geojson || null, displayName: r.display_name };
+// Simple Levenshtein distance for fuzzy name matching
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// Fuzzy-match territory name against HUMDATA admin3 list
+function fuzzyMatchHumdata(territory, admin3Features) {
+  const q = territory.toLowerCase().replace(/\s+громада$/i, '').trim();
+  let best = null, bestScore = Infinity;
+  for (const f of admin3Features) {
+    const p = f.properties;
+    const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean);
+    for (const name of names) {
+      const n = name.toLowerCase().replace(/\s+громада$/i, '').trim();
+      const dist = levenshtein(q, n);
+      // also check word-level overlap for long names
+      const qWords = q.split(/\s+/);
+      const nWords = n.split(/\s+/);
+      const overlap = qWords.filter(w => nWords.some(nw => nw.startsWith(w) || w.startsWith(nw))).length;
+      const score = dist - overlap * 2;
+      if (score < bestScore) { bestScore = score; best = { f, name, dist, overlap }; }
+    }
+  }
+  // Accept match if distance is reasonable relative to query length
+  if (best && best.dist <= Math.max(4, Math.floor(q.length * 0.35))) return best;
+  return null;
+}
+
+// Get bbox from a GeoJSON feature geometry
+function featureBbox(f) {
+  const coords = f.geometry.type === 'Polygon'
+    ? f.geometry.coordinates[0]
+    : f.geometry.coordinates.flat(2);
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const [lon, lat] of coords) {
+    if (lon < west) west = lon; if (lon > east) east = lon;
+    if (lat < south) south = lat; if (lat > north) north = lat;
+  }
+  return { west, south, east, north };
+}
+
+async function getBbox(territory, onProgress, fallbackBbox) {
+  // 1. Try Nominatim exact + short form
+  const attempts = [territory, territory.replace(/\s+громада$/i, '').trim()];
+  for (const q of [...new Set(attempts)]) {
+    onProgress(`🔍 Looking up "${q}" via Nominatim…`);
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=ua&polygon_geojson=1`;
+    try {
+      const raw = await httpGet(url);
+      const results = JSON.parse(raw);
+      if (results.length) {
+        const r = results[0];
+        const [south, north, west, east] = r.boundingbox.map(Number);
+        onProgress(`📍 Found: ${r.display_name}`);
+        return { south, north, west, east, boundaryGeojson: r.geojson || null, displayName: r.display_name };
+      }
+    } catch (_) {}
+  }
+
+  // 2. Fuzzy match against HUMDATA admin3 list (already cached)
+  onProgress(`  ⚠ Nominatim miss — trying fuzzy match against Ukraine admin boundaries…`);
+  try {
+    await ensureHumdataZip(onProgress);
+    const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
+    const admin3 = JSON.parse(admin3Raw.toString('utf8'));
+    const match = fuzzyMatchHumdata(territory, admin3.features);
+    if (match) {
+      onProgress(`  ✅ Fuzzy matched: "${match.name}" (edit distance: ${match.dist})`);
+      const bbox = featureBbox(match.f);
+      onProgress(`📦 Bbox: S${bbox.south} W${bbox.west} N${bbox.north} E${bbox.east}`);
+      return { ...bbox, boundaryGeojson: match.f.geometry || null, displayName: match.name };
+    }
+    onProgress(`  ⚠ No close fuzzy match found`);
+  } catch (e) {
+    onProgress(`  ⚠ Fuzzy match failed: ${e.message}`);
+  }
+
+  // 3. Fall back to boundary KMZ bbox if provided
+  if (fallbackBbox) {
+    onProgress(`  ⚠ Using boundary KMZ bbox as final fallback`);
+    const { west, south, east, north } = fallbackBbox;
+    return { south, north, west, east, boundaryGeojson: null, displayName: territory };
+  }
+
+  throw new Error(`Territory "${territory}" not found — check spelling or attach a boundary KMZ`);
 }
 
 // ── Build Overpass QL query ────────────────────────────────
@@ -540,7 +625,20 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
   }
 
   onProgress(`  → Downloading CSV from NREL…`);
-  const rawBuf = await httpGetBuffer(downloadUrl);
+  // NREL processes requests async — S3 file may not be ready immediately, poll with retries
+  let rawBuf;
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    rawBuf = await httpGetBuffer(downloadUrl);
+    // Detect 404/XML error response (not a real ZIP or CSV)
+    const preview = rawBuf.slice(0, 50).toString('utf8');
+    if (preview.includes('<') && (preview.includes('404') || preview.includes('NoSuchKey') || preview.includes('Error'))) {
+      if (attempt === 10) throw new Error('NREL file still not ready after 10 attempts');
+      onProgress(`  → File not ready yet, retrying in 15s (attempt ${attempt}/10)…`);
+      await new Promise(r => setTimeout(r, 15000));
+      continue;
+    }
+    break;
+  }
   onProgress(`  → Downloaded ${rawBuf.length} bytes`);
 
   let csv;
@@ -680,11 +778,11 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap' }];
 }
 
-async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions) {
+async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {
   const layerMap = {};
 
   // 1. Resolve bbox + boundary polygon
-  const bbox = await getBbox(territory, onProgress);
+  const bbox = await getBbox(territory, onProgress, fallbackBbox);
 
   // Always add the territory boundary as a layer
   if (bbox.boundaryGeojson) {
