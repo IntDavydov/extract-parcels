@@ -4,7 +4,8 @@
 function appendLog(msg) {
   const el = document.getElementById('main-log');
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-  el.textContent += msg + '\n';
+  const formatted = msg.replace(/^\[ERR(?:OR)?\]\s*/i, '❌ ');
+  el.textContent += formatted + '\n';
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
