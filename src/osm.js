@@ -627,14 +627,14 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
   onProgress(`  → Downloading CSV from NREL…`);
   // NREL processes requests async — S3 file may not be ready immediately, poll with retries
   let rawBuf;
-  for (let attempt = 1; attempt <= 10; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     rawBuf = await httpGetBuffer(downloadUrl);
     // Detect 404/XML error response (not a real ZIP or CSV)
     const preview = rawBuf.slice(0, 50).toString('utf8');
     if (preview.includes('<') && (preview.includes('404') || preview.includes('NoSuchKey') || preview.includes('Error'))) {
-      if (attempt === 10) throw new Error('NREL file still not ready after 10 attempts');
-      onProgress(`  → File not ready yet, retrying in 15s (attempt ${attempt}/10)…`);
-      await new Promise(r => setTimeout(r, 15000));
+      if (attempt === 5) throw new Error('NREL file not ready after 5 attempts — falling back to GWA');
+      onProgress(`  → File not ready yet, retrying in 10s (attempt ${attempt}/5)…`);
+      await new Promise(r => setTimeout(r, 10000));
       continue;
     }
     break;
@@ -871,9 +871,10 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       const windFeatures = await fetchWindData(bbox.boundaryGeojson, bbox, windOptions, onProgress);
       if (windFeatures.length) layerMap['Wind Speed'] = windFeatures;
     } catch (err) {
-      onProgress(`  ⚠ NREL wind fetch failed: ${err.message}`);
+      onProgress(`  ⚠ NREL unavailable: ${err.message}`);
+      onProgress(`  → Falling back to Global Wind Atlas (GWA) heatmap…`);
     }
-    // Always try heatmap regardless of NREL result
+    // Always try GWA heatmap regardless of NREL result
     try {
       const tiles = await fetchWindHeatmap(bbox, windOptions.hubHeight, onProgress);
       groundOverlays.push(...tiles);
