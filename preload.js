@@ -4,13 +4,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   startScraping: (url, outputPath, opts = {}) =>
-    ipcRenderer.send('start-scraping', { url, outputPath, ...opts }),
+    ipcRenderer.invoke('start-scraping', { url, outputPath, ...opts }),
 
   stopScraping: () =>
     ipcRenderer.send('stop-scraping'),
 
   fetchOSM: (options) =>
     ipcRenderer.invoke('fetch-osm', options),
+
+  mergeKmz: (paths, outputPath, cleanup = true) =>
+    ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup }),
 
   saveDialog: (options) =>
     ipcRenderer.invoke('save-dialog', options),
@@ -26,10 +29,4 @@ contextBridge.exposeInMainWorld('api', {
 
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
-
-  onScrapingDone: (callback) =>
-    ipcRenderer.on('scraping-done', (_event, data) => callback(data)),
-
-  onOsmDone: (callback) =>
-    ipcRenderer.on('osm-done', (_event, data) => callback(data)),
 });

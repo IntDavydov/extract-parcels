@@ -50,7 +50,7 @@ app.on('window-all-closed', () => {
 });
 
 // IPC: start kadastr scraping
-ipcMain.on('start-scraping', (event, { url, outputPath, headless, boundaryFilter }) => {
+ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFilter }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -71,7 +71,7 @@ ipcMain.on('start-scraping', (event, { url, outputPath, headless, boundaryFilter
   const kmzPath = outputPath
     ? path.join(outputPath, 'land_plots.kmz')
     : path.join(process.cwd(), 'land_plots.kmz');
-  event.sender.send('log', `💾 Output will be saved to: ${kmzPath}`);
+  event.sender.send('log', `💾 Kadastr output: ${kmzPath}`);
 
   const args = [getUnpackedPath('script.js')];
   if (url) args.push(url);
@@ -93,10 +93,11 @@ ipcMain.on('start-scraping', (event, { url, outputPath, headless, boundaryFilter
     });
   });
 
-  scrapingProcess.on('close', (code) => {
-    event.sender.send('log', `Process exited with code ${code}`);
-    event.sender.send('scraping-done', { code });
-    scrapingProcess = null;
+  return new Promise((resolve) => {
+    scrapingProcess.on('close', (code) => {
+      scrapingProcess = null;
+      resolve({ code });
+    });
   });
 });
 
@@ -129,10 +130,102 @@ ipcMain.handle('fetch-osm', async (event, options) => {
       (msg) => event.sender.send('log', msg),
       options.windOptions || null
     );
-    event.sender.send('osm-done', { path: resultPath });
     return { success: true, path: resultPath };
   } catch (err) {
     event.sender.send('log', '[ERROR] ' + err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: merge two KMZ files into one
+ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
+  const JSZip  = require('jszip');
+  const fs     = require('fs');
+
+  // Find first occurrence of each top-level tag (handles non-nested KML elements)
+  function extractElements(kml, tagName) {
+    const results = [];
+    const open = new RegExp(`<${tagName}(?=\\s|>)`, 'g');
+    const close = `</${tagName}>`;
+    let m;
+    while ((m = open.exec(kml)) !== null) {
+      const start = m.index;
+      const end = kml.indexOf(close, start);
+      if (end === -1) continue;
+      results.push(kml.slice(start, end + close.length));
+      open.lastIndex = end + close.length;
+    }
+    return results;
+  }
+
+  try {
+    const parsedKmls = [];
+    const allZips    = [];
+
+    for (const p of paths) {
+      if (!fs.existsSync(p)) continue;
+      const zip = await JSZip.loadAsync(fs.readFileSync(p));
+      allZips.push(zip);
+      const kmlName = Object.keys(zip.files).find(n => n.toLowerCase().endsWith('.kml'));
+      if (kmlName) parsedKmls.push(await zip.files[kmlName].async('text'));
+    }
+
+    if (!parsedKmls.length) throw new Error('No valid KMZ files found to merge');
+
+    // Collect all styles (dedup by id), ground overlays, and folders
+    const seenIds    = new Set();
+    const styles     = [];
+    const overlays   = [];
+    const folders    = [];
+
+    for (const kml of parsedKmls) {
+      for (const s of [...extractElements(kml, 'Style'), ...extractElements(kml, 'StyleMap')]) {
+        const id = (s.match(/\sid="([^"]+)"/) || [])[1];
+        if (!id || !seenIds.has(id)) {
+          if (id) seenIds.add(id);
+          styles.push(s);
+        }
+      }
+      overlays.push(...extractElements(kml, 'GroundOverlay'));
+      folders.push(...extractElements(kml, 'Folder'));
+    }
+
+    const combinedKml =
+`<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>Land Management</name>
+  ${styles.join('\n  ')}
+  ${overlays.join('\n  ')}
+  ${folders.join('\n  ')}
+</Document>
+</kml>`;
+
+    const outZip = new JSZip();
+    outZip.file('doc.kml', combinedKml);
+
+    // Copy all non-KML file assets from both zips (first-writer wins on name clash)
+    const copiedAssets = new Set();
+    for (const zip of allZips) {
+      for (const [name, file] of Object.entries(zip.files)) {
+        if (!file.dir && !name.toLowerCase().endsWith('.kml') && !copiedAssets.has(name)) {
+          copiedAssets.add(name);
+          outZip.file(name, await file.async('nodebuffer'));
+        }
+      }
+    }
+
+    const buf = await outZip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(outputPath, buf);
+
+    if (cleanup) {
+      for (const p of paths) {
+        try { fs.unlinkSync(p); } catch (_) {}
+      }
+    }
+
+    return { success: true };
+  } catch (err) {
     return { success: false, error: err.message };
   }
 });

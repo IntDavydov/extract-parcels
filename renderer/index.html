@@ -8,138 +8,100 @@
 </head>
 <body>
 
-<!-- ── Tab bar ─────────────────────────────────────────── -->
-<div class="tab-bar">
-  <button class="tab-btn active" data-tab="parcels">📍 Parcels (Kadastr)</button>
-  <button class="tab-btn"        data-tab="osm">🗺 OSM Data</button>
+<div class="main-layout">
+
+  <!-- ── Left: controls ───────────────────────────────── -->
+  <div class="controls-col">
+    <div class="card">
+      <h2>🗺 Land Management</h2>
+
+      <div class="field">
+        <label for="area-name">Area name (used for OSM query &amp; output filename)</label>
+        <input type="text" id="area-name" placeholder="e.g. Остерська громада" />
+      </div>
+
+      <div class="field">
+        <label>Boundary KMZ/KML <span style="color:#e05;">*required</span></label>
+        <div class="row" style="margin-top:4px;">
+          <button class="btn btn-secondary btn-sm" id="btn-pick-boundary">📎 Attach KMZ/KML</button>
+          <span class="path-display" id="boundary-display">not selected</span>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;">✕</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Output folder <span style="color:#e05;">*required</span></label>
+        <div class="row" style="margin-top:4px;">
+          <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
+          <span class="path-display" id="output-folder-display">not selected</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
+        <div class="checkbox-grid">
+          <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
+          <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
+          <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
+          <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
+          <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
+          <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
+          <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
+          <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
+          <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (NREL)</label>
+        </div>
+
+        <!-- Wind settings — shown only when wind checkbox is checked -->
+        <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
+          <div class="field" style="margin-bottom:8px;">
+            <label for="wind-api-key" style="font-size:12px;">NREL API Key (<a href="https://developer.nrel.gov/signup/" target="_blank" style="color:#e94560;">get one free</a>)</label>
+            <input type="text" id="wind-api-key" placeholder="your_nrel_api_key" value="hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ" style="font-size:12px;" />
+          </div>
+          <div class="field" style="margin-bottom:8px;">
+            <label for="wind-hub-height" style="font-size:12px;">Hub height (m)</label>
+            <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
+              <option value="80">80 m</option>
+              <option value="100" selected>100 m (recommended)</option>
+              <option value="120">120 m</option>
+              <option value="160">160 m</option>
+              <option value="200">200 m</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0;">
+            <label for="wind-year" style="font-size:12px;">Data year</label>
+            <select id="wind-year" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
+              <option value="2019" selected>2019</option>
+              <option value="2018">2018</option>
+              <option value="2017">2017</option>
+              <option value="2016">2016</option>
+              <option value="2015">2015</option>
+              <option value="2014">2014</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" style="margin-bottom:0;">
+          <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:14px;margin-bottom:0;">
+        <button class="btn btn-primary" id="btn-start">▶ Start</button>
+        <button class="btn btn-danger"  id="btn-stop" disabled>⏹ Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Right: log ────────────────────────────────────── -->
+  <div class="log-col">
+    <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+      <h2>Log</h2>
+      <div class="log-area" id="main-log"></div>
+    </div>
+  </div>
+
 </div>
-
-<!-- ── Tab panels ──────────────────────────────────────── -->
-<div class="tab-panels">
-
-  <!-- TAB 1: Parcels / Kadastr scraper -->
-  <div class="tab-panel active" id="tab-parcels">
-
-    <div class="controls-col">
-      <div class="card">
-        <h2>Kadastr Scraper</h2>
-
-        <div class="field">
-          <label>Boundary filter KMZ/KML <span style="color:#e05;">*required</span></label>
-          <div class="row" style="margin-top:4px;">
-            <button class="btn btn-secondary btn-sm" id="btn-pick-boundary">📎 Attach KMZ/KML</button>
-            <span class="path-display" id="boundary-display">not selected</span>
-            <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;">✕</button>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>Output folder <span style="color:#e05;">*required</span></label>
-          <div class="row" style="margin-top:4px;">
-            <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
-            <span class="path-display" id="output-folder-display">not selected</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <button class="btn btn-primary" id="btn-start-scraping">▶ Start Scraping</button>
-          <button class="btn btn-danger"  id="btn-stop-scraping" disabled>⏹ Stop</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="log-col">
-      <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
-        <h2>Log</h2>
-        <div class="log-area" id="scraping-log"></div>
-      </div>
-    </div>
-
-  </div><!-- /tab-parcels -->
-
-  <!-- TAB 2: OSM Data -->
-  <div class="tab-panel" id="tab-osm">
-
-    <div class="controls-col">
-      <div class="card">
-        <h2>OSM Data Fetcher</h2>
-
-        <div class="field">
-          <label for="osm-territory">Territory — enter hromada or city name (e.g. Остерська громада, Чернігів)</label>
-          <input type="text" id="osm-territory" placeholder="Остерська громада" />
-        </div>
-
-
-        <div class="row">
-          <button class="btn btn-secondary btn-sm" id="btn-pick-osm-output">📁 Output file</button>
-          <span class="path-display" id="osm-output-display">not selected</span>
-        </div>
-
-        <div class="field">
-          <label style="margin-bottom:8px;">Layers to fetch</label>
-          <div class="checkbox-grid">
-            <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
-            <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
-            <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
-            <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
-            <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
-            <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
-            <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
-            <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
-            <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (NREL)</label>
-          </div>
-
-          <!-- Wind settings — shown only when wind checkbox is checked -->
-          <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-            <div class="field" style="margin-bottom:8px;">
-              <label for="wind-api-key" style="font-size:12px;">NREL API Key (<a href="https://developer.nrel.gov/signup/" target="_blank" style="color:#e94560;">get one free</a>)</label>
-              <input type="text" id="wind-api-key" placeholder="your_nrel_api_key" value="hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ" style="font-size:12px;" />
-            </div>
-            <div class="field" style="margin-bottom:8px;">
-              <label for="wind-hub-height" style="font-size:12px;">Hub height (m)</label>
-              <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-                <option value="80">80 m</option>
-                <option value="100" selected>100 m (recommended)</option>
-                <option value="120">120 m</option>
-                <option value="160">160 m</option>
-                <option value="200">200 m</option>
-              </select>
-            </div>
-            <div class="field" style="margin-bottom:0;">
-              <label for="wind-year" style="font-size:12px;">Data year</label>
-              <select id="wind-year" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-                <option value="2019" selected>2019</option>
-                <option value="2018">2018</option>
-                <option value="2017">2017</option>
-                <option value="2016">2016</option>
-                <option value="2015">2015</option>
-                <option value="2014">2014</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="row" style="margin-bottom:0;">
-            <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
-            <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
-          </div>
-        </div>
-
-        <div class="row" style="margin-top:14px;">
-          <button class="btn btn-primary" id="btn-fetch-osm">⬇ Fetch Data</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="log-col">
-      <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
-        <h2>Log</h2>
-        <div class="log-area" id="osm-log"></div>
-      </div>
-    </div>
-
-  </div><!-- /tab-osm -->
-
-</div><!-- /tab-panels -->
 
 <script src="app.js"></script>
 </body>
