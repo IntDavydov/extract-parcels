@@ -130,7 +130,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   }
 
   const windOptions = layers.includes('wind') ? {
-    apiKey:    document.getElementById('wind-api-key').value.trim(),
+    apiKey:    'hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ',
     hubHeight: document.getElementById('wind-hub-height').value,
     year:      document.getElementById('wind-year').value,
   } : null;
