@@ -2,19 +2,39 @@
 
 const JSZip = require('jszip');
 const fs    = require('fs');
+const path  = require('path');
 
 // KML color format: aabbggrr (alpha, blue, green, red)
 const LAYER_STYLES = {
+  'Territory Boundary': { poly: '00000000', line: 'ff6435ff', width: 4 },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
   'Towers':             { point: 'ff0088ff' },
-  'Substations':        { poly: 'ff0000ff', line: 'ff0000ff' },
-  'Roads':              { line: 'ffffffff' },
-  'Settlements':        { poly: 'ff00cc00', line: 'ff00cc00' },
-  'Settlement Buffers': { poly: '5500cc00', line: 'aa00cc00' },
-  'Water':              { poly: 'ffff6600', line: 'ffff6600' },
-  'Forests':            { poly: 'ff006600', line: 'ff006600' },
-  'Emerald Network':    { poly: 'ffccff00', line: 'ffccff00' },
+  'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
+  'Roads':              { line: 'ff000000' },
+  'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
+  'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
+  'Settlement Buffers': { poly: '80c9c9ff', line: 'ffc9c9ff' },
+  'Water':              { poly: '80ff6600', line: '80ff6600' },
+  'Forests':            { poly: '807fff00', line: '807fff00' },
+  'Emerald Network':    { poly: '807fff00', line: '807fff00' },
+  'Wind Speed':         { point: 'ff00d7ff' },
 };
+
+// Layers rendered first appear underneath — forests/emerald below settlements
+const LAYER_ORDER = [
+  'Territory Boundary',
+  'Forests',
+  'Emerald Network',
+  'Water',
+  'Roads',
+  'Power Lines',
+  'Substations',
+  'Towers',
+  'Settlements',
+  'Settlement Buffers',
+  'Settlement Pins',
+  'Wind Speed',
+];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -88,21 +108,32 @@ function buildStyles() {
     const pointColor = colors.point || colors.line || 'ffffffff';
     const lineColor  = colors.line  || 'ffffffff';
     const polyColor  = colors.poly  || '4400ff00';
+    const iconStyle  = colors.icon
+      ? `<IconStyle><color>${pointColor}</color><scale>1.0</scale><Icon><href>${colors.icon}</href></Icon></IconStyle>`
+      : `<IconStyle><color>${pointColor}</color><scale>0.8</scale></IconStyle>`;
+    const lineWidth = colors.width || 2;
     lines.push(`<Style id="${id}">
-  <IconStyle><color>${pointColor}</color><scale>0.8</scale></IconStyle>
-  <LineStyle><color>${lineColor}</color><width>2</width></LineStyle>
+  ${iconStyle}
+  <LineStyle><color>${lineColor}</color><width>${lineWidth}</width></LineStyle>
   <PolyStyle><color>${polyColor}</color></PolyStyle>
 </Style>`);
   }
   return lines.join('\n');
 }
 
-async function exportKMZ(layerMap, outputPath, onProgress) {
+async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) {
   onProgress('🗺 Building KML…');
   const styles = buildStyles();
   const folders = [];
 
-  for (const [layerName, features] of Object.entries(layerMap)) {
+  // Render in defined order so forests/emerald appear below settlements
+  const orderedKeys = [
+    ...LAYER_ORDER.filter(k => layerMap[k]),
+    ...Object.keys(layerMap).filter(k => !LAYER_ORDER.includes(k)),
+  ];
+
+  for (const layerName of orderedKeys) {
+    const features = layerMap[layerName];
     const styleId = layerName.replace(/[^a-zA-Z0-9]/g, '_');
     const placemarks = features.map(f => featureToKml(f, styleId)).filter(Boolean);
     folders.push(`<Folder>
@@ -112,11 +143,25 @@ async function exportKMZ(layerMap, outputPath, onProgress) {
     onProgress(`  ${layerName}: ${placemarks.length} placemarks`);
   }
 
+  // Build GroundOverlay elements (wind heatmap etc.)
+  const overlayKml = groundOverlays.map((ov) => {
+    const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
+    return `<GroundOverlay>
+  <name>Wind Speed ${ov.hubHeight}m</name>
+  <Icon><href>${fname}</href></Icon>
+  <LatLonBox>
+    <north>${ov.north}</north><south>${ov.south}</south>
+    <east>${ov.east}</east><west>${ov.west}</west>
+  </LatLonBox>
+</GroundOverlay>`;
+  }).join('\n');
+
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
   <name>Land Management Data</name>
   ${styles}
+  ${overlayKml}
   ${folders.join('\n  ')}
 </Document>
 </kml>`;
@@ -124,6 +169,27 @@ async function exportKMZ(layerMap, outputPath, onProgress) {
   onProgress('📦 Zipping into KMZ…');
   const zip = new JSZip();
   zip.file('doc.kml', kml);
+
+  // Bundle any icon files referenced in styles
+  for (const colors of Object.values(LAYER_STYLES)) {
+    if (colors.icon) {
+      // In packaged app __dirname contains 'app.asar'; in dev it's the real src/ folder
+      const isPackaged = __dirname.includes('app.asar');
+      const appRoot = isPackaged
+        ? path.join(process.resourcesPath, 'app.asar.unpacked')
+        : path.join(__dirname, '..');
+      const iconSrc = path.join(appRoot, path.basename(colors.icon));
+      if (fs.existsSync(iconSrc)) {
+        zip.file(colors.icon, fs.readFileSync(iconSrc));
+      }
+    }
+  }
+
+  // Bundle ground overlay images
+  for (const ov of groundOverlays) {
+    zip.file(`files/wind_tile_${ov.tileKey || '0'}.png`, ov.imageBuffer);
+  }
+
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   fs.writeFileSync(outputPath, buffer);
   onProgress(`💾 Saved KMZ → ${outputPath}`);

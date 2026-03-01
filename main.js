@@ -124,7 +124,8 @@ ipcMain.handle('fetch-osm', async (event, options) => {
       options.layers,
       options.outputPath,
       options.format,
-      (msg) => event.sender.send('log', msg)
+      (msg) => event.sender.send('log', msg),
+      options.windOptions || null
     );
     event.sender.send('osm-done', { path: resultPath });
     return { success: true, path: resultPath };

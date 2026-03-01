@@ -13,8 +13,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 // ── Helpers ────────────────────────────────────────────────
 function appendLog(elId, msg) {
   const el = document.getElementById(elId);
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
   el.textContent += msg + '\n';
-  el.scrollTop = el.scrollHeight;
+  if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
 // ── Register IPC listeners once ────────────────────────────
@@ -85,10 +86,17 @@ document.getElementById('btn-pick-osm-output').addEventListener('click', async (
 
 document.getElementById('btn-select-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = true);
+  document.getElementById('wind-settings').style.display = 'block';
 });
 
 document.getElementById('btn-clear-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = false);
+  document.getElementById('wind-settings').style.display = 'none';
+});
+
+// Show/hide wind settings when wind checkbox toggled
+document.getElementById('layer-wind').addEventListener('change', (e) => {
+  document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
 });
 
 document.getElementById('btn-fetch-osm').addEventListener('click', async () => {
@@ -108,12 +116,23 @@ document.getElementById('btn-fetch-osm').addEventListener('click', async () => {
   }
   const format = document.querySelector('input[name="osm-format"]:checked').value;
 
+  const windOptions = layers.includes('wind') ? {
+    apiKey:    document.getElementById('wind-api-key').value.trim(),
+    hubHeight: document.getElementById('wind-hub-height').value,
+    year:      document.getElementById('wind-year').value,
+  } : null;
+
+  if (windOptions && !windOptions.apiKey) {
+    appendLog('osm-log', '⚠ Please enter your NREL API key to fetch Wind Speed data.');
+    return;
+  }
+
   document.getElementById('osm-log').textContent = '';
   document.getElementById('btn-fetch-osm').disabled = true;
   appendLog('osm-log', `Fetching OSM data for "${territory}"…`);
   appendLog('osm-log', `Layers: ${layers.join(', ')}`);
 
-  const result = await window.api.fetchOSM({ territory, layers, outputPath: osmOutputPath, format });
+  const result = await window.api.fetchOSM({ territory, layers, outputPath: osmOutputPath, format, windOptions });
   if (!result.success) {
     document.getElementById('btn-fetch-osm').disabled = false;
     appendLog('osm-log', `[ERROR] ${result.error}`);

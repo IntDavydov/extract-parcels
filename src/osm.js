@@ -1,23 +1,52 @@
 'use strict';
 
-const https = require('https');
-const http  = require('http');
-const path  = require('path');
-const fs    = require('fs');
+const https   = require('https');
+const http    = require('http');
+const path    = require('path');
+const fs      = require('fs');
+const os      = require('os');
+const zlib    = require('zlib');
+const { pipeline } = require('stream');
+const { promisify } = require('util');
+const pipelineAsync = promisify(pipeline);
 const osmtogeojson = require('osmtogeojson');
 const turfBuffer   = require('@turf/buffer').default || require('@turf/buffer');
 
+const HUMDATA_ZIP_URL  = 'https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/681beb86-391b-4a08-8140-ca52e80fcdce/download/ukr_admin_boundaries.geojson.zip';
+const HUMDATA_CACHE_DIR = path.join(os.homedir(), '.land-management-cache');
+const HUMDATA_CACHE_ZIP = path.join(HUMDATA_CACHE_DIR, 'ukr_admin_boundaries.geojson.zip');
+
 // ── HTTP helper ────────────────────────────────────────────
-function httpGet(url, headers = {}) {
+function httpGet(url, headers = {}, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http;
     const req = mod.get(url, { headers: { 'User-Agent': 'land-management-app/1.0', ...headers } }, (res) => {
+      // Follow redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return resolve(httpGet(res.headers.location, headers, timeoutMs));
+      }
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve(data));
     });
     req.on('error', reject);
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Request timeout')); });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Request timeout')); });
+  });
+}
+
+function httpGetBuffer(url, headers = {}, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.get(url, { headers: { 'User-Agent': 'land-management-app/1.0', ...headers } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return resolve(httpGetBuffer(res.headers.location, headers, timeoutMs));
+      }
+      const chunks = [];
+      res.on('data', c => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Request timeout')); });
   });
 }
 
@@ -27,7 +56,7 @@ function httpPost(url, body, headers = {}) {
     const buf = Buffer.from(body);
     const options = {
       hostname: urlObj.hostname,
-      path: urlObj.pathname,
+      path: urlObj.pathname + (urlObj.search || ''),
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -42,25 +71,187 @@ function httpPost(url, body, headers = {}) {
       res.on('end', () => resolve(data));
     });
     req.on('error', reject);
-    req.setTimeout(180000, () => { req.destroy(); reject(new Error('Overpass request timeout')); });
+    req.setTimeout(300000, () => { req.destroy(); reject(new Error('Request timeout')); });
     req.write(buf);
     req.end();
   });
 }
 
-// ── Nominatim: territory name → bbox ──────────────────────
+// ── HUMDATA: download zip once, cache to disk ─────────────
+function downloadFile(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(HUMDATA_CACHE_DIR)) fs.mkdirSync(HUMDATA_CACHE_DIR, { recursive: true });
+    const file = fs.createWriteStream(destPath + '.tmp');
+    const request = https.get(url, { headers: { 'User-Agent': 'land-management-app/1.0' } }, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        file.close();
+        return downloadFile(res.headers.location, destPath, onProgress).then(resolve).catch(reject);
+      }
+      const total = parseInt(res.headers['content-length'] || '0');
+      let received = 0;
+      let lastPct = -1;
+      res.on('data', (chunk) => {
+        received += chunk.length;
+        if (total) {
+          const pct = Math.floor(received / total * 100);
+          if (pct !== lastPct && pct % 10 === 0) { onProgress(`  ${pct}%…`); lastPct = pct; }
+        }
+      });
+      res.pipe(file);
+      file.on('finish', () => { file.close(); fs.renameSync(destPath + '.tmp', destPath); resolve(); });
+    });
+    request.on('error', reject);
+    request.setTimeout(120000, () => { request.destroy(); reject(new Error('Download timeout')); });
+  });
+}
+
+// Extract one file from a zip buffer using Node built-ins (no external deps)
+// Returns the file content as a Buffer
+function extractFileFromZip(zipPath, fileName) {
+  // Use the system unzip command for simplicity — works on all platforms
+  const { execSync } = require('child_process');
+  const tmpOut = path.join(os.tmpdir(), fileName);
+  try {
+    execSync(`unzip -p "${zipPath}" "${fileName}" > "${tmpOut}"`, { stdio: 'pipe' });
+    const data = fs.readFileSync(tmpOut);
+    try { fs.unlinkSync(tmpOut); } catch (_) {}
+    return data;
+  } catch (_) {
+    // fallback: try with forward slashes
+    try {
+      execSync(`unzip -p "${zipPath}" ${fileName} > "${tmpOut}"`, { shell: true, stdio: 'pipe' });
+      const data = fs.readFileSync(tmpOut);
+      try { fs.unlinkSync(tmpOut); } catch (_) {}
+      return data;
+    } catch (e) {
+      throw new Error(`Cannot extract ${fileName} from zip: ${e.message}`);
+    }
+  }
+}
+
+async function ensureHumdataZip(onProgress) {
+  if (!fs.existsSync(HUMDATA_CACHE_ZIP)) {
+    onProgress('📥 Downloading Ukraine admin boundaries from HUMDATA (81MB, one-time)…');
+    await downloadFile(HUMDATA_ZIP_URL, HUMDATA_CACHE_ZIP, onProgress);
+    onProgress('✅ Download complete, cached to: ' + HUMDATA_CACHE_ZIP);
+  } else {
+    onProgress('📦 Using cached HUMDATA boundaries: ' + HUMDATA_CACHE_ZIP);
+  }
+}
+
+// ── HUMDATA: fetch settlements for territory ──────────────
+async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
+  await ensureHumdataZip(onProgress);
+
+  // 1. Find matching adm3_pcode by territory name
+  onProgress('🔍 Matching territory to hromada pcode…');
+  const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
+  const admin3 = JSON.parse(admin3Raw.toString('utf8'));
+
+  const searchName = territory.toLowerCase();
+  let matchedPcode = null;
+  let matchedFeature = null;
+  for (const f of admin3.features) {
+    const p = f.properties;
+    const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(n => n.toLowerCase());
+    if (names.some(n => n.includes(searchName) || searchName.includes(n.split(' ')[0]))) {
+      matchedPcode = p.adm3_pcode;
+      matchedFeature = f;
+      onProgress(`  ✅ Matched hromada: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
+      break;
+    }
+  }
+
+  // fallback: bbox intersection if name not matched
+  if (!matchedPcode) {
+    onProgress('  ⚠ No exact name match — using bbox intersection');
+    for (const f of admin3.features) {
+      if (!f.geometry) continue;
+      const p = f.properties;
+      const cl = p.center_lon, clat = p.center_lat;
+      if (cl >= bbox.west && cl <= bbox.east && clat >= bbox.south && clat <= bbox.north) {
+        matchedPcode = p.adm3_pcode;
+        matchedFeature = f;
+        onProgress(`  → Using: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
+        break;
+      }
+    }
+  }
+
+  if (!matchedPcode) throw new Error('Could not match territory to a hromada in HUMDATA');
+
+  // 2. Filter admin4 polygons by adm3_pcode → settlement boundaries
+  onProgress('📐 Extracting settlement boundaries from admin4…');
+  const admin4Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin4.geojson');
+  const admin4 = JSON.parse(admin4Raw.toString('utf8'));
+  const settlementPolygons = admin4.features.filter(f => f.properties.adm3_pcode === matchedPcode);
+  onProgress(`  → ${settlementPolygons.length} settlement polygons`);
+
+  // 3. Filter adminpoints by adm3_pcode and admin_level=4 → settlement pins
+  onProgress('📍 Extracting settlement pins from adminpoints…');
+  const pointsRaw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_adminpoints.geojson');
+  const pointsData = JSON.parse(pointsRaw.toString('utf8'));
+  const settlementPins = pointsData.features.filter(f =>
+    f.properties.adm3_pcode === matchedPcode && f.properties.admin_level === 4
+  );
+  onProgress(`  → ${settlementPins.length} settlement pins`);
+
+  // 4. Tag features
+  const boundaries = settlementPolygons.map(f => ({
+    ...f,
+    properties: {
+      ...f.properties,
+      name: f.properties.adm4_name1 || f.properties.adm4_name,
+      _layer: 'Settlements',
+      _type: 'settlement',
+    },
+  }));
+
+  const pins = settlementPins.map(f => ({
+    ...f,
+    properties: {
+      ...f.properties,
+      name: f.properties.name1 || f.properties.name,
+      _layer: 'Settlements',
+      _type: 'settlement_pin',
+    },
+  }));
+
+  // 5. Create 700m buffers for polygons
+  onProgress('📐 Creating 700m buffer zones for settlements…');
+  const buffers = [];
+  for (const f of boundaries) {
+    if (!f.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
+    try {
+      const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
+      if (buf) {
+        buffers.push({
+          ...buf,
+          properties: {
+            name: f.properties.name,
+            adm4_pcode: f.properties.adm4_pcode,
+            _layer: 'Settlement Buffers',
+            _type: 'buffer_700m',
+          },
+        });
+      }
+    } catch (_) {}
+  }
+  onProgress(`  → ${buffers.length} buffer zones created`);
+
+  return { boundaries, pins, buffers };
+}
 async function getBbox(territory, onProgress) {
   onProgress(`🔍 Looking up "${territory}" via Nominatim…`);
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(territory)}&format=json&limit=1&addressdetails=1&countrycodes=ua`;
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(territory)}&format=json&limit=1&addressdetails=1&countrycodes=ua&polygon_geojson=1`;
   const raw = await httpGet(url);
   const results = JSON.parse(raw);
   if (!results.length) throw new Error(`Territory "${territory}" not found on Nominatim`);
   const r = results[0];
-  // Nominatim bbox: [south, north, west, east]
   const [south, north, west, east] = r.boundingbox.map(Number);
   onProgress(`📍 Found: ${r.display_name}`);
   onProgress(`📦 Bbox: S${south} W${west} N${north} E${east}`);
-  return { south, north, west, east };
+  return { south, north, west, east, boundaryGeojson: r.geojson || null, displayName: r.display_name };
 }
 
 // ── Build Overpass QL query ────────────────────────────────
@@ -118,10 +309,375 @@ function classifyFeature(props) {
   return null;
 }
 
-// ── Main export ────────────────────────────────────────────
-async function fetchOSM(territory, layers, outputPath, format, onProgress) {
-  // 1. Resolve bbox
+// ── EEA ArcGIS REST: fetch Emerald Network sites by bbox ───
+// Paginates through all features (ArcGIS returns max 1000 per request)
+async function fetchEmeraldFromEEA(bbox, onProgress) {
+  const { south, west, north, east } = bbox;
+  const BASE = 'https://bio.discomap.eea.europa.eu/arcgis/rest/services/ProtectedSites/EmeraldSites/MapServer/3/query';
+  const geometry = encodeURIComponent(JSON.stringify({ xmin: west, ymin: south, xmax: east, ymax: north, spatialReference: { wkid: 4326 } }));
+  const baseParams = `geometry=${geometry}&geometryType=esriGeometryEnvelope&spatialRel=esriSpatialRelIntersects&outFields=SITENAME,SITECODE,AREAHA,COUNTRY_CODE&returnGeometry=true&outSR=4326&f=json`;
+
+  let allFeatures = [];
+  let offset = 0;
+  while (true) {
+    const url = `${BASE}?${baseParams}&resultOffset=${offset}&resultRecordCount=1000`;
+    const raw = await httpGet(url, { 'User-Agent': 'land-management-app/1.0' });
+    let data;
+    try { data = JSON.parse(raw); } catch (_) { break; }
+    if (data.error) { onProgress(`⚠ EEA error: ${JSON.stringify(data.error)}`); break; }
+
+    const features = (data.features || []).map(f => ({
+      type: 'Feature',
+      geometry: arcgisGeomToGeoJSON(f.geometry, data.geometryType),
+      properties: {
+        name: f.attributes.SITENAME,
+        sitecode: f.attributes.SITECODE,
+        area_ha: f.attributes.AREAHA,
+        country: f.attributes.COUNTRY_CODE,
+        _layer: 'Emerald Network',
+        _source: 'EEA',
+      },
+    })).filter(f => f.geometry);
+
+    allFeatures = allFeatures.concat(features);
+    if (!data.exceededTransferLimit) break;
+    offset += 1000;
+    onProgress(`  → fetched ${allFeatures.length} so far…`);
+  }
+  return allFeatures;
+}
+
+function arcgisGeomToGeoJSON(geom, geomType) {
+  if (!geom) return null;
+  if (geomType === 'esriGeometryPoint') {
+    return { type: 'Point', coordinates: [geom.x, geom.y] };
+  }
+  if (geomType === 'esriGeometryPolyline') {
+    if (geom.paths.length === 1) return { type: 'LineString', coordinates: geom.paths[0] };
+    return { type: 'MultiLineString', coordinates: geom.paths };
+  }
+  if (geomType === 'esriGeometryPolygon') {
+    if (geom.rings.length === 1) return { type: 'Polygon', coordinates: geom.rings };
+    return { type: 'MultiPolygon', coordinates: geom.rings.map(r => [r]) };
+  }
+  return null;
+}
+
+// ── NREL Sup3rWind Ukraine: fetch wind speed data by WKT polygon ───────────
+
+// Reduce a polygon ring to at most maxPts vertices (keep first/last to stay closed)
+function simplifyRing(ring, maxPts) {
+  if (ring.length <= maxPts) return ring;
+  const step = Math.ceil((ring.length - 1) / (maxPts - 1));
+  const out = [];
+  for (let i = 0; i < ring.length - 1; i += step) out.push(ring[i]);
+  out.push(ring[0]); // close
+  return out;
+}
+
+// Simplify to a single outer ring polygon with ≤ maxPts vertices
+function simplifyGeojsonPolygon(geojson, maxPts = 60) {
+  let ring;
+  if (geojson.type === 'Polygon') {
+    ring = geojson.coordinates[0];
+  } else if (geojson.type === 'MultiPolygon') {
+    // Use the outer ring of the largest polygon
+    ring = geojson.coordinates.reduce((best, poly) =>
+      poly[0].length > best.length ? poly[0] : best, []);
+  } else {
+    throw new Error('Unsupported geometry type for WKT: ' + geojson.type);
+  }
+  return { type: 'Polygon', coordinates: [simplifyRing(ring, maxPts)] };
+}
+
+function geojsonToWkt(geojson) {
+  const coordRingToWkt = ring => ring.map(([lng, lat]) => `${lng} ${lat}`).join(',');
+  if (geojson.type === 'Polygon') {
+    return `POLYGON((${geojson.coordinates.map(coordRingToWkt).join('),(')})`;
+  }
+  if (geojson.type === 'MultiPolygon') {
+    const polys = geojson.coordinates
+      .map(poly => `(${poly.map(coordRingToWkt).join(',')})`)
+      .join(',');
+    return `MULTIPOLYGON(${polys})`;
+  }
+  throw new Error('Cannot convert geometry type to WKT: ' + geojson.type);
+}
+
+// Build a simple bbox rectangle WKT as a fallback
+function bboxToWkt(bbox) {
+  const { west, east, south, north } = bbox;
+  return `POLYGON((${west} ${south},${east} ${south},${east} ${north},${west} ${north},${west} ${south}))`;
+}
+
+// Parse NREL Sup3rWind CSV format:
+// Row 1: "SiteID,12345,...,Longitude,30.75,Latitude,51.07" (inline key-value pairs)
+// Row 2: "Year,Month,Day,Hour,Minute,wind speed at 100m (m/s)"
+// Remaining rows: time-series data — average all values per site
+function parseNrelCsv(csvText, attr) {
+  const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 3) throw new Error('NREL CSV too short');
+
+  // Parse first row as flat key-value pairs: k1,v1,k2,v2,...
+  const metaCells = lines[0].split(',');
+  const meta = {};
+  for (let i = 0; i < metaCells.length - 1; i += 2) {
+    meta[metaCells[i].trim().toLowerCase()] = metaCells[i + 1].trim();
+  }
+
+  const lat = parseFloat(meta['latitude']);
+  const lon = parseFloat(meta['longitude']);
+  if (isNaN(lat) || isNaN(lon)) {
+    throw new Error(`Could not parse lat/lon from metadata: ${lines[0].slice(0, 120)}`);
+  }
+
+  // Row 2 is the data header
+  const colHeaders = lines[1].split(',').map(h => h.trim().toLowerCase());
+
+  // Match wind column: "wind speed at 100m (m/s)" or "windspeed_100m" etc.
+  const hubM = attr.match(/(\d+)/);
+  const hubNum = hubM ? hubM[1] : '';
+  const windColIdx = colHeaders.findIndex(h =>
+    h.includes(`${hubNum}m`) || h.includes('wind speed') || h.includes('windspeed')
+  );
+  if (windColIdx === -1) {
+    throw new Error(`No wind column found. Headers: ${colHeaders.join(', ')}`);
+  }
+
+  // Average the wind speed over all time steps
+  let sum = 0, count = 0;
+  for (let i = 2; i < lines.length; i++) {
+    const cells = lines[i].split(',');
+    const v = parseFloat(cells[windColIdx]);
+    if (!isNaN(v)) { sum += v; count++; }
+  }
+
+  const avg = count > 0 ? Math.round((sum / count) * 10) / 10 : null;
+  return [{
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [lon, lat] },
+    properties: {
+      name:         `Wind ${avg != null ? avg : '?'} m/s avg`,
+      windspeed_ms: avg,
+      samples:      count,
+      _layer:       'Wind Speed',
+    },
+  }];
+}
+
+async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
+  const { apiKey, hubHeight, year } = windOptions;
+  const attr = `windspeed_${hubHeight}m`;
+  onProgress(`💨 Requesting NREL Sup3rWind data at ${hubHeight}m (year ${year})…`);
+
+  const endpoint = `https://developer.nrel.gov/api/wind-toolkit/v2/wind/sup3rwind-ukraine-download.json?api_key=${encodeURIComponent(apiKey)}`;
+
+  // Sup3rWind Ukraine only reliably works with a bbox rectangle — skip polygon to save rate limit
+  const wktAttempts = [
+    { label: 'bounding box', wkt: bboxToWkt(bbox) },
+  ];
+
+  let json;
+  for (const attempt of wktAttempts) {
+    onProgress(`  → Trying ${attempt.label}…`);
+    const postBody = [
+      `wkt=${encodeURIComponent(attempt.wkt)}`,
+      `attributes=${encodeURIComponent(attr)}`,
+      `names=${year}`,
+      `email=land-management-app%40local.invalid`,
+    ].join('&');
+
+    const body = await httpPost(endpoint, postBody);
+    onProgress(`  → NREL response received (${body.length} bytes)`);
+
+    try { json = JSON.parse(body); } catch (_) {
+      throw new Error('Non-JSON response from NREL API: ' + body.slice(0, 200));
+    }
+
+    // Check for data processing failure — retry with next attempt
+    const hasError = json.errors && json.errors.length;
+    const isProcessingError = hasError && JSON.stringify(json.errors).includes('processing');
+    if (hasError) onProgress(`  ⚠ NREL full response: ${JSON.stringify(json).slice(0, 600)}`);
+    if (isProcessingError && wktAttempts.indexOf(attempt) < wktAttempts.length - 1) {
+      onProgress(`  ⚠ ${attempt.label} failed (${JSON.stringify(json.errors)}), retrying…`);
+      json = null;
+      continue;
+    }
+    if (hasError) throw new Error('NREL API error: ' + JSON.stringify(json.errors));
+    break;
+  }
+
+  if (!json) throw new Error('All NREL polygon attempts failed');
+
+  // NREL download APIs return a downloadUrl — fetch the CSV from it
+  const downloadUrl =
+    json.outputs?.downloadUrl ||
+    json.outputs?.download_url ||
+    json.download_url ||
+    json.downloadUrl;
+
+    if (!downloadUrl) {
+    const rateLimited = json.error?.code === 'OVER_RATE_LIMIT';
+    if (rateLimited) throw new Error('NREL rate limit hit — wait a minute and try again.');
+    throw new Error('NREL API did not return a downloadUrl. Response: ' + JSON.stringify(json).slice(0, 400));
+  }
+
+  onProgress(`  → Downloading CSV from NREL…`);
+  const rawBuf = await httpGetBuffer(downloadUrl);
+  onProgress(`  → Downloaded ${rawBuf.length} bytes`);
+
+  let csv;
+  // NREL returns a ZIP containing the CSV
+  if (rawBuf[0] === 0x50 && rawBuf[1] === 0x4B) { // PK magic = ZIP
+    onProgress(`  → Extracting CSV from ZIP…`);
+    const JSZip = require('jszip');
+    const zip = await JSZip.loadAsync(rawBuf);
+    const csvFile = Object.values(zip.files).find(f => f.name.endsWith('.csv') && !f.dir);
+    if (!csvFile) throw new Error('No CSV file found inside NREL ZIP');
+    csv = await csvFile.async('string');
+    onProgress(`  → Extracted ${csvFile.name} (${csv.length} chars)`);
+  } else {
+    csv = rawBuf.toString('utf8');
+  }
+
+  onProgress(`  → CSV preview: ${csv.slice(0, 400).replace(/\n/g, ' | ')}`);
+  const features = parseNrelCsv(csv, attr);
+  onProgress(`  → ${features.length} wind data points created`);
+  return features;
+}
+
+// ── Global Wind Atlas: fetch wind speed from COG via range requests ────────
+const GWA_COG_URLS = {
+  80:  'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_80m.tif',
+  100: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_100m.tif',
+  120: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_120m.tif',
+  160: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_160m.tif',
+  200: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_200m.tif',
+};
+
+// GWA color scale: wind speed (m/s) → [R, G, B]
+function windSpeedToColor(v) {
+  const stops = [
+    [0,   [0x33, 0x33, 0xcc]],  // deep blue
+    [3,   [0x33, 0x99, 0xff]],  // light blue
+    [4,   [0x66, 0xdd, 0x00]],  // green
+    [5,   [0xff, 0xee, 0x00]],  // yellow
+    [6,   [0xff, 0xaa, 0x00]],  // amber
+    [7,   [0xff, 0x66, 0x00]],  // orange
+    [8,   [0xff, 0x22, 0x00]],  // red-orange
+    [10,  [0xcc, 0x00, 0x00]],  // dark red
+    [12,  [0x88, 0x00, 0x44]],  // maroon
+  ];
+  if (v <= stops[0][0]) return stops[0][1];
+  if (v >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (v <= stops[i][0]) {
+      const t = (v - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+      return stops[i-1][1].map((c, j) => Math.round(c + t * (stops[i][1][j] - c)));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+// Build a PNG from a 2D array of wind speeds
+function windArrayToPng(data, width, height) {
+  const zlib = require('zlib');
+  // Build raw RGBA scanlines
+  const raw = Buffer.alloc(height * (1 + width * 4));
+  for (let row = 0; row < height; row++) {
+    raw[row * (1 + width * 4)] = 0; // filter byte
+    for (let col = 0; col < width; col++) {
+      const v = data[row * width + col];
+      const [r, g, b] = isNaN(v) || v <= 0 ? [0, 0, 0] : windSpeedToColor(v);
+      const a = (isNaN(v) || v <= 0) ? 0 : 180; // 70% opacity
+      const off = row * (1 + width * 4) + 1 + col * 4;
+      raw[off] = r; raw[off+1] = g; raw[off+2] = b; raw[off+3] = a;
+    }
+  }
+  const compressed = zlib.deflateSync(raw);
+
+  function crc32(buf) {
+    let crc = 0xFFFFFFFF;
+    for (const b of buf) {
+      crc ^= b;
+      for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function chunk(type, data) {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const typeB = Buffer.from(type);
+    const crcBuf = Buffer.concat([typeB, data]);
+    const crcVal = Buffer.alloc(4); crcVal.writeUInt32BE(crc32(crcBuf));
+    return Buffer.concat([len, typeB, data, crcVal]);
+  }
+
+  const sig = Buffer.from([137,80,78,71,13,10,26,10]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(width, 0); ihdrData.writeUInt32BE(height, 4);
+  ihdrData[8] = 8; ihdrData[9] = 6; // 8-bit RGBA
+  const png = Buffer.concat([sig, chunk('IHDR', ihdrData), chunk('IDAT', compressed), chunk('IEND', Buffer.alloc(0))]);
+  return png;
+}
+
+async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
+  const { west, south, east, north } = bbox;
+  onProgress(`🌬 Fetching wind speed from Global Wind Atlas (${hubHeight}m)…`);
+
+  const cogUrl = GWA_COG_URLS[hubHeight] || GWA_COG_URLS[100];
+  let geotiff;
+  try {
+    geotiff = require('geotiff');
+  } catch (e) {
+    throw new Error('geotiff module not available: ' + e.message);
+  }
+
+  const tiff = await geotiff.fromUrl(cogUrl);
+  const image = await tiff.getImage(0);
+  const cogBbox = image.getBoundingBox(); // [west, south, east, north]
+  const W = image.getWidth(), H = image.getHeight();
+
+  // Clamp request bbox to COG bounds
+  const w = Math.max(west,  cogBbox[0]);
+  const s = Math.max(south, cogBbox[1]);
+  const e = Math.min(east,  cogBbox[2]);
+  const n = Math.min(north, cogBbox[3]);
+
+  // Convert geographic bbox to pixel window (COG stores north-to-south)
+  const scaleX = W / (cogBbox[2] - cogBbox[0]);
+  const scaleY = H / (cogBbox[3] - cogBbox[1]);
+  const left   = Math.round((w - cogBbox[0]) * scaleX);
+  const right  = Math.round((e - cogBbox[0]) * scaleX);
+  const top    = Math.round((cogBbox[3] - n) * scaleY);
+  const bottom = Math.round((cogBbox[3] - s) * scaleY);
+
+  onProgress(`  → Reading ${right - left}×${bottom - top}px window from COG…`);
+  const rasters = await image.readRasters({ window: [left, top, right, bottom] });
+  const data = rasters[0]; // Float32Array of wind speeds
+  const { width, height } = rasters;
+
+  onProgress(`  → Raster ${width}×${height} px, building PNG…`);
+  const png = windArrayToPng(Array.from(data), width, height);
+  onProgress(`  → GWA wind PNG generated (${png.length} bytes)`);
+
+  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap' }];
+}
+
+async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions) {
+  const layerMap = {};
+
+  // 1. Resolve bbox + boundary polygon
   const bbox = await getBbox(territory, onProgress);
+
+  // Always add the territory boundary as a layer
+  if (bbox.boundaryGeojson) {
+    onProgress(`🗺 Adding territory boundary: ${bbox.displayName}`);
+    layerMap['Territory Boundary'] = [{
+      type: 'Feature',
+      geometry: bbox.boundaryGeojson,
+      properties: { name: bbox.displayName, _layer: 'Territory Boundary', _type: 'boundary' },
+    }];
+  }
 
   // 2. Build + run Overpass query
   const query = buildQuery(layers, bbox);
@@ -140,48 +696,72 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress) {
   const geojson = osmtogeojson(osmData);
   onProgress(`  → ${geojson.features.length} features`);
 
-  // 4. Split into layers
-  const layerMap = {};
+  // 4. Split into layers — skip settlements and emerald (fetched from better sources)
   for (const f of geojson.features) {
     const layerName = classifyFeature(f.properties);
-    if (!layerName) continue;
+    if (!layerName || layerName === 'Emerald Network' || layerName === 'Settlements') continue;
     if (!layerMap[layerName]) layerMap[layerName] = [];
     f.properties._layer = layerName;
-    f.properties._type  = layerName === 'Settlements' ? 'settlement' : layerName.toLowerCase();
+    f.properties._type  = layerName.toLowerCase();
     layerMap[layerName].push(f);
   }
 
-  // 5. Add 700m buffer for settlements
-  if (layerMap['Settlements']) {
-    onProgress('📐 Creating 700m buffer zones for settlements…');
-    const buffers = [];
-    for (const f of layerMap['Settlements']) {
-      if (f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon')) {
-        try {
-          const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
-          if (buf) {
-            buf.properties = { ...f.properties, _type: 'buffer_700m', name: f.properties.name };
-            buffers.push(buf);
-          }
-        } catch (_) {}
-      }
-    }
-    if (buffers.length) {
-      if (!layerMap['Settlement Buffers']) layerMap['Settlement Buffers'] = [];
-      layerMap['Settlement Buffers'].push(...buffers);
-      onProgress(`  → ${buffers.length} buffer zones created`);
+  // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
+  if (layers.includes('settlements')) {
+    onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
+    try {
+      const { boundaries, pins, buffers } = await fetchSettlementsFromHumdata(territory, bbox, onProgress);
+      if (boundaries.length) layerMap['Settlements'] = boundaries;
+      if (pins.length)       layerMap['Settlement Pins'] = pins;
+      if (buffers.length)    layerMap['Settlement Buffers'] = buffers;
+    } catch (err) {
+      onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
     }
   }
 
-  // 6. Print summary
+  // 6. Fetch Emerald Network from EEA official source
+  if (layers.includes('emerald')) {
+    onProgress('🌿 Fetching Emerald Network from EEA (official data)…');
+    try {
+      const emeraldFeatures = await fetchEmeraldFromEEA(bbox, onProgress);
+      if (emeraldFeatures.length) {
+        layerMap['Emerald Network'] = emeraldFeatures;
+        onProgress(`  → ${emeraldFeatures.length} Emerald sites fetched from EEA`);
+      } else {
+        onProgress('  ⚠ No Emerald sites found in this area');
+      }
+    } catch (err) {
+      onProgress(`  ⚠ EEA fetch failed: ${err.message}`);
+    }
+  }
+
+  // 7. Fetch Wind Speed from NREL Sup3rWind Ukraine + GWA heatmap
+  const groundOverlays = [];
+  if (layers.includes('wind') && windOptions) {
+    try {
+      const windFeatures = await fetchWindData(bbox.boundaryGeojson, bbox, windOptions, onProgress);
+      if (windFeatures.length) layerMap['Wind Speed'] = windFeatures;
+    } catch (err) {
+      onProgress(`  ⚠ NREL wind fetch failed: ${err.message}`);
+    }
+    // Always try heatmap regardless of NREL result
+    try {
+      const tiles = await fetchWindHeatmap(bbox, windOptions.hubHeight, onProgress);
+      groundOverlays.push(...tiles);
+    } catch (err) {
+      onProgress(`  ⚠ Wind heatmap fetch failed: ${err.message}`);
+    }
+  }
+
+  // 8. Print summary
   for (const [name, features] of Object.entries(layerMap)) {
     onProgress(`  ${name}: ${features.length} features`);
   }
 
-  // 7. Save output
+  // 9. Save output
   if (format === 'kmz') {
     const { exportKMZ } = require('./kmz.js');
-    await exportKMZ(layerMap, outputPath, onProgress);
+    await exportKMZ(layerMap, outputPath, onProgress, groundOverlays);
   } else {
     const fc = {
       type: 'FeatureCollection',
