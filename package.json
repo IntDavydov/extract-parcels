@@ -32,7 +32,7 @@
       "gui.html",
       "src/**",
       "houses.png",
-      "node_modules/geotiff/**"
+      "node_modules/**"
     ]
   },
   "keywords": [],
