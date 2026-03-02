@@ -144,7 +144,7 @@ ipcMain.handle('fetch-osm', async (event, options) => {
 });
 
 // IPC: merge two KMZ files into one
-ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
+ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNames }) => {
   const JSZip  = require('jszip');
   const fs     = require('fs');
 
@@ -193,8 +193,11 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
 
     if (!parsedKmls.length) throw new Error('No valid KMZ files found to merge');
 
-    // Single-file case: just copy to outputPath
-    if (parsedKmls.length === 1 && allZips.length === 1) {
+    const escXmlAttr = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const useAreaFolders = areaNames && areaNames.length > 0;
+
+    // Single-file with no area wrapping: just copy
+    if (parsedKmls.length === 1 && allZips.length === 1 && !useAreaFolders) {
       fs.copyFileSync(paths.find(p => fs.existsSync(p)), outputPath);
       if (cleanup) {
         for (const p of paths) { try { if (p !== outputPath) fs.unlinkSync(p); } catch (_) {} }
@@ -208,7 +211,10 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
     const overlays   = [];
     const folders    = [];
 
-    for (const kml of parsedKmls) {
+    for (let kmzIdx = 0; kmzIdx < parsedKmls.length; kmzIdx++) {
+      const kml      = parsedKmls[kmzIdx];
+      const areaName = useAreaFolders ? areaNames[kmzIdx] : null;
+
       for (const s of [...extractElements(kml, 'Style'), ...extractElements(kml, 'StyleMap')]) {
         const id = (s.match(/\sid="([^"]+)"/) || [])[1];
         if (!id || !seenIds.has(id)) {
@@ -216,15 +222,28 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
           styles.push(s);
         }
       }
-      overlays.push(...extractElements(kml, 'GroundOverlay'));
-      for (const f of extractElements(kml, 'Folder')) {
-        const nameMatch = f.match(/<name>([^<]+)<\/name>/);
-        const fname = nameMatch ? nameMatch[1] : null;
-        if (fname) {
-          const idx = folders.findIndex(x => x.match(/<name>([^<]+)<\/name>/)?.[1] === fname);
-          if (idx >= 0) { folders[idx] = f; continue; }
+
+      if (areaName) {
+        // Wrap all this KMZ's content in a parent folder named after the area
+        const areaGroundOverlays = extractElements(kml, 'GroundOverlay');
+        const areaFolders        = extractElements(kml, 'Folder');
+        folders.push(
+          `<Folder><name>${escXmlAttr(areaName)}</name>` +
+          areaGroundOverlays.join('') +
+          areaFolders.join('') +
+          `</Folder>`
+        );
+      } else {
+        overlays.push(...extractElements(kml, 'GroundOverlay'));
+        for (const f of extractElements(kml, 'Folder')) {
+          const nameMatch = f.match(/<name>([^<]+)<\/name>/);
+          const fname = nameMatch ? nameMatch[1] : null;
+          if (fname) {
+            const idx = folders.findIndex(x => x.match(/<name>([^<]+)<\/name>/)?.[1] === fname);
+            if (idx >= 0) { folders[idx] = f; continue; }
+          }
+          folders.push(f);
         }
-        folders.push(f);
       }
     }
 
@@ -369,7 +388,7 @@ ipcMain.handle('open-folder-dialog', async () => {
 
 ipcMain.handle('open-kml-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
+    properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'KMZ / KML', extensions: ['kmz', 'kml'] }],
   });
   return result;

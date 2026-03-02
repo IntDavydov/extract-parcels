@@ -86,7 +86,19 @@ document.getElementById('layer-wind').addEventListener('change', (e) => {
   document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
 });
 
-document.getElementById('area-name').addEventListener('input', checkStartReady);
+document.getElementById('area-name').addEventListener('input', () => {
+  const isMulti = document.getElementById('area-name').value.includes('...');
+  const btnBoundary = document.getElementById('btn-pick-boundary');
+  btnBoundary.disabled = isMulti;
+  if (isMulti && boundaryFilterPath) {
+    boundaryFilterPath = '';
+    boundaryUrl = '';
+    boundaryBbox = null;
+    document.getElementById('boundary-display').textContent = 'not selected';
+    document.getElementById('btn-clear-boundary').style.display = 'none';
+  }
+  checkStartReady();
+});
 
 // Track every individual checkbox change
 document.querySelectorAll('input[name="layer"]').forEach(cb => {
@@ -117,7 +129,10 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog('⚠ Please select an output folder.'); return;
   }
 
-  const territory = document.getElementById('area-name').value.trim();
+  const rawInput  = document.getElementById('area-name').value.trim();
+  const areas     = rawInput.split('...').map(s => s.trim()).filter(Boolean);
+  const territory = areas[0] || '';
+  const isMulti   = areas.length > 1;
   const layers    = [...document.querySelectorAll('input[name="layer"]:checked')].map(cb => cb.value);
 
   // Without boundary: OSM-only mode — need area name + at least one layer
@@ -142,21 +157,75 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     apiKey:    'hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ',
     hubHeight: document.getElementById('wind-hub-height').value,
     year:      '2019',
+    email:     'successful0506@gmail.com',
   } : null;
-
-  if (windOptions && !windOptions.apiKey) {
-    appendLog('⚠ Please enter your NREL API key to fetch Wind Speed data.'); return;
-  }
 
   // ── Setup ──
   document.getElementById('main-log').textContent = '';
   setBusy(true);
   userStopped = false;
 
-  const safeFilename = sanitizeFilename(territory || 'land_plots');
+  const safeFilename = sanitizeFilename(isMulti ? 'Areas' : (territory || 'land_plots'));
+  const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
+
+  // ══════════════════════════════════════════════════════════
+  // MULTI-AREA MODE
+  // ══════════════════════════════════════════════════════════
+  if (isMulti) {
+    if (boundaryFilterPath) {
+      appendLog('ℹ Multi-area mode: Kadastr scraping skipped (boundary applies to single area only).');
+    }
+    if (!layers.length) {
+      appendLog('⚠ Please select at least one OSM layer for multi-area mode.'); setBusy(false); return;
+    }
+
+    const areaKmzPaths = [];
+    const areaNames    = [];
+
+    for (let i = 0; i < areas.length; i++) {
+      const area = areas[i];
+      appendLog(`\n━━━ Area ${i + 1}/${areas.length}: ${area} ━━━`);
+      const areaTempPath = `${outputFolder}/_area_temp_${i}.kmz`;
+
+      const osmResult = await window.api.fetchOSM({
+        territory: area,
+        layers,
+        outputPath: areaTempPath,
+        format: 'kmz',
+        windOptions,
+        fallbackBbox: null,
+      });
+
+      if (!osmResult.success) {
+        appendLog(`[ERROR] Failed for "${area}": ${osmResult.error}`);
+        continue;
+      }
+      areaKmzPaths.push(areaTempPath);
+      areaNames.push(area);
+    }
+
+    if (!areaKmzPaths.length) {
+      appendLog('❌ All areas failed.'); setBusy(false); return;
+    }
+
+    appendLog('\n📦 Merging all areas into one KMZ…');
+    const mergeResult = await window.api.mergeKmz(areaKmzPaths, finalOutput, true, areaNames);
+    if (mergeResult.success) {
+      appendLog(`\n✅ Done → ${finalOutput}`);
+      window.api.copyIcons(outputFolder);
+      window.api.showInFolder(finalOutput);
+    } else {
+      appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
+    }
+    setBusy(false);
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // SINGLE AREA MODE (existing flow)
+  // ══════════════════════════════════════════════════════════
   const kadastrTemp  = outputFolder + '/land_plots.kmz';
   const osmTemp      = outputFolder + '/_osm_temp.kmz';
-  const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
 
   let hasKadastr = false;
 

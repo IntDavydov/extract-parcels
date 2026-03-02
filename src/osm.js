@@ -568,7 +568,7 @@ function parseNrelCsv(csvText, attr) {
 }
 
 async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
-  const { apiKey, hubHeight, year } = windOptions;
+  const { apiKey, hubHeight, year, email } = windOptions;
   const attr = `windspeed_${hubHeight}m`;
   onProgress(`💨 Requesting NREL Sup3rWind data at ${hubHeight}m (year ${year})…`);
 
@@ -586,7 +586,7 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
       `wkt=${encodeURIComponent(attempt.wkt)}`,
       `attributes=${encodeURIComponent(attr)}`,
       `names=${year}`,
-      `email=wind.data.request%40gmail.com`,
+      `email=${encodeURIComponent(email)}`,
     ].join('&');
 
     const body = await httpPost(endpoint, postBody);
@@ -627,14 +627,14 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
   onProgress(`  → Downloading CSV from NREL…`);
   // NREL processes requests async — S3 file may not be ready immediately, poll with retries
   let rawBuf;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  for (let attempt = 1; attempt <= 20; attempt++) {
     rawBuf = await httpGetBuffer(downloadUrl);
     // Detect 404/XML error response (not a real ZIP or CSV)
     const preview = rawBuf.slice(0, 50).toString('utf8');
     if (preview.includes('<') && (preview.includes('404') || preview.includes('NoSuchKey') || preview.includes('Error'))) {
-      if (attempt === 5) throw new Error('NREL file not ready after 5 attempts — falling back to GWA');
-      onProgress(`  → File not ready yet, retrying in 10s (attempt ${attempt}/5)…`);
-      await new Promise(r => setTimeout(r, 10000));
+      if (attempt === 20) throw new Error('NREL file not ready after 20 attempts — falling back to GWA');
+      onProgress(`  → File not ready yet, retrying in 30s (attempt ${attempt}/20)…`);
+      await new Promise(r => setTimeout(r, 30000));
       continue;
     }
     break;
@@ -811,12 +811,19 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     onProgress('📡 Sending query to Overpass API…');
 
     let rawResponse;
-    try {
-      rawResponse = await httpPost('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query)}`);
-    } catch (_) {
-      // Try mirror
-      onProgress('  ⚠ Primary endpoint failed, trying mirror…');
-      rawResponse = await httpPost('https://overpass.kumi.systems/api/interpreter', `data=${encodeURIComponent(query)}`);
+    const overpassEndpoints = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    ];
+    for (const endpoint of overpassEndpoints) {
+      try {
+        rawResponse = await httpPost(endpoint, `data=${encodeURIComponent(query)}`);
+        if (rawResponse.trimStart().startsWith('{') || rawResponse.trimStart().startsWith('[')) break;
+        onProgress(`  ⚠ ${endpoint} returned non-JSON, trying next mirror…`);
+      } catch (_) {
+        onProgress(`  ⚠ ${endpoint} failed, trying next mirror…`);
+      }
     }
 
     let osmData;

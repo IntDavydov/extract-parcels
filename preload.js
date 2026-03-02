@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   fetchOSM: (options) =>
     ipcRenderer.invoke('fetch-osm', options),
 
-  mergeKmz: (paths, outputPath, cleanup = true) =>
-    ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup }),
+  mergeKmz: (paths, outputPath, cleanup = true, areaNames) =>
+    ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames }),
 
   saveDialog: (options) =>
     ipcRenderer.invoke('save-dialog', options),
