@@ -1,8 +1,9 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   startScraping: (url, outputPath, opts = {}) =>
     ipcRenderer.invoke('start-scraping', { url, outputPath, ...opts }),
 

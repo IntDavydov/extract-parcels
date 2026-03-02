@@ -30,6 +30,9 @@ function createWindow() {
   mainWindow.show();
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Prevent Electron from navigating when files are dropped on the window
+  mainWindow.webContents.on('will-navigate', (e) => e.preventDefault());
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

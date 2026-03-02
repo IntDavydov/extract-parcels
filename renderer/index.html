@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Land Management</title>
+  <title>Parcels</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
   <!-- ── Left: controls ───────────────────────────────── -->
   <div class="controls-col">
     <div class="card">
-      <h2>🗺 Land Management</h2>
+      <h2>🗺 Parcels</h2>
 
       <div class="field">
         <label for="area-name">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate multiple with <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">...</code></span></label>
@@ -21,11 +21,11 @@
       </div>
 
       <div class="field">
-        <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping)</span></label>
-        <div class="row" style="margin-top:4px;">
-          <button class="btn btn-secondary btn-sm" id="btn-pick-boundary">📎 Attach KMZ/KML</button>
-          <span class="path-display" id="boundary-display">not selected</span>
-          <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;">✕</button>
+        <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping; select multiple for batch)</span></label>
+        <div id="drop-zone" style="border:2px dashed #2a4a7f;border-radius:6px;padding:16px 12px;margin-top:4px;cursor:pointer;transition:border-color 0.15s,background 0.15s;text-align:center;min-height:72px;display:flex;flex-direction:column;justify-content:center;">
+          <div id="drop-hint" style="color:#666;font-size:12px;">📎 Click to attach or drop KMZ/KML files here</div>
+          <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;margin-top:6px;">✕ Clear all</button>
         </div>
       </div>
 
