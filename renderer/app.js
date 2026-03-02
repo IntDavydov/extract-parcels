@@ -237,6 +237,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const mergeResult = await window.api.mergeKmz([kadastrTemp, osmTemp], finalOutput, true);
       if (mergeResult.success) {
         appendLog(`\n✅ Done → ${finalOutput}`);
+        window.api.copyIcons(outputFolder);
         window.api.showInFolder(finalOutput);
       } else {
         appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
@@ -246,6 +247,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const renameResult = await window.api.mergeKmz([osmTemp], finalOutput, true);
       if (renameResult.success) {
         appendLog(`\n✅ Done → ${finalOutput}`);
+        window.api.copyIcons(outputFolder);
         window.api.showInFolder(finalOutput);
       } else {
         appendLog(`[ERROR] ${renameResult.error}`);
@@ -254,6 +256,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   } else {
     // Kadastr only, no OSM layers
     appendLog(`\n✅ Done → ${kadastrTemp}`);
+    window.api.copyIcons(outputFolder);
     window.api.showInFolder(kadastrTemp);
   }
 

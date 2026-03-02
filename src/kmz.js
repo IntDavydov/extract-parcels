@@ -6,7 +6,7 @@ const path  = require('path');
 
 // KML color format: aabbggrr (alpha, blue, green, red)
 const LAYER_STYLES = {
-  'Boundary Filter':    { poly: '00000000', line: 'ffffff55', width: 3 },
+  'Parcel Boundaries':  { poly: '00000000', line: 'ffffff55', width: 3 },
   'Territory Boundary': { poly: '00000000', line: 'ffffffff', width: 4 },
   'Land Parcels':       { poly: '00000000', line: 'ffffffff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
@@ -22,23 +22,15 @@ const LAYER_STYLES = {
   'Wind Speed':         { point: 'ff00d7ff' },
 };
 
-// Layers rendered first appear underneath — forests/emerald below settlements
-const LAYER_ORDER = [
-  'Boundary Filter',
-  'Wind Speed',
-  'Forests',
-  'Emerald Network',
-  'Water',
-  'Roads',
-  'Power Lines',
-  'Substations',
-  'Towers',
-  'Settlements',
-  'Settlement Buffers',
-  'Settlement Pins',
-  'Land Parcels',
-  'Territory Boundary',
+// Group definitions — layers are nested inside parent folders in the KMZ
+const LAYER_GROUPS = [
+  { folder: 'Parcels',     layers: ['Parcel Boundaries', 'Land Parcels'] },
+  { folder: 'Nature',      layers: ['Forests', 'Emerald Network', 'Water'] },
+  { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
+  { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
 ];
+// Layers not in any group render at root level in this order
+const ROOT_ORDER = ['Wind Speed', 'Territory Boundary', 'Roads'];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -58,7 +50,7 @@ function featureToKml(f, styleId) {
   const name = f.properties?.name || f.properties?.ref || '';
   const desc = Object.entries(f.properties || {})
     .filter(([k]) => !k.startsWith('_') && k !== 'name')
-    .map(([k, v]) => `${k}: ${v}`)
+    .map(([k, v]) => `${escXml(String(k))}: ${escXml(String(v))}`)
     .join('&#10;');
 
   let geomKml = '';
@@ -95,7 +87,7 @@ function featureToKml(f, styleId) {
 
   return `<Placemark>
   <name>${escXml(name)}</name>
-  <description>${escXml(desc)}</description>
+  <description>${desc}</description>
   <styleUrl>#${styleId}</styleUrl>
   ${geomKml}
 </Placemark>`;
@@ -130,21 +122,36 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const styles = buildStyles();
   const folders = [];
 
-  // Render in defined order so forests/emerald appear below settlements
-  const orderedKeys = [
-    ...LAYER_ORDER.filter(k => layerMap[k]),
-    ...Object.keys(layerMap).filter(k => !LAYER_ORDER.includes(k)),
-  ];
-
-  for (const layerName of orderedKeys) {
-    const features = layerMap[layerName];
+  function layerFolder(layerName) {
     const styleId = layerName.replace(/[^a-zA-Z0-9]/g, '_');
-    const placemarks = features.map(f => featureToKml(f, styleId)).filter(Boolean);
-    folders.push(`<Folder>
-  <name>${escXml(layerName)}</name>
-  ${placemarks.join('\n  ')}
-</Folder>`);
+    const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
     onProgress(`  ${layerName}: ${placemarks.length} placemarks`);
+    return `<Folder><name>${escXml(layerName)}</name>${placemarks.join('')}</Folder>`;
+  }
+
+  // Build grouped folders
+  const grouped = new Set();
+  for (const { folder, layers } of LAYER_GROUPS) {
+    const subFolders = [];
+    for (const layerName of layers) {
+      if (!layerMap[layerName]) continue;
+      grouped.add(layerName);
+      subFolders.push(layerFolder(layerName));
+    }
+    if (subFolders.length) {
+      folders.push(`<Folder><name>${escXml(folder)}</name>${subFolders.join('')}</Folder>`);
+    }
+  }
+
+  // Root-level layers (not in any group)
+  const allGrouped = LAYER_GROUPS.flatMap(g => g.layers);
+  const rootOrder = [
+    ...ROOT_ORDER.filter(k => layerMap[k] && !grouped.has(k)),
+    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k)),
+  ];
+  for (const layerName of rootOrder) {
+    if (!layerMap[layerName]) continue;
+    folders.push(layerFolder(layerName));
   }
 
   // Build GroundOverlay elements (wind heatmap etc.)
@@ -175,17 +182,23 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const zip = new JSZip();
   zip.file('doc.kml', kml);
 
-  // Bundle any icon files referenced in styles
+  // Bundle icon files into files/ so they're available for use in Google Earth
+  const isPackaged = __dirname.includes('app.asar');
+  const appRoot = isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : path.join(__dirname, '..');
+  const bundledIcons = ['houses.png', 'windmill.png'];
+  for (const icon of bundledIcons) {
+    const src = path.join(appRoot, icon);
+    if (fs.existsSync(src)) zip.file(`files/${icon}`, fs.readFileSync(src));
+  }
+  // Also bundle any additional icons referenced in layer styles
   for (const colors of Object.values(LAYER_STYLES)) {
     if (colors.icon) {
-      // In packaged app __dirname contains 'app.asar'; in dev it's the real src/ folder
-      const isPackaged = __dirname.includes('app.asar');
-      const appRoot = isPackaged
-        ? path.join(process.resourcesPath, 'app.asar.unpacked')
-        : path.join(__dirname, '..');
-      const iconSrc = path.join(appRoot, path.basename(colors.icon));
-      if (fs.existsSync(iconSrc)) {
-        zip.file(colors.icon, fs.readFileSync(iconSrc));
+      const iconName = path.basename(colors.icon);
+      if (!bundledIcons.includes(iconName)) {
+        const src = path.join(appRoot, iconName);
+        if (fs.existsSync(src)) zip.file(colors.icon, fs.readFileSync(src));
       }
     }
   }

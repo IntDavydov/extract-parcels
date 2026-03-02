@@ -337,7 +337,7 @@ function setupGracefulShutdown(browser) {
         console.log(`📦 Building KMZ → ${CONFIG.kmzPath}`);
         const { exportKMZ } = require(path.join(__dirname, 'src', 'kmz.js'));
         const layers = {};
-        if (boundary && boundary.features.length > 0) layers['Boundary Filter'] = boundary.features;
+        if (boundary && boundary.features.length > 0) layers['Parcel Boundaries'] = boundary.features;
         layers['Land Parcels'] = features;
         await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg));
         console.log(`💾 Saved → ${CONFIG.kmzPath}`);
@@ -377,3 +377,5 @@ async function showGui(page) {
     await page.goto(guiUrl, { timeout: 60000 });
   });
 }
+
+// TODO make cuncurent multiple processes of generating parcels and areas, add icons in google earth default pack of icons

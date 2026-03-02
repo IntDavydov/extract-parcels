@@ -148,18 +148,33 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
   const JSZip  = require('jszip');
   const fs     = require('fs');
 
-  // Find first occurrence of each top-level tag (handles non-nested KML elements)
+  // Find top-level occurrences of a tag, handling nesting correctly
   function extractElements(kml, tagName) {
     const results = [];
-    const open = new RegExp(`<${tagName}(?=\\s|>)`, 'g');
-    const close = `</${tagName}>`;
+    const openRe = new RegExp(`<${tagName}(?=\\s|>)`, 'g');
+    const closeTag = `</${tagName}>`;
     let m;
-    while ((m = open.exec(kml)) !== null) {
+    while ((m = openRe.exec(kml)) !== null) {
       const start = m.index;
-      const end = kml.indexOf(close, start);
-      if (end === -1) continue;
-      results.push(kml.slice(start, end + close.length));
-      open.lastIndex = end + close.length;
+      let depth = 1, pos = m.index + m[0].length;
+      while (depth > 0 && pos < kml.length) {
+        const nextOpen  = kml.indexOf(`<${tagName}`, pos);
+        const nextClose = kml.indexOf(closeTag, pos);
+        if (nextClose === -1) break;
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          // check it's actually <tagName> or <tagName  (not <tagNameFoo>)
+          const after = kml[nextOpen + tagName.length + 1];
+          if (after === '>' || after === ' ' || after === '\n' || after === '\r') depth++;
+          pos = nextOpen + tagName.length + 1;
+        } else {
+          depth--;
+          pos = nextClose + closeTag.length;
+        }
+      }
+      if (depth === 0) {
+        results.push(kml.slice(start, pos));
+        openRe.lastIndex = pos;
+      }
     }
     return results;
   }
@@ -354,6 +369,17 @@ ipcMain.handle('open-kml-dialog', async () => {
 
 ipcMain.handle('show-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('copy-icons', (_event, outputFolder) => {
+  const fs = require('fs');
+  const iconsDir = path.join(outputFolder, 'icons');
+  if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
+  const bundled = ['houses.png', 'windmill.png'];
+  for (const icon of bundled) {
+    const src = getUnpackedPath(icon);
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(iconsDir, icon));
+  }
 });
 
 ipcMain.handle('resolve-output-path', (_event, folder, baseName) => {

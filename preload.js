@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   showInFolder: (filePath) =>
     ipcRenderer.invoke('show-in-folder', filePath),
 
+  copyIcons: (outputFolder) =>
+    ipcRenderer.invoke('copy-icons', outputFolder),
+
   resolveOutputPath: (folder, baseName) =>
     ipcRenderer.invoke('resolve-output-path', folder, baseName),
 

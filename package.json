@@ -41,6 +41,7 @@
       "gui.html",
       "src/**",
       "houses.png",
+      "windmill.png",
       "node_modules/**"
     ]
   },
