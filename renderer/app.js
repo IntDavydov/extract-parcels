@@ -285,33 +285,29 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   }
 
   // ══════════════════════════════════════════════════════════
-  // MULTI-AREA MODE — OSM per area, output: Areas.kmz
+  // MULTI-AREA MODE — save each area as its own KMZ file
   // ══════════════════════════════════════════════════════════
   if (isMultiArea) {
-    const finalOutput = await window.api.resolveOutputPath(outputFolder, 'Areas');
     if (!layers.length) { appendLog('⚠ Select at least one OSM layer.'); setBusy(false); return; }
 
-    const areaKmzPaths = [], areaNames = [];
+    let successCount = 0;
     for (let i = 0; i < areas.length; i++) {
       const area = areas[i];
       appendLog(`\n━━━ Area ${i + 1}/${areas.length}: ${area} ━━━`);
-      const areaTempPath = `${outputFolder}/_area_temp_${i}.kmz`;
+      const areaFilename = sanitizeFilename(area);
+      const areaOutput   = await window.api.resolveOutputPath(outputFolder, areaFilename);
       const osmResult = await window.api.fetchOSM({
-        territory: area, layers, outputPath: areaTempPath,
+        territory: area, layers, outputPath: areaOutput,
         format: 'kmz', windOptions, fallbackBbox: null,
       });
       if (!osmResult.success) { appendLog(`[ERROR] Failed for "${area}": ${osmResult.error}`); continue; }
-      areaKmzPaths.push(areaTempPath);
-      areaNames.push(area);
+      appendLog(`✅ ${area} → ${areaOutput}`);
+      successCount++;
     }
-    if (!areaKmzPaths.length) { appendLog('❌ All areas failed.'); setBusy(false); return; }
-    appendLog('\n📦 Merging all areas…');
-    const mergeResult = await window.api.mergeKmz(areaKmzPaths, finalOutput, true, areaNames);
-    if (mergeResult.success) {
-      appendLog(`\n✅ Done → ${finalOutput}`);
-      window.api.copyIcons(outputFolder);
-      window.api.showInFolder(finalOutput);
-    } else { appendLog(`[ERROR] Merge failed: ${mergeResult.error}`); }
+    if (!successCount) { appendLog('❌ All areas failed.'); setBusy(false); return; }
+    appendLog(`\n✅ Done — ${successCount}/${areas.length} areas saved to ${outputFolder}`);
+    window.api.copyIcons(outputFolder);
+    window.api.showInFolder(outputFolder);
     setBusy(false);
     return;
   }

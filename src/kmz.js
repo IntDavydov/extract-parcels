@@ -19,13 +19,14 @@ const LAYER_STYLES = {
   'Water':              { poly: 'ccff6600', line: 'ccff6600' },
   'Forests':            { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
+  'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
   'Wind Speed':         { point: 'ff00d7ff' },
 };
 
 // Group definitions — layers are nested inside parent folders in the KMZ
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Parcel Boundaries', 'Land Parcels'] },
-  { folder: 'Nature',      layers: ['Forests', 'Emerald Network', 'Water'] },
+  { folder: 'Nature',      layers: ['Forests', 'Emerald Network', 'Emerald Buffer', 'Water'] },
   { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
 ];
@@ -136,6 +137,16 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
     for (const layerName of layers) {
       if (!layerMap[layerName]) continue;
       grouped.add(layerName);
+      // Nest Emerald Buffer inside the Emerald Network folder
+      if (layerName === 'Emerald Network' && layerMap['Emerald Buffer']) {
+        const emeraldFolder  = layerFolder(layerName);
+        const bufferFolder   = layerFolder('Emerald Buffer');
+        grouped.add('Emerald Buffer');
+        // Wrap both inside a parent "Emerald Network" folder
+        subFolders.push(`<Folder><name>${escXml('Emerald Network')}</name>${emeraldFolder}${bufferFolder}</Folder>`);
+        continue;
+      }
+      if (layerName === 'Emerald Buffer') continue; // already nested above
       subFolders.push(layerFolder(layerName));
     }
     if (subFolders.length) {
@@ -147,33 +158,37 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const allGrouped = LAYER_GROUPS.flatMap(g => g.layers);
   const rootOrder = [
     ...ROOT_ORDER.filter(k => layerMap[k] && !grouped.has(k)),
-    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k)),
+    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k)),
   ];
+  const addedRoot = new Set();
   for (const layerName of rootOrder) {
-    if (!layerMap[layerName]) continue;
+    if (!layerMap[layerName] || addedRoot.has(layerName)) continue;
+    addedRoot.add(layerName);
     folders.push(layerFolder(layerName));
   }
 
-  // Build GroundOverlay elements (wind heatmap etc.)
-  const overlayKml = groundOverlays.map((ov) => {
-    const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
-    return `<GroundOverlay>
-  <name>Wind Speed ${ov.hubHeight}m</name>
-  <altitudeMode>clampToSeaFloor</altitudeMode>
-  <Icon><href>${fname}</href></Icon>
-  <LatLonBox>
-    <north>${ov.north}</north><south>${ov.south}</south>
-    <east>${ov.east}</east><west>${ov.west}</west>
-  </LatLonBox>
-</GroundOverlay>`;
-  }).join('\n');
+  // Merge Wind Speed points + GroundOverlays into one folder
+  if (groundOverlays.length) {
+    const hubHeight = groundOverlays[0].hubHeight || '';
+    const overlayKmlItems = groundOverlays.map((ov) => {
+      const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
+      return `<GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>`;
+    });
+    // Find existing Wind Speed points folder and wrap together, or create folder with overlays only
+    const wsIdx = folders.findIndex(f => f.startsWith('<Folder><name>Wind Speed</name>'));
+    if (wsIdx >= 0) {
+      // Insert overlays inside the existing Wind Speed folder (before closing tag)
+      folders[wsIdx] = folders[wsIdx].replace('</Folder>', overlayKmlItems.join('') + '</Folder>');
+    } else {
+      folders.push(`<Folder><name>Wind Speed</name>${overlayKmlItems.join('')}</Folder>`);
+    }
+  }
 
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
   <name>Land Management Data</name>
   ${styles}
-  ${overlayKml}
   ${folders.join('\n  ')}
 </Document>
 </kml>`;

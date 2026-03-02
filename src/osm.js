@@ -512,6 +512,39 @@ function bboxToWkt(bbox) {
   return `POLYGON((${west} ${south},${east} ${south},${east} ${north},${west} ${north},${west} ${south}))`;
 }
 
+// Approximate polygon buffer in km — offsets each ring point outward by ~distKm
+// Uses flat-earth approximation (fine for small distances up to a few km)
+function bufferPolygonFeature(feature, distKm) {
+  const DEG_PER_KM_LAT = 1 / 110.574;
+  function bufferRing(ring, outward) {
+    const n = ring.length;
+    return ring.map((pt, i) => {
+      const prev = ring[(i - 1 + n) % n];
+      const next = ring[(i + 1) % n];
+      // Average of the two edge normals
+      const dx1 = pt[0] - prev[0], dy1 = pt[1] - prev[1];
+      const dx2 = next[0] - pt[0],  dy2 = next[1] - pt[1];
+      const nx = -(dy1 + dy2), ny = dx1 + dx2;
+      const len = Math.sqrt(nx * nx + ny * ny) || 1;
+      const latScale = Math.cos(pt[1] * Math.PI / 180) || 0.001;
+      const dLat = (ny / len) * distKm * DEG_PER_KM_LAT * outward;
+      const dLng = (nx / len) * distKm * DEG_PER_KM_LAT / latScale * outward;
+      return [pt[0] + dLng, pt[1] + dLat];
+    });
+  }
+  function bufferGeom(geom) {
+    if (geom.type === 'Polygon') {
+      return { type: 'Polygon', coordinates: geom.coordinates.map((ring, i) => bufferRing(ring, i === 0 ? 1 : -1)) };
+    }
+    if (geom.type === 'MultiPolygon') {
+      return { type: 'MultiPolygon', coordinates: geom.coordinates.map(poly =>
+        poly.map((ring, i) => bufferRing(ring, i === 0 ? 1 : -1))) };
+    }
+    return geom;
+  }
+  return { ...feature, geometry: bufferGeom(feature.geometry) };
+}
+
 // Parse NREL Sup3rWind CSV format:
 // Row 1: "SiteID,12345,...,Longitude,30.75,Latitude,51.07" (inline key-value pairs)
 // Row 2: "Year,Month,Day,Hour,Minute,wind speed at 100m (m/s)"
@@ -872,6 +905,14 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       const emeraldFeatures = await fetchEmeraldFromEEA(bbox, onProgress);
       if (emeraldFeatures.length) {
         layerMap['Emerald Network'] = emeraldFeatures;
+        layerMap['Emerald Buffer'] = emeraldFeatures
+          .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+          .map(f => {
+            try {
+              const buf = turfBuffer(f, 1, { units: 'kilometers' });
+              return buf ? { ...buf, properties: { ...f.properties, _layer: 'Emerald Buffer' } } : null;
+            } catch (_) { return null; }
+          }).filter(Boolean);
         onProgress(`  → ${emeraldFeatures.length} Emerald sites fetched from EEA`);
       } else {
         onProgress('  ⚠ No Emerald sites found in this area');
