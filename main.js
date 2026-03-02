@@ -217,7 +217,15 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup }) => {
         }
       }
       overlays.push(...extractElements(kml, 'GroundOverlay'));
-      folders.push(...extractElements(kml, 'Folder'));
+      for (const f of extractElements(kml, 'Folder')) {
+        const nameMatch = f.match(/<name>([^<]+)<\/name>/);
+        const fname = nameMatch ? nameMatch[1] : null;
+        if (fname) {
+          const idx = folders.findIndex(x => x.match(/<name>([^<]+)<\/name>/)?.[1] === fname);
+          if (idx >= 0) { folders[idx] = f; continue; }
+        }
+        folders.push(f);
+      }
     }
 
     const combinedKml =

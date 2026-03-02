@@ -7,7 +7,7 @@ const path  = require('path');
 // KML color format: aabbggrr (alpha, blue, green, red)
 const LAYER_STYLES = {
   'Parcel Boundaries':  { poly: '00000000', line: 'ffffff55', width: 3 },
-  'Territory Boundary': { poly: '00000000', line: 'ffffffff', width: 4 },
+  'Territory Boundary': { line: 'ffffffff', width: 4 },
   'Land Parcels':       { poly: '00000000', line: 'ffffffff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
   'Towers':             { point: 'ff00ffff' },

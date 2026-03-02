@@ -11,7 +11,7 @@
   user-select: none;
 }
 
-input, textarea, select {
+input, textarea, select, .log-area {
   user-select: text;
 }
 

@@ -586,7 +586,7 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
       `wkt=${encodeURIComponent(attempt.wkt)}`,
       `attributes=${encodeURIComponent(attr)}`,
       `names=${year}`,
-      `email=land-management-app%40local.invalid`,
+      `email=wind.data.request%40gmail.com`,
     ].join('&');
 
     const body = await httpPost(endpoint, postBody);
@@ -784,12 +784,22 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   // 1. Resolve bbox + boundary polygon
   const bbox = await getBbox(territory, onProgress, fallbackBbox);
 
-  // Always add the territory boundary as a layer
+  // Always add the territory boundary as a layer — as lines only so it never blocks clicks
   if (bbox.boundaryGeojson) {
     onProgress(`🗺 Adding territory boundary: ${bbox.displayName}`);
+    const g = bbox.boundaryGeojson;
+    // Convert polygon rings → MultiLineString so Google Earth renders outline only (no fill intercepts clicks)
+    let lineGeom = null;
+    if (g.type === 'Polygon') {
+      lineGeom = { type: 'MultiLineString', coordinates: g.coordinates };
+    } else if (g.type === 'MultiPolygon') {
+      lineGeom = { type: 'MultiLineString', coordinates: g.coordinates.flat() };
+    } else {
+      lineGeom = g;
+    }
     layerMap['Territory Boundary'] = [{
       type: 'Feature',
-      geometry: bbox.boundaryGeojson,
+      geometry: lineGeom,
       properties: { name: bbox.displayName, _layer: 'Territory Boundary', _type: 'boundary' },
     }];
   }
