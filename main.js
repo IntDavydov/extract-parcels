@@ -468,42 +468,21 @@ ipcMain.handle('create-boundary-kmz', async (_event, { geojson, outputPath }) =>
   }
 });
 
-ipcMain.handle('copy-icons', async (_event, outputFolder) => {
-  const fs   = require('fs');
-  const JSZip = require('jszip');
+ipcMain.handle('copy-icons', (_event, outputFolder) => {
+  const fs = require('fs');
   const iconsDir = path.join(outputFolder, 'icons');
   if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
   const bundled = ['houses.png', 'windmill.png'];
-
-  // Primary: copy from unpacked app resources
-  const missing = [];
   for (const icon of bundled) {
-    const src = getUnpackedPath(icon);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, path.join(iconsDir, icon));
-    } else {
-      missing.push(icon);
-    }
-  }
-
-  // Fallback: extract missing icons from the KMZ file itself (they're bundled inside)
-  if (missing.length) {
-    const kmzFiles = fs.readdirSync(outputFolder)
-      .filter(f => f.endsWith('.kmz') && !f.startsWith('_'))
-      .map(f => path.join(outputFolder, f));
-    for (const kmzPath of kmzFiles) {
-      if (!missing.length) break;
-      try {
-        const zip = await JSZip.loadAsync(fs.readFileSync(kmzPath));
-        for (let i = missing.length - 1; i >= 0; i--) {
-          const entry = zip.file(`files/${missing[i]}`);
-          if (entry) {
-            fs.writeFileSync(path.join(iconsDir, missing[i]), await entry.async('nodebuffer'));
-            missing.splice(i, 1);
-          }
-        }
-      } catch (_) {}
-    }
+    const dest = path.join(iconsDir, icon);
+    // Try 1: from app.asar.unpacked (normal packaged path)
+    const unpacked = getUnpackedPath(icon);
+    if (fs.existsSync(unpacked)) { fs.copyFileSync(unpacked, dest); continue; }
+    // Try 2: read from inside the asar — Electron patches fs.readFileSync to support this
+    try {
+      const buf = fs.readFileSync(path.join(app.getAppPath(), icon));
+      fs.writeFileSync(dest, buf);
+    } catch (_) {}
   }
 });
 
