@@ -153,8 +153,33 @@ document.getElementById('layer-wind').addEventListener('change', (e) => {
   document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
 });
 
+function applyFullParcelsMode(enabled) {
+  const dropZone   = document.getElementById('drop-zone');
+  const areaInput  = document.getElementById('area-name');
+  dropZone.style.pointerEvents = enabled ? 'none' : '';
+  dropZone.style.opacity       = enabled ? '0.4' : '';
+  document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = enabled; if (enabled) cb.checked = false; });
+  document.getElementById('btn-select-all').disabled = enabled;
+  document.getElementById('btn-clear-all').disabled  = enabled;
+  if (enabled) document.getElementById('wind-settings').style.display = 'none';
+  if (enabled && boundaryFiles.length) { boundaryFiles = []; renderBoundaryList(); }
+  // Disable ... multi-area when in full-parcels mode
+  if (enabled) {
+    const val = areaInput.value;
+    const dotIdx = val.indexOf('...');
+    if (dotIdx >= 0) areaInput.value = val.slice(0, dotIdx).trim();
+  }
+  checkStartReady();
+}
+
+document.getElementById('chk-full-parcels').addEventListener('change', (e) => {
+  applyFullParcelsMode(e.target.checked);
+});
+
 document.getElementById('area-name').addEventListener('input', () => {
-  const isMulti = document.getElementById('area-name').value.includes('...');
+  const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  const val = document.getElementById('area-name').value;
+  const isMulti = !isFullParcels && val.includes('...');
   document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
   document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
   if (isMulti && boundaryFiles.length) {
@@ -179,9 +204,13 @@ function hasAnything() {
 function checkStartReady() {
   const territory    = document.getElementById('area-name').value.trim();
   const isMultiKmz   = boundaryFiles.length > 1;
-  // Multi-KMZ mode: only need output folder + files
-  // Single/no boundary: need territory + something to do
-  const ready = !!outputFolder && (isMultiKmz || (!!territory && hasAnything()));
+  const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  // Full-parcels mode: just need output folder + territory name
+  const ready = !!outputFolder && (
+    isMultiKmz ? true :
+    isFullParcels ? !!territory :
+    (!!territory && hasAnything())
+  );
   document.getElementById('btn-start').disabled = !ready;
 }
 
@@ -193,15 +222,18 @@ function setBusy(busy) {
 document.getElementById('btn-start').addEventListener('click', async () => {
   if (!outputFolder) { appendLog('⚠ Please select an output folder.'); return; }
 
-  const rawInput   = document.getElementById('area-name').value.trim();
-  const areas      = rawInput.split('...').map(s => s.trim()).filter(Boolean);
-  const territory  = areas[0] || '';
-  const isMultiArea = areas.length > 1;
-  const isMultiKmz  = boundaryFiles.length > 1;
-  const layers     = [...document.querySelectorAll('input[name="layer"]:checked')].map(cb => cb.value);
+  const rawInput      = document.getElementById('area-name').value.trim();
+  const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  const areas         = rawInput.split('...').map(s => s.trim()).filter(Boolean);
+  const territory     = areas[0] || '';
+  const isMultiArea   = !isFullParcels && areas.length > 1;
+  const isMultiKmz    = boundaryFiles.length > 1;
+  const layers        = [...document.querySelectorAll('input[name="layer"]:checked')].map(cb => cb.value);
 
   // ── Validate ──
-  if (isMultiKmz) {
+  if (isFullParcels) {
+    if (!territory) { appendLog('⚠ Please enter an area name.'); return; }
+  } else if (isMultiKmz) {
     // Multi-KMZ mode: no other requirements
   } else if (!boundaryFiles.length) {
     if (!territory) { appendLog('⚠ Please enter an area name.'); return; }
@@ -242,6 +274,78 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       }
     }
     return tilesGot;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // FULL-AREA PARCELS MODE — auto-grid the territory bbox
+  // ══════════════════════════════════════════════════════════
+  if (isFullParcels) {
+    appendLog(`🗺 Resolving bbox for "${territory}"…`);
+    const bboxResult = await window.api.resolveBbox(territory);
+    if (!bboxResult.success) {
+      appendLog(`❌ Could not resolve area: ${bboxResult.error}`);
+      setBusy(false); return;
+    }
+    const { bbox, boundaryGeojson } = bboxResult;
+    appendLog(`📐 Bbox: ${bbox.south.toFixed(4)},${bbox.west.toFixed(4)} → ${bbox.north.toFixed(4)},${bbox.east.toFixed(4)}`);
+
+    // Create a temp boundary KMZ (used by scraper to filter parcels)
+    const tempBoundaryPath = `${outputFolder}/_full_area_boundary.kmz`;
+    const bkmzResult = await window.api.createBoundaryKmz(boundaryGeojson, tempBoundaryPath);
+    if (!bkmzResult.success) {
+      appendLog(`❌ Could not create boundary KMZ: ${bkmzResult.error}`);
+      setBusy(false); return;
+    }
+
+    // Grid: zoom-14 viewport ≈ 0.08°×0.06°, step with ~25% overlap
+    const stepLon = 0.060, stepLat = 0.050;
+    const cells = [];
+    for (let lat = bbox.south + stepLat / 2; lat < bbox.north; lat += stepLat)
+      for (let lng = bbox.west + stepLon / 2; lng < bbox.east; lng += stepLon)
+        cells.push({ lat: +lat.toFixed(5), lng: +lng.toFixed(5) });
+
+    appendLog(`🔲 Grid: ${cells.length} cells — launching single scraper session…`);
+
+    // Run ONE scraper that pans through all cells internally
+    let tilesGot = 0;
+    for (let round = 1; round <= 2 && tilesGot === 0; round++) {
+      if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (!proxyCache) {
+          appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
+          proxyCache = await window.api.findProxy([...usedProxies]);
+          if (proxyCache) usedProxies.add(proxyCache);
+        }
+        const res = await window.api.startScraping(cells[0] ? `https://kadastr.live/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
+          headless: true,
+          boundaryFilter: tempBoundaryPath,
+          proxy: proxyCache || '',
+          gridCells: cells,
+        });
+        appendLog(`Scraper exited (code ${res.code})`);
+        tilesGot = res.tiles || 0;
+        if (tilesGot > 0) break;
+        if (attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
+      }
+    }
+
+    if (tilesGot === 0) {
+      appendLog('❌ No parcels found in area.');
+      setBusy(false); return;
+    }
+
+    const finalOutput = await window.api.resolveOutputPath(outputFolder, sanitizeFilename(territory));
+    const scraperOut  = `${outputFolder}/land_plots.kmz`;
+    const mergeResult = await window.api.mergeKmz([scraperOut], finalOutput, true);
+    if (mergeResult.success) {
+      appendLog(`\n✅ Done → ${finalOutput}`);
+      window.api.copyIcons(outputFolder);
+      window.api.showInFolder(finalOutput);
+    } else {
+      appendLog(`[ERROR] Rename failed: ${mergeResult.error}`);
+    }
+    setBusy(false);
+    return;
   }
 
   // ══════════════════════════════════════════════════════════

@@ -53,7 +53,7 @@ app.on('window-all-closed', () => {
 });
 
 // IPC: start kadastr scraping
-ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFilter, proxy }) => {
+ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -71,6 +71,7 @@ ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFi
   if (headless)        env.HEADLESS = '1';
   if (boundaryFilter)  env.BOUNDARY_FILTER = boundaryFilter;
   if (proxy)           env.KADASTR_PROXY = proxy;
+  if (gridCells && gridCells.length) env.GRID_CELLS = JSON.stringify(gridCells);
 
   const kmzPath = outputPath
     ? path.join(outputPath, 'land_plots.kmz')
@@ -400,6 +401,71 @@ ipcMain.handle('open-kml-dialog', async () => {
 
 ipcMain.handle('show-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('resolve-bbox', async (_event, territory) => {
+  try {
+    const { fetchOSM, getBboxExport } = require(getUnpackedPath('src', 'osm.js'));
+    // We need to call getBbox — it's not exported, so we use a wrapper approach via fetch-osm
+    // Instead, do a direct Nominatim call here
+    const https = require('https');
+    function httpGet(url) {
+      return new Promise((resolve, reject) => {
+        https.get(url, { headers: { 'User-Agent': 'land-management-app/1.0' } }, (res) => {
+          let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
+        }).on('error', reject);
+      });
+    }
+    // Try Nominatim for the territory
+    const attempts = [territory, territory.replace(/\s+громада$/i, '').trim()];
+    for (const q of [...new Set(attempts)]) {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=ua&polygon_geojson=1`;
+      const raw = await httpGet(url);
+      const results = JSON.parse(raw);
+      if (results.length) {
+        const r = results[0];
+        const [south, north, west, east] = r.boundingbox.map(Number);
+        return { success: true, bbox: { south, north, west, east }, boundaryGeojson: r.geojson || null, displayName: r.display_name };
+      }
+    }
+    return { success: false, error: `Territory "${territory}" not found` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('create-boundary-kmz', async (_event, { geojson, outputPath }) => {
+  try {
+    const JSZip = require('jszip');
+    const fs    = require('fs');
+    // Build a minimal KML from the geojson boundary
+    function coordsToKmlStr(coords) {
+      return coords.map(c => `${c[0]},${c[1]},0`).join(' ');
+    }
+    function ringToKml(ring, isOuter) {
+      const tag = isOuter ? 'outerBoundaryIs' : 'innerBoundaryIs';
+      return `<${tag}><LinearRing><coordinates>${coordsToKmlStr(ring)}</coordinates></LinearRing></${tag}>`;
+    }
+    function geomToKml(g) {
+      if (g.type === 'Polygon') {
+        return `<Polygon>${g.coordinates.map((r,i) => ringToKml(r, i===0)).join('')}</Polygon>`;
+      }
+      if (g.type === 'MultiPolygon') {
+        return `<MultiGeometry>${g.coordinates.map(poly =>
+          `<Polygon>${poly.map((r,i) => ringToKml(r, i===0)).join('')}</Polygon>`).join('')}</MultiGeometry>`;
+      }
+      return '';
+    }
+    const geomKml = geomToKml(geojson);
+    const kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>Boundary</name>${geomKml}</Placemark></Document></kml>`;
+    const zip = new JSZip();
+    zip.file('doc.kml', kml);
+    const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(outputPath, buf);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('copy-icons', (_event, outputFolder) => {

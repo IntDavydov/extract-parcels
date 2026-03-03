@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('api', {
   copyIcons: (outputFolder) =>
     ipcRenderer.invoke('copy-icons', outputFolder),
 
+  resolveBbox: (territory) =>
+    ipcRenderer.invoke('resolve-bbox', territory),
+
+  createBoundaryKmz: (geojson, outputPath) =>
+    ipcRenderer.invoke('create-boundary-kmz', { geojson, outputPath }),
+
   resolveOutputPath: (folder, baseName) =>
     ipcRenderer.invoke('resolve-output-path', folder, baseName),
 

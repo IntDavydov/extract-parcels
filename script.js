@@ -129,6 +129,21 @@ async function waitForTilesToSettle(quietMs = 4000) {
   });
 }
 
+// Wait until at least one NEW tile arrives beyond `prevCount`, or timeout
+async function waitForNewTiles(prevCount, maxWaitMs = 8000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const poll = () => {
+      if (state.processedTiles.size > prevCount || Date.now() - start >= maxWaitMs) {
+        resolve();
+      } else {
+        setTimeout(poll, 300);
+      }
+    };
+    setTimeout(poll, 300);
+  });
+}
+
 // Wait for the first tile to arrive (or timeout), then settle
 async function waitForFirstTile(maxWaitMs = 30000) {
   if (state.processedTiles.size > 0) return;
@@ -196,15 +211,45 @@ const state = {
 
     if (isHeadless) {
       // ── Headless mode: load URL, wait for visible tiles, auto-save ──
-      console.log(`🤖 Headless mode — loading ${startUrl}`);
-      if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
-      await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
-      console.log("  → Page loaded, waiting for tiles to start…");
-      await waitForFirstTile(30000);
-      if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
-      console.log("  → Tiles arriving, waiting to settle…");
-      await waitForTilesToSettle(CONFIG.proxy ? 8000 : 4000);
-      console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
+      const gridCells = process.env.GRID_CELLS ? JSON.parse(process.env.GRID_CELLS) : null;
+
+      if (gridCells && gridCells.length > 0) {
+        // ── Full-area sweep: one browser session, pan via hash changes ──
+        const { lat: lat0, lng: lng0 } = gridCells[0];
+        const firstUrl = `https://kadastr.live/#14/${lat0}/${lng0}`;
+        console.log(`🌍 Full-area sweep: ${gridCells.length} cells`);
+        if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
+        await page.goto(firstUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
+        console.log(`  [1/${gridCells.length}] Waiting for first tile…`);
+        await waitForFirstTile(30000);
+        if (state.processedTiles.size === 0) console.log('  ⚠ No tiles from first cell.');
+        await waitForTilesToSettle(3000);
+        console.log(`  [1/${gridCells.length}] Tiles: ${state.processedTiles.size}`);
+
+        for (let i = 1; i < gridCells.length; i++) {
+          const { lat, lng } = gridCells[i];
+          const prevCount = state.processedTiles.size;
+          // Pan the map by updating the URL hash (no full page reload)
+          await page.evaluate((lt, ln) => { window.location.hash = `#14/${lt}/${ln}`; }, lat, lng);
+          await waitForNewTiles(prevCount, 8000);
+          await waitForTilesToSettle(2500);
+          console.log(`  [${i + 1}/${gridCells.length}] +${state.processedTiles.size - prevCount} tiles (total: ${state.processedTiles.size}, parcels: ${parcelFragments.size})`);
+        }
+
+        console.log(`  → All cells done. ${parcelFragments.size} parcels captured.`);
+      } else {
+        // ── Single-URL headless mode ──
+        console.log(`🤖 Headless mode — loading ${startUrl}`);
+        if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
+        await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
+        console.log("  → Page loaded, waiting for tiles to start…");
+        await waitForFirstTile(30000);
+        if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
+        console.log("  → Tiles arriving, waiting to settle…");
+        await waitForTilesToSettle(CONFIG.proxy ? 8000 : 4000);
+        console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
+      }
+
       clearInterval(statsInterval);
       process.emit("SIGINT");
     } else {
