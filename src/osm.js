@@ -165,13 +165,39 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
   const admin3 = JSON.parse(admin3Raw.toString('utf8'));
 
-  const searchName = territory.toLowerCase();
+  const searchName = territory.toLowerCase().replace(/\s+громада$/i, '').trim();
   let matchedPcode = null;
   let matchedFeature = null;
+
+  // Helper: get centroid of a feature geometry
+  function featureCentroid(f) {
+    if (!f.geometry) return null;
+    const coords = f.geometry.type === 'Polygon'
+      ? f.geometry.coordinates[0]
+      : f.geometry.type === 'MultiPolygon'
+        ? f.geometry.coordinates[0][0]
+        : null;
+    if (!coords || !coords.length) return null;
+    let sumLon = 0, sumLat = 0;
+    for (const [lon, lat] of coords) { sumLon += lon; sumLat += lat; }
+    return [sumLon / coords.length, sumLat / coords.length];
+  }
+
+  function inBbox(centroid) {
+    if (!centroid) return false;
+    const [lon, lat] = centroid;
+    return lon >= bbox.west && lon <= bbox.east && lat >= bbox.south && lat <= bbox.north;
+  }
+
   for (const f of admin3.features) {
     const p = f.properties;
     const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(n => n.toLowerCase());
-    if (names.some(n => n.includes(searchName) || searchName.includes(n.split(' ')[0]))) {
+    // Require the core name token to match AND centroid to be inside the Nominatim bbox
+    const nameHit = names.some(n => {
+      const core = n.replace(/\s+громада$/i, '').trim();
+      return core === searchName || core.includes(searchName) || searchName.includes(core);
+    });
+    if (nameHit && inBbox(featureCentroid(f))) {
       matchedPcode = p.adm3_pcode;
       matchedFeature = f;
       onProgress(`  ✅ Matched hromada: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);

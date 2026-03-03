@@ -33,14 +33,18 @@ function renderBoundaryList() {
     list.textContent = '';
     btn.style.display = 'none';
     hint.style.display = '';
+    document.getElementById('area-name').disabled = false;
   } else {
     list.textContent = boundaryFiles.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
     btn.style.display = '';
     hint.style.display = 'none';
   }
   // When multiple KMZ: disable area name + OSM layers
-  const isMultiKmz = boundaryFiles.length > 1;
-  document.getElementById('area-name').disabled = isMultiKmz;
+  // When exactly one KMZ: disable + clear area name (not needed — folder named by coords)
+  const isMultiKmz  = boundaryFiles.length > 1;
+  const areaInput   = document.getElementById('area-name');
+  areaInput.disabled = isMultiKmz;
+  if (isMultiKmz) areaInput.value = '';
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = isMultiKmz; });
   document.getElementById('btn-select-all').disabled = isMultiKmz;
   document.getElementById('btn-clear-all').disabled  = isMultiKmz;
@@ -202,12 +206,13 @@ function hasAnything() {
 }
 
 function checkStartReady() {
-  const territory    = document.getElementById('area-name').value.trim();
+  const territory     = document.getElementById('area-name').value.trim();
   const isMultiKmz   = boundaryFiles.length > 1;
+  const isSingleKmz  = boundaryFiles.length === 1;
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
-  // Full-parcels mode: just need output folder + territory name
   const ready = !!outputFolder && (
-    isMultiKmz ? true :
+    isMultiKmz  ? true :
+    isSingleKmz ? true :
     isFullParcels ? !!territory :
     (!!territory && hasAnything())
   );

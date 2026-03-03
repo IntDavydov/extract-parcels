@@ -256,7 +256,7 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
 `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>Land Management</name>
+  <name>Kadastr</name>
   ${styles.join('\n  ')}
   ${overlays.join('\n  ')}
   ${folders.join('\n  ')}

@@ -25,7 +25,7 @@ const LAYER_STYLES = {
 
 // Group definitions — layers are nested inside parent folders in the KMZ
 const LAYER_GROUPS = [
-  { folder: 'Parcels',     layers: ['Parcel Boundaries', 'Land Parcels'] },
+  { folder: 'Parcels',     layers: ['Land Parcels'] },
   { folder: 'Nature',      layers: ['Forests', 'Emerald Network', 'Emerald Buffer', 'Water'] },
   { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
@@ -124,7 +124,10 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const folders = [];
 
   function layerFolder(layerName) {
-    const styleId = layerName.replace(/[^a-zA-Z0-9]/g, '_');
+    // For dynamically-named parcel layers (coords-based), fall back to Land Parcels style
+    const styleId = LAYER_STYLES[layerName]
+      ? layerName.replace(/[^a-zA-Z0-9]/g, '_')
+      : 'Land_Parcels';
     const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
     onProgress(`  ${layerName}: ${placemarks.length} placemarks`);
     return `<Folder><name>${escXml(layerName)}</name>${placemarks.join('')}</Folder>`;
@@ -164,6 +167,15 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   for (const layerName of rootOrder) {
     if (!layerMap[layerName] || addedRoot.has(layerName)) continue;
     addedRoot.add(layerName);
+    // Coords-named parcel layer: nest Parcel Boundaries inside it (if present)
+    if (!LAYER_STYLES[layerName] && layerMap['Parcel Boundaries'] && !addedRoot.has('Parcel Boundaries')) {
+      addedRoot.add('Parcel Boundaries');
+      const styleId    = 'Land_Parcels';
+      const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
+      const boundaryFolder = layerFolder('Parcel Boundaries');
+      folders.push(`<Folder><name>${escXml(layerName)}</name>${boundaryFolder}${placemarks.join('')}</Folder>`);
+      continue;
+    }
     folders.push(layerFolder(layerName));
   }
 
@@ -187,7 +199,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>Land Management Data</name>
+  <name>Parcels</name>
   ${styles}
   ${folders.join('\n  ')}
 </Document>

@@ -381,9 +381,12 @@ function setupGracefulShutdown(browser) {
       if (features.length > 0) {
         console.log(`📦 Building KMZ → ${CONFIG.kmzPath}`);
         const { exportKMZ } = require(path.join(__dirname, 'src', 'kmz.js'));
+        // Name the parcel folder after the kadastr URL coords (e.g. "14/50.74/31.09")
+        const urlHash = CONFIG.startUrl.includes('#') ? CONFIG.startUrl.split('#')[1] : null;
+        const parcelFolderName = urlHash || 'Land Parcels';
         const layers = {};
         if (boundary && boundary.features.length > 0) layers['Parcel Boundaries'] = boundary.features;
-        layers['Land Parcels'] = features;
+        layers[parcelFolderName] = features;
         await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg));
         console.log(`💾 Saved → ${CONFIG.kmzPath}`);
       } else {
