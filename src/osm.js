@@ -437,6 +437,218 @@ function classifyFeature(props) {
   return null;
 }
 
+// ── PZF Ukraine: fetch Nature Reserves from pzf.land.kiev.ua ─
+// Downloads KMZ files per category and oblast, parses KML, filters by bbox.
+
+const PZF_BASE = 'https://pzf.land.kiev.ua/object/obj';
+
+// All 17 PZF categories with their numeric IDs
+const PZF_CATEGORIES = [
+  { id: 1,  name: 'Природні заповідники' },
+  { id: 2,  name: 'Біосферні заповідники' },
+  { id: 3,  name: 'Національні природні парки' },
+  { id: 4,  name: 'Регіональні ландшафтні парки' },
+  { id: 5,  name: 'Заповідні урочища' },
+  { id: 6,  name: 'Заказники загальнодержавного значення' },
+  { id: 12, name: 'Заказники місцевого значення' },
+  { id: 7,  name: 'Пам\'ятки природи загальнодержавного значення' },
+  { id: 13, name: 'Пам\'ятки природи місцевого значення' },
+  { id: 11, name: 'Ботанічні сади загальнодержавного значення' },
+  { id: 17, name: 'Ботанічні сади місцевого значення' },
+  { id: 9,  name: 'Дендрологічні парки загальнодержавного значення' },
+  { id: 15, name: 'Дендрологічні парки місцевого значення' },
+  { id: 10, name: 'Зоологічні парки загальнодержавного значення' },
+  { id: 16, name: 'Зоологічні парки місцевого значення' },
+  { id: 8,  name: 'Парки-пам\'ятки садово-паркового мистецтва загальнодержавного значення' },
+  { id: 14, name: 'Парки-пам\'ятки садово-паркового мистецтва місцевого значення' },
+];
+
+// Oblast ID → name mapping (pzf.land.kiev.ua numbering)
+const PZF_OBLASTS = {
+  1: 'АР Крим', 2: 'Вінницька', 3: 'Волинська', 4: 'Дніпропетровська',
+  5: 'Донецька', 6: 'Житомирська', 7: 'Закарпатська', 8: 'Запорізька',
+  9: 'Івано-Франківська', 10: 'Київська', 11: 'Кіровоградська', 12: 'Луганська',
+  13: 'Львівська', 14: 'Миколаївська', 15: 'Одеська', 16: 'Полтавська',
+  17: 'Рівненська', 18: 'Сумська', 19: 'Тернопільська', 20: 'Харківська',
+  21: 'Херсонська', 22: 'Хмельницька', 23: 'Черкаська', 24: 'Чернівецька',
+  25: 'Чернігівська', 26: 'м. Київ',
+};
+
+// Rough bounding boxes for each oblast (for determining which oblasts to query)
+const PZF_OBLAST_BBOX = {
+  1:  [44.3,32.4,46.2,36.7],  // АР Крим
+  2:  [48.0,27.3,49.6,30.3],  // Вінницька
+  3:  [50.3,23.3,52.4,25.6],  // Волинська
+  4:  [47.2,32.8,49.4,36.3],  // Дніпропетровська
+  5:  [47.0,36.5,49.0,40.0],  // Донецька
+  6:  [49.5,27.3,52.0,30.6],  // Житомирська
+  7:  [47.7,22.1,49.1,24.7],  // Закарпатська
+  8:  [46.8,34.6,48.0,37.1],  // Запорізька
+  9:  [47.8,23.8,49.4,25.6],  // Івано-Франківська
+  10: [49.3,29.2,51.6,32.2],  // Київська
+  11: [47.7,31.0,49.3,33.3],  // Кіровоградська
+  12: [47.5,37.8,50.0,40.3],  // Луганська
+  13: [49.1,22.3,50.5,25.0],  // Львівська
+  14: [46.6,30.9,48.4,33.3],  // Миколаївська
+  15: [44.8,28.8,48.2,31.8],  // Одеська
+  16: [48.5,32.8,50.4,35.6],  // Полтавська
+  17: [50.0,25.2,51.9,27.7],  // Рівненська
+  18: [50.3,33.0,52.4,35.6],  // Сумська
+  19: [48.7,25.4,50.1,27.0],  // Тернопільська
+  20: [49.0,35.4,50.4,37.6],  // Харківська
+  21: [45.8,31.8,47.5,35.0],  // Херсонська
+  22: [48.8,25.8,50.6,28.3],  // Хмельницька
+  23: [48.7,30.3,50.0,32.3],  // Черкаська
+  24: [47.7,25.0,48.6,26.8],  // Чернівецька
+  25: [50.5,30.9,52.4,32.6],  // Чернігівська
+  26: [50.2,30.2,50.6,30.9],  // м. Київ
+};
+
+function bboxesIntersect(a, b) {
+  // a, b = [south, west, north, east]
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function kmlCoords(text) {
+  return text.trim().split(/\s+/).map(pt => {
+    const parts = pt.split(',').map(Number);
+    return [parts[0], parts[1]];
+  }).filter(c => c[0] && c[1]);
+}
+
+function kmlNodeToGeometry(doc) {
+  const DOMParser = require('@xmldom/xmldom').DOMParser;
+  // Walk placemarks
+  const features = [];
+  const placemarks = doc.getElementsByTagName('Placemark');
+  for (let i = 0; i < placemarks.length; i++) {
+    const pm = placemarks[i];
+    const nameEl = pm.getElementsByTagName('name')[0];
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    let geometry = null;
+
+    const polygon = pm.getElementsByTagName('Polygon')[0];
+    const multiGeom = pm.getElementsByTagName('MultiGeometry')[0];
+    const point = pm.getElementsByTagName('Point')[0];
+
+    if (multiGeom) {
+      const polys = multiGeom.getElementsByTagName('Polygon');
+      if (polys.length > 0) {
+        const rings = [];
+        for (let j = 0; j < polys.length; j++) {
+          const outer = polys[j].getElementsByTagName('outerBoundaryIs')[0];
+          if (!outer) continue;
+          const coords = outer.getElementsByTagName('coordinates')[0];
+          if (coords) rings.push([kmlCoords(coords.textContent)]);
+        }
+        geometry = rings.length === 1
+          ? { type: 'Polygon', coordinates: rings[0] }
+          : { type: 'MultiPolygon', coordinates: rings };
+      }
+    } else if (polygon) {
+      const outer = polygon.getElementsByTagName('outerBoundaryIs')[0];
+      if (outer) {
+        const coords = outer.getElementsByTagName('coordinates')[0];
+        if (coords) {
+          const inner = polygon.getElementsByTagName('innerBoundaryIs');
+          const rings = [kmlCoords(coords.textContent)];
+          for (let j = 0; j < inner.length; j++) {
+            const ic = inner[j].getElementsByTagName('coordinates')[0];
+            if (ic) rings.push(kmlCoords(ic.textContent));
+          }
+          geometry = { type: 'Polygon', coordinates: rings };
+        }
+      }
+    } else if (point) {
+      const coords = point.getElementsByTagName('coordinates')[0];
+      if (coords) {
+        const [lng, lat] = kmlCoords(coords.textContent)[0] || [];
+        if (lng && lat) geometry = { type: 'Point', coordinates: [lng, lat] };
+      }
+    }
+
+    if (geometry) features.push({ name, geometry });
+  }
+  return features;
+}
+
+async function fetchNatureReservesFromPZF(bbox, onProgress) {
+  const JSZip = require('jszip');
+  const { DOMParser } = require('@xmldom/xmldom');
+  const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
+
+  // Determine which oblasts overlap the area bbox
+  const oblastIds = Object.entries(PZF_OBLAST_BBOX)
+    .filter(([, ob]) => bboxesIntersect(bboxArr, ob))
+    .map(([id]) => Number(id));
+
+  onProgress(`  → ${oblastIds.length} oblast(s) intersect area: ${oblastIds.map(id => PZF_OBLASTS[id]).join(', ')}`);
+  if (oblastIds.length === 0) return [];
+
+  const allFeatures = [];
+  let totalFiles = 0, loadedFiles = 0;
+
+  // Build list of (category, oblast) pairs to fetch
+  const jobs = [];
+  for (const cat of PZF_CATEGORIES) {
+    for (const oblId of oblastIds) {
+      jobs.push({ cat, oblId });
+    }
+  }
+  totalFiles = jobs.length;
+
+  // Fetch all KMZ files in parallel batches of 8
+  const BATCH = 8;
+  for (let i = 0; i < jobs.length; i += BATCH) {
+    const batch = jobs.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(async ({ cat, oblId }) => {
+      const url = `${PZF_BASE}/${cat.id}/p${cat.id}-${oblId}.kmz`;
+      try {
+        const buf = await httpGetBuffer(url, { 'Referer': 'https://pzf.land.kiev.ua/' }, 30000);
+        if (!buf || buf.length < 100) return [];
+        const zip = await JSZip.loadAsync(buf);
+        const kmlFile = Object.keys(zip.files).find(f => f.endsWith('.kml'));
+        if (!kmlFile) return [];
+        const kmlText = await zip.files[kmlFile].async('string');
+        const doc = new DOMParser().parseFromString(kmlText, 'text/xml');
+        const parsed = kmlNodeToGeometry(doc);
+        return parsed
+          .filter(({ geometry }) => {
+            // Quick bbox filter: check if centroid or any coordinate is inside bbox
+            const g = geometry;
+            let testPt;
+            if (g.type === 'Point') testPt = g.coordinates;
+            else if (g.type === 'Polygon') testPt = g.coordinates[0][0];
+            else if (g.type === 'MultiPolygon') testPt = g.coordinates[0][0][0];
+            if (!testPt) return false;
+            return testPt[1] >= bbox.south && testPt[1] <= bbox.north &&
+                   testPt[0] >= bbox.west  && testPt[0] <= bbox.east;
+          })
+          .map(({ name, geometry }) => ({
+            type: 'Feature',
+            geometry,
+            properties: {
+              name,
+              category: cat.name,
+              _layer: 'Nature Reserves',
+              _type: 'nature_reserve',
+              _subtype: cat.name,
+            },
+          }));
+      } catch (_) {
+        return []; // file doesn't exist for this oblast or network error
+      }
+    }));
+    loadedFiles += batch.length;
+    for (const r of results) allFeatures.push(...r);
+    if (i % (BATCH * 4) === 0 && i > 0) {
+      onProgress(`  → ${loadedFiles}/${totalFiles} files fetched, ${allFeatures.length} features so far…`);
+    }
+  }
+
+  return allFeatures;
+}
+
 // ── EEA ArcGIS REST: fetch Emerald Network sites by bbox ───
 // Paginates through all features (ArcGIS returns max 1000 per request)
 async function fetchEmeraldFromEEA(bbox, onProgress) {
@@ -995,7 +1207,23 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
-  // 7. Fetch Wind Speed from NREL Sup3rWind Ukraine + GWA heatmap
+  // 7. Fetch Nature Reserves from pzf.land.kiev.ua
+  if (layers.includes('nature_reserves')) {
+    onProgress('🌿 Fetching Nature Reserves from PZF Ukraine (pzf.land.kiev.ua)…');
+    try {
+      const pzfFeatures = await fetchNatureReservesFromPZF(bbox, onProgress);
+      if (pzfFeatures.length) {
+        layerMap['Nature Reserves'] = pzfFeatures;
+        onProgress(`  → ${pzfFeatures.length} nature reserve features fetched`);
+      } else {
+        onProgress('  ⚠ No nature reserves found in this area');
+      }
+    } catch (err) {
+      onProgress(`  ⚠ PZF fetch failed: ${err.message}`);
+    }
+  }
+
+  // 8. Fetch Wind Speed from NREL Sup3rWind Ukraine + GWA heatmap
   const groundOverlays = [];
   if (layers.includes('wind') && windOptions) {
     try {

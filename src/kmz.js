@@ -20,6 +20,7 @@ const LAYER_STYLES = {
   'Forests':            { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
+  'Nature Reserves':    { poly: 'cc0055ff', line: 'ff0055ff', width: 2 },
   'Water Buffers':      { poly: '33ff6600', line: '66ff6600', width: 2 },
   'Forest Buffers':     { poly: '337fff00', line: '667fff00', width: 2 },
   'Road Buffers':       { poly: '33000080', line: '66000080', width: 2 },
@@ -29,7 +30,7 @@ const LAYER_STYLES = {
 // Group definitions — layers are nested inside parent folders in the KMZ
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Land Parcels'] },
-  { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Water', 'Water Buffers'] },
+  { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Nature Reserves', 'Water', 'Water Buffers'] },
   { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
 ];
@@ -171,7 +172,21 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
         continue;
       }
       if (layerName === 'Forest Buffers') continue; // already nested above
-      subFolders.push(layerFolder(layerName));
+      // Nature Reserves: group by subcategory (_subtype)
+      if (layerName === 'Nature Reserves') {
+        const styleId = 'Nature_Reserves';
+        const byCategory = {};
+        for (const f of layerMap['Nature Reserves']) {
+          const cat = f.properties._subtype || 'Інше';
+          if (!byCategory[cat]) byCategory[cat] = [];
+          byCategory[cat].push(featureToKml(f, styleId));
+        }
+        const catFolders = Object.entries(byCategory)
+          .map(([cat, pms]) => `<Folder><name>${escXml(cat)}</name>${pms.join('')}</Folder>`)
+          .join('');
+        subFolders.push(`<Folder><name>${escXml('Nature Reserves')}</name>${catFolders}</Folder>`);
+        continue;
+      }
     }
     if (subFolders.length) {
       folders.push(`<Folder><name>${escXml(folder)}</name>${subFolders.join('')}</Folder>`);
