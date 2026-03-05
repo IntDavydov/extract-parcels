@@ -909,6 +909,53 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       f.properties._type  = layerName.toLowerCase();
       layerMap[layerName].push(f);
     }
+    // 4b. Build buffer zones from OSM layers
+    const PAVED_ROAD_TYPES = new Set([
+      'motorway','motorway_link','trunk','trunk_link',
+      'primary','primary_link','secondary','secondary_link',
+      'tertiary','tertiary_link','residential','unclassified','living_street',
+    ]);
+
+    // Water Buffers: 700m around water polygons
+    if (layerMap['Water']) {
+      const waterBufs = layerMap['Water']
+        .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Water Buffers', _type: 'buffer_700m' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (waterBufs.length) layerMap['Water Buffers'] = waterBufs;
+    }
+
+    // Forest Buffers: 700m around forest polygons
+    if (layerMap['Forests']) {
+      const forestBufs = layerMap['Forests']
+        .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Forest Buffers', _type: 'buffer_700m' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (forestBufs.length) layerMap['Forest Buffers'] = forestBufs;
+    }
+
+    // Road Buffers: 300m around paved roads
+    if (layerMap['Roads']) {
+      const roadBufs = layerMap['Roads']
+        .filter(f => f.geometry && PAVED_ROAD_TYPES.has(f.properties && f.properties.highway))
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 0.3, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Road Buffers', _type: 'buffer_300m' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (roadBufs.length) layerMap['Road Buffers'] = roadBufs;
+    }
+
+    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road`);
   } // end osmLayers block
 
   // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)

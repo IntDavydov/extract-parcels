@@ -20,18 +20,21 @@ const LAYER_STYLES = {
   'Forests':            { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
+  'Water Buffers':      { poly: '33ff6600', line: '66ff6600', width: 2 },
+  'Forest Buffers':     { poly: '337fff00', line: '667fff00', width: 2 },
+  'Road Buffers':       { poly: '33000080', line: '66000080', width: 2 },
   'Wind Speed':         { point: 'ff00d7ff' },
 };
 
 // Group definitions — layers are nested inside parent folders in the KMZ
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Land Parcels'] },
-  { folder: 'Nature',      layers: ['Forests', 'Emerald Network', 'Emerald Buffer', 'Water'] },
+  { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Water', 'Water Buffers'] },
   { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order
-const ROOT_ORDER = ['Wind Speed', 'Territory Boundary', 'Roads'];
+const ROOT_ORDER = ['Wind Speed', 'Territory Boundary', 'Roads', 'Road Buffers'];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -150,6 +153,24 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
         continue;
       }
       if (layerName === 'Emerald Buffer') continue; // already nested above
+      // Nest Water Buffers inside the Water folder
+      if (layerName === 'Water' && layerMap['Water Buffers']) {
+        const waterFolder  = layerFolder(layerName);
+        const bufferFolder = layerFolder('Water Buffers');
+        grouped.add('Water Buffers');
+        subFolders.push(`<Folder><name>${escXml('Water')}</name>${waterFolder}${bufferFolder}</Folder>`);
+        continue;
+      }
+      if (layerName === 'Water Buffers') continue; // already nested above
+      // Nest Forest Buffers inside the Forests folder
+      if (layerName === 'Forests' && layerMap['Forest Buffers']) {
+        const forestFolder = layerFolder(layerName);
+        const bufferFolder = layerFolder('Forest Buffers');
+        grouped.add('Forest Buffers');
+        subFolders.push(`<Folder><name>${escXml('Forests')}</name>${forestFolder}${bufferFolder}</Folder>`);
+        continue;
+      }
+      if (layerName === 'Forest Buffers') continue; // already nested above
       subFolders.push(layerFolder(layerName));
     }
     if (subFolders.length) {
@@ -167,6 +188,15 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   for (const layerName of rootOrder) {
     if (!layerMap[layerName] || addedRoot.has(layerName)) continue;
     addedRoot.add(layerName);
+    // Roads: nest Road Buffers inside Roads folder
+    if (layerName === 'Roads' && layerMap['Road Buffers']) {
+      const roadsFolder  = layerFolder('Roads');
+      const bufferFolder = layerFolder('Road Buffers');
+      addedRoot.add('Road Buffers');
+      folders.push(`<Folder><name>${escXml('Roads')}</name>${roadsFolder}${bufferFolder}</Folder>`);
+      continue;
+    }
+    if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue; // already nested above
     // Coords-named parcel layer: nest Parcel Boundaries inside it (if present)
     if (!LAYER_STYLES[layerName] && layerMap['Parcel Boundaries'] && !addedRoot.has('Parcel Boundaries')) {
       addedRoot.add('Parcel Boundaries');
