@@ -9,6 +9,29 @@ const turfBuffer = require("@turf/buffer");
 
 const SNAP_BUFFER_KM = 0.000005; // ~5mm — closes tile-boundary gaps without distorting shapes
 
+async function exportCadnumsToExcel(features, xlsxPath) {
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Cadastral Numbers');
+
+  ws.columns = [
+    { header: '#',       key: 'idx',    width: 6  },
+    { header: 'cadnum',  key: 'cadnum', width: 32 },
+  ];
+
+  // Style header row
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+
+  features.forEach((f, i) => {
+    const cadnum = f.properties?.cadnum || '';
+    if (cadnum) ws.addRow({ idx: i + 1, cadnum });
+  });
+
+  await wb.xlsx.writeFile(xlsxPath);
+}
+
+
 // ── KMZ/KML boundary filter ────────────────────────────────
 
 // Extract all polygon rings from KML text as arrays of [lng, lat] pairs
@@ -387,8 +410,17 @@ function setupGracefulShutdown(browser) {
         const layers = {};
         if (boundary && boundary.features.length > 0) layers['Parcel Boundaries'] = boundary.features;
         layers[parcelFolderName] = features;
-        await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg));
+        await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg), [], 'Kadastr');
         console.log(`💾 Saved → ${CONFIG.kmzPath}`);
+
+        // Export cadastral numbers to Excel
+        try {
+          const xlsxPath = CONFIG.kmzPath.replace(/\.kmz$/i, '_cadnums.xlsx');
+          await exportCadnumsToExcel(features, xlsxPath);
+          console.log(`📊 Cadnums → ${xlsxPath}`);
+        } catch (err) {
+          console.warn(`⚠ Excel export failed: ${err.message}`);
+        }
       } else {
         console.log('⚠ No parcels to export.');
       }

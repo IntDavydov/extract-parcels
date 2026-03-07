@@ -122,7 +122,7 @@ function buildStyles() {
   return lines.join('\n');
 }
 
-async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) {
+async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], docName = 'Kadastr') {
   onProgress('🗺 Building KML…');
   const styles = buildStyles();
   const folders = [];
@@ -244,7 +244,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = []) 
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>Parcels</name>
+  <name>${escXml(docName)}</name>
   ${styles}
   ${folders.join('\n  ')}
 </Document>

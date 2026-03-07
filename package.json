@@ -53,6 +53,7 @@
     "@mapbox/vector-tile": "^2.0.4",
     "@turf/buffer": "^7.3.4",
     "@turf/union": "^7.3.4",
+    "exceljs": "^4.4.0",
     "geotiff": "^3.0.3",
     "jszip": "^3.10.1",
     "osmtogeojson": "^3.0.0-beta.5",

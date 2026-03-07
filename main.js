@@ -469,21 +469,10 @@ ipcMain.handle('create-boundary-kmz', async (_event, { geojson, outputPath }) =>
 });
 
 ipcMain.handle('copy-icons', (_event, outputFolder) => {
+  // Icons are bundled inside KMZ — delete any leftover icons folder
   const fs = require('fs');
   const iconsDir = path.join(outputFolder, 'icons');
-  if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
-  const bundled = ['houses.png', 'windmill.png'];
-  for (const icon of bundled) {
-    const dest = path.join(iconsDir, icon);
-    // Try 1: from app.asar.unpacked (normal packaged path)
-    const unpacked = getUnpackedPath(icon);
-    if (fs.existsSync(unpacked)) { fs.copyFileSync(unpacked, dest); continue; }
-    // Try 2: read from inside the asar — Electron patches fs.readFileSync to support this
-    try {
-      const buf = fs.readFileSync(path.join(app.getAppPath(), icon));
-      fs.writeFileSync(dest, buf);
-    } catch (_) {}
-  }
+  if (fs.existsSync(iconsDir)) fs.rmSync(iconsDir, { recursive: true, force: true });
 });
 
 ipcMain.handle('resolve-output-path', (_event, folder, baseName) => {

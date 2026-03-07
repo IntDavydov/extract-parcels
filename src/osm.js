@@ -1250,7 +1250,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   // 9. Save output
   if (format === 'kmz') {
     const { exportKMZ } = require('./kmz.js');
-    await exportKMZ(layerMap, outputPath, onProgress, groundOverlays);
+    await exportKMZ(layerMap, outputPath, onProgress, groundOverlays, 'Analytics');
   } else {
     const fc = {
       type: 'FeatureCollection',
