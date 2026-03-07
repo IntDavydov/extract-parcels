@@ -9,26 +9,18 @@ const turfBuffer = require("@turf/buffer");
 
 const SNAP_BUFFER_KM = 0.000005; // ~5mm — closes tile-boundary gaps without distorting shapes
 
-async function exportCadnumsToExcel(features, xlsxPath) {
-  const ExcelJS = require('exceljs');
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Cadastral Numbers');
-
-  ws.columns = [
-    { header: '#',       key: 'idx',    width: 6  },
-    { header: 'cadnum',  key: 'cadnum', width: 32 },
-  ];
-
-  // Style header row
-  ws.getRow(1).font = { bold: true };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
-
-  features.forEach((f, i) => {
+function exportCadnumsToExcel(features, xlsxPath) {
+  const fs = require('fs');
+  // Write CSV with BOM so Excel opens it correctly with UTF-8
+  const csvPath = xlsxPath.replace(/\.xlsx$/i, '.csv');
+  const rows = ['#,cadnum'];
+  let idx = 1;
+  for (const f of features) {
     const cadnum = f.properties?.cadnum || '';
-    if (cadnum) ws.addRow({ idx: i + 1, cadnum });
-  });
-
-  await wb.xlsx.writeFile(xlsxPath);
+    if (cadnum) rows.push(`${idx++},${cadnum}`);
+  }
+  fs.writeFileSync(csvPath, '\uFEFF' + rows.join('\r\n'), 'utf8');
+  return csvPath;
 }
 
 
@@ -413,13 +405,13 @@ function setupGracefulShutdown(browser) {
         await exportKMZ(layers, CONFIG.kmzPath, (msg) => console.log(msg), [], 'Kadastr');
         console.log(`💾 Saved → ${CONFIG.kmzPath}`);
 
-        // Export cadastral numbers to Excel
+        // Export cadastral numbers to CSV (Excel-compatible)
         try {
           const xlsxPath = CONFIG.kmzPath.replace(/\.kmz$/i, '_cadnums.xlsx');
-          await exportCadnumsToExcel(features, xlsxPath);
-          console.log(`📊 Cadnums → ${xlsxPath}`);
+          const savedPath = exportCadnumsToExcel(features, xlsxPath);
+          console.log(`📊 Cadnums → ${savedPath}`);
         } catch (err) {
-          console.warn(`⚠ Excel export failed: ${err.message}`);
+          console.warn(`⚠ Cadnum export failed: ${err.message}`);
         }
       } else {
         console.log('⚠ No parcels to export.');
