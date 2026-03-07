@@ -148,7 +148,7 @@ ipcMain.handle('fetch-osm', async (event, options) => {
 });
 
 // IPC: merge two KMZ files into one
-ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNames }) => {
+ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNames, docName }) => {
   const JSZip  = require('jszip');
   const fs     = require('fs');
 
@@ -252,13 +252,17 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
       }
     }
 
+    // Drop any GroundOverlay already nested inside a folder (avoids duplicates)
+    const folderContent = folders.join('');
+    const topOverlays = overlays.filter(ov => !folderContent.includes(ov));
+
     const combinedKml =
 `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>Kadastr</name>
+  <name>${docName || 'Kadastr'}</name>
   ${styles.join('\n  ')}
-  ${overlays.join('\n  ')}
+  ${topOverlays.join('\n  ')}
   ${folders.join('\n  ')}
 </Document>
 </kml>`;
@@ -322,10 +326,24 @@ ipcMain.handle('find-proxy', async (event, excludeList = []) => {
         socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
         socket.once('data', (data) => {
           if (!data.toString().includes('200')) { finish(false); socket.destroy(); return; }
-          // Full TLS handshake proves the proxy can actually reach the target
+          // Send a real HTTP GET request and verify we get a valid response body
           const tlsSocket = tls.connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
-            tlsSocket.destroy();
-            finish(true);
+            tlsSocket.write(
+              `GET / HTTP/1.1\r\nHost: ${targetHost}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n`
+            );
+            let response = '';
+            tlsSocket.on('data', (chunk) => {
+              response += chunk.toString('binary', 0, Math.min(chunk.length, 512));
+              // Accept any real HTTP response (2xx, 3xx, 4xx — means server actually replied)
+              if (/^HTTP\/1\.[01] [2-5]\d\d/.test(response)) {
+                tlsSocket.destroy();
+                finish(true);
+              }
+            });
+            tlsSocket.on('end', () => {
+              finish(/^HTTP\/1\.[01] [2-5]\d\d/.test(response));
+            });
+            tlsSocket.on('error', () => finish(false));
           });
           tlsSocket.on('error', () => finish(false));
         });
@@ -362,7 +380,7 @@ ipcMain.handle('find-proxy', async (event, excludeList = []) => {
     const batch = proxies.slice(i, i + BATCH);
     const results = await Promise.all(batch.map(async (p) => {
       const [host, port] = p.split(':');
-      const ok = await testHttpProxy(host, parseInt(port), 'kadastr.live', 443, 8000);
+      const ok = await testHttpProxy(host, parseInt(port), 'kadastr.live', 443, 12000);
       return ok ? p : null;
     }));
     const found = results.find(r => r !== null);

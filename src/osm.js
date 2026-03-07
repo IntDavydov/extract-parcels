@@ -1046,7 +1046,7 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   const png = windArrayToPng(Array.from(data), width, height);
   onProgress(`  → GWA wind PNG generated (${png.length} bytes)`);
 
-  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap' }];
+  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap', hubHeight }];
 }
 
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {

@@ -454,7 +454,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     }
     const toMerge = hasKadastr ? [kadastrTemp, osmTemp] : [osmTemp];
     appendLog(hasKadastr ? '\n📦 Merging KMZ files…' : '');
-    const mergeResult = await window.api.mergeKmz(toMerge, finalOutput, true);
+    const mergeResult = await window.api.mergeKmz(toMerge, finalOutput, true, undefined, 'Analytics');
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);

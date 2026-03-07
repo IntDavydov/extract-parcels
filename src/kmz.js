@@ -187,6 +187,8 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
         subFolders.push(`<Folder><name>${escXml('Nature Reserves')}</name>${catFolders}</Folder>`);
         continue;
       }
+      // Default: add layer as a plain folder
+      subFolders.push(layerFolder(layerName));
     }
     if (subFolders.length) {
       folders.push(`<Folder><name>${escXml(folder)}</name>${subFolders.join('')}</Folder>`);
@@ -197,7 +199,10 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   const allGrouped = LAYER_GROUPS.flatMap(g => g.layers);
   const rootOrder = [
     ...ROOT_ORDER.filter(k => layerMap[k] && !grouped.has(k)),
-    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k)),
+    // Coords-named parcel layers before 'Parcel Boundaries' so nesting logic fires correctly
+    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k) && k !== 'Parcel Boundaries'),
+    // 'Parcel Boundaries' last — will be nested inside the coords folder above
+    ...( layerMap['Parcel Boundaries'] ? ['Parcel Boundaries'] : [] ),
   ];
   const addedRoot = new Set();
   for (const layerName of rootOrder) {
@@ -212,15 +217,18 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       continue;
     }
     if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue; // already nested above
-    // Coords-named parcel layer: nest Parcel Boundaries inside it (if present)
-    if (!LAYER_STYLES[layerName] && layerMap['Parcel Boundaries'] && !addedRoot.has('Parcel Boundaries')) {
+    // Coords-named parcel layer: wrap in Parcels > coords/folder > Boundary + Parcels subfolder
+    if (!LAYER_STYLES[layerName] && !addedRoot.has('Parcel Boundaries')) {
       addedRoot.add('Parcel Boundaries');
       const styleId    = 'Land_Parcels';
       const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
-      const boundaryFolder = layerFolder('Parcel Boundaries');
-      folders.push(`<Folder><name>${escXml(layerName)}</name>${boundaryFolder}${placemarks.join('')}</Folder>`);
+      const boundaryFolder = layerMap['Parcel Boundaries'] ? layerFolder('Parcel Boundaries') : '';
+      const parcelsSubFolder = `<Folder><name>Parcels</name>${placemarks.join('')}</Folder>`;
+      const coordsFolder = `<Folder><name>${escXml(layerName)}</name>${boundaryFolder}${parcelsSubFolder}</Folder>`;
+      folders.push(`<Folder><name>Parcels</name>${coordsFolder}</Folder>`);
       continue;
     }
+    if (layerName === 'Parcel Boundaries' && addedRoot.has('Parcel Boundaries')) continue; // already nested above
     folders.push(layerFolder(layerName));
   }
 
