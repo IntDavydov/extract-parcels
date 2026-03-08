@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const { lookupEland, stopLookup } = require('./src/eland');
 
 let mainWindow;
 let scrapingProcess = null;
@@ -417,6 +418,14 @@ ipcMain.handle('open-kml-dialog', async () => {
   return result;
 });
 
+ipcMain.handle('open-csv-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'CSV files', extensions: ['csv'] }],
+  });
+  return result;
+});
+
 ipcMain.handle('show-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
 });
@@ -549,3 +558,16 @@ ipcMain.handle('read-kml-bbox', async (_event, filePath) => {
     return { error: e.message };
   }
 });
+
+ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
+  try {
+    const onProgress = msg => event.sender.send('log', msg);
+    const result = await lookupEland(csvPath, outputXlsx, onProgress);
+    return result;
+  } catch (err) {
+    event.sender.send('log', `❌ e.land lookup failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.on('stop-eland-lookup', () => stopLookup());

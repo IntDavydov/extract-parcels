@@ -46,6 +46,15 @@ contextBridge.exposeInMainWorld('api', {
   resolveOutputPath: (folder, baseName) =>
     ipcRenderer.invoke('resolve-output-path', folder, baseName),
 
+  openCsvDialog: () =>
+    ipcRenderer.invoke('open-csv-dialog'),
+
+  startElandLookup: (csvPath, outputXlsx) =>
+    ipcRenderer.invoke('start-eland-lookup', { csvPath, outputXlsx }),
+
+  stopElandLookup: () =>
+    ipcRenderer.send('stop-eland-lookup'),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
 });

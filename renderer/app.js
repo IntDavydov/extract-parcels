@@ -474,3 +474,35 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
   setBusy(false);
 });
+
+// ── e.land.gov.ua Lookup ────────────────────────────────────
+let elandCsvPath = '';
+let elandBusy    = false;
+
+document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async () => {
+  const result = await window.api.openCsvDialog();
+  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
+    elandCsvPath = result.filePaths[0];
+    document.getElementById('cadnums-csv-display').textContent = elandCsvPath.split(/[\\/]/).pop();
+    document.getElementById('btn-eland-start').disabled = false;
+  }
+});
+
+document.getElementById('btn-eland-start').addEventListener('click', async () => {
+  if (!elandCsvPath || elandBusy) return;
+  elandBusy = true;
+  document.getElementById('btn-eland-start').disabled = true;
+  document.getElementById('btn-eland-stop').style.display = '';
+
+  const outputXlsx = elandCsvPath.replace(/\.csv$/i, '_eland.xlsx');
+  const result = await window.api.startElandLookup(elandCsvPath, outputXlsx);
+  if (result && result.success) window.api.showInFolder(result.outputPath);
+
+  elandBusy = false;
+  document.getElementById('btn-eland-start').disabled = false;
+  document.getElementById('btn-eland-stop').style.display = 'none';
+});
+
+document.getElementById('btn-eland-stop').addEventListener('click', () => {
+  window.api.stopElandLookup();
+});
