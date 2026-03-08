@@ -261,22 +261,25 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // Helper: run kadastr scraper for one boundary file with proxy retry
   async function scrapeOne(bf, label) {
     appendLog(`━━━ Kadastr: ${label} ━━━`);
+    const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
       if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
-        if (!proxyCache) {
+        if (!useVpn && !proxyCache) {
           appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
           proxyCache = await window.api.findProxy([...usedProxies]);
           if (proxyCache) usedProxies.add(proxyCache);
         }
         const res = await window.api.startScraping(bf.url, outputFolder,
-          { headless: true, boundaryFilter: bf.path, proxy: proxyCache || '' });
+          { headless: true, boundaryFilter: bf.path, proxy: useVpn ? '' : (proxyCache || '') });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         if (tilesGot > 0) break;
-        if (attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
+        if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
+        if (useVpn) break; // no proxy retries in VPN mode
       }
+      if (useVpn) break; // no second round in VPN mode
     }
     return tilesGot;
   }
@@ -312,11 +315,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog(`🔲 Grid: ${cells.length} cells — launching single scraper session…`);
 
     // Run ONE scraper that pans through all cells internally
+    const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
       if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
-        if (!proxyCache) {
+        if (!useVpn && !proxyCache) {
           appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
           proxyCache = await window.api.findProxy([...usedProxies]);
           if (proxyCache) usedProxies.add(proxyCache);
@@ -324,14 +328,16 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         const res = await window.api.startScraping(cells[0] ? `https://kadastr.live/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
           headless: true,
           boundaryFilter: tempBoundaryPath,
-          proxy: proxyCache || '',
+          proxy: useVpn ? '' : (proxyCache || ''),
           gridCells: cells,
         });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         if (tilesGot > 0) break;
-        if (attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
+        if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
+        if (useVpn) break;
       }
+      if (useVpn) break;
     }
 
     if (tilesGot === 0) {
