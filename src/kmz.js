@@ -21,18 +21,20 @@ const LAYER_STYLES = {
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
   'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
   'Nature Reserves':    { poly: 'cc00aaaa', line: 'ff00aaaa', width: 2 },
-  'Water Buffers':      { poly: '33ff6600', line: '66ff6600', width: 2 },
-  'Forest Buffers':     { poly: '337fff00', line: '667fff00', width: 2 },
-  'Road Buffers':       { poly: '33000080', line: '66000080', width: 2 },
-  'Wind Speed':         { point: 'ff00d7ff' },
+  'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2 },
+  'Forest Buffers':        { poly: '337fff00', line: '667fff00', width: 2 },
+  'Road Buffers':          { poly: '33000080', line: '66000080', width: 2 },
+  'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2 },
+  'Nature Reserve Buffer': { poly: '3300aaaa', line: '6600aaaa', width: 2 },
+  'Wind Speed':            { point: 'ff00d7ff' },
 };
 
 // Group definitions — layers are nested inside parent folders in the KMZ
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Land Parcels'] },
-  { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Nature Reserves', 'Water', 'Water Buffers'] },
+  { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Nature Reserves', 'Nature Reserve Buffer', 'Water', 'Water Buffers'] },
   { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
-  { folder: 'Energy',      layers: ['Power Lines', 'Substations', 'Towers'] },
+  { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order
 const ROOT_ORDER = ['Wind Speed', 'Territory Boundary', 'Roads', 'Road Buffers'];
@@ -172,7 +174,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
         continue;
       }
       if (layerName === 'Forest Buffers') continue; // already nested above
-      // Nature Reserves: group by subcategory (_subtype)
+      // Nature Reserves: group by subcategory (_subtype), nest Nature Reserve Buffer inside
       if (layerName === 'Nature Reserves') {
         const styleId = 'Nature_Reserves';
         const byCategory = {};
@@ -184,9 +186,24 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
         const catFolders = Object.entries(byCategory)
           .map(([cat, pms]) => `<Folder><name>${escXml(cat)}</name>${pms.join('')}</Folder>`)
           .join('');
-        subFolders.push(`<Folder><name>${escXml('Nature Reserves')}</name>${catFolders}</Folder>`);
+        let natContent = catFolders;
+        if (layerMap['Nature Reserve Buffer']) {
+          natContent += layerFolder('Nature Reserve Buffer');
+          grouped.add('Nature Reserve Buffer');
+        }
+        subFolders.push(`<Folder><name>${escXml('Nature Reserves')}</name>${natContent}</Folder>`);
         continue;
       }
+      if (layerName === 'Nature Reserve Buffer') continue; // already nested above
+      // Nest Power Line Buffers inside the Power Lines folder
+      if (layerName === 'Power Lines' && layerMap['Power Line Buffers']) {
+        const powerLinesFolder = layerFolder(layerName);
+        const bufferFolder     = layerFolder('Power Line Buffers');
+        grouped.add('Power Line Buffers');
+        subFolders.push(`<Folder><name>${escXml('Power Lines')}</name>${powerLinesFolder}${bufferFolder}</Folder>`);
+        continue;
+      }
+      if (layerName === 'Power Line Buffers') continue; // already nested above
       // Default: add layer as a plain folder
       subFolders.push(layerFolder(layerName));
     }

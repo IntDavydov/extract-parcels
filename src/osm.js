@@ -1154,20 +1154,33 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (forestBufs.length) layerMap['Forest Buffers'] = forestBufs;
     }
 
-    // Road Buffers: 300m around paved roads
+    // Road Buffers: 400m around paved roads
     if (layerMap['Roads']) {
       const roadBufs = layerMap['Roads']
         .filter(f => f.geometry && PAVED_ROAD_TYPES.has(f.properties && f.properties.highway))
         .map(f => {
           try {
-            const buf = turfBuffer(f, 0.3, { units: 'kilometers' });
-            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Road Buffers', _type: 'buffer_300m' } } : null;
+            const buf = turfBuffer(f, 0.4, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Road Buffers', _type: 'buffer_400m' } } : null;
           } catch (_) { return null; }
         }).filter(Boolean);
       if (roadBufs.length) layerMap['Road Buffers'] = roadBufs;
     }
 
-    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road`);
+    // Power Line Buffers: 250m around power lines
+    if (layerMap['Power Lines']) {
+      const powerLineBufs = layerMap['Power Lines']
+        .filter(f => f.geometry)
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 0.25, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Power Line Buffers', _type: 'buffer_250m' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (powerLineBufs.length) layerMap['Power Line Buffers'] = powerLineBufs;
+    }
+
+    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line`);
   } // end osmLayers block
 
   // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
@@ -1214,6 +1227,14 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       const pzfFeatures = await fetchNatureReservesFromPZF(bbox, onProgress);
       if (pzfFeatures.length) {
         layerMap['Nature Reserves'] = pzfFeatures;
+        layerMap['Nature Reserve Buffer'] = pzfFeatures
+          .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+          .map(f => {
+            try {
+              const buf = turfBuffer(f, 1, { units: 'kilometers' });
+              return buf ? { ...buf, properties: { ...f.properties, _layer: 'Nature Reserve Buffer' } } : null;
+            } catch (_) { return null; }
+          }).filter(Boolean);
         onProgress(`  → ${pzfFeatures.length} nature reserve features fetched`);
       } else {
         onProgress('  ⚠ No nature reserves found in this area');
