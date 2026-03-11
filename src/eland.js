@@ -56,15 +56,18 @@ async function extractFields(page) {
 
 let _stopped = false;
 
-async function lookupEland(csvPath, outputXlsx, onProgress) {
+async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
   _stopped = false;
   onProgress('🌐 Opening e.land.gov.ua — please log in with your digital signature key…');
 
-  const browser = await puppeteer.launch({
+  const launchOpts = {
     headless: false,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1200,800'],
     defaultViewport: null,
-  });
+  };
+  if (chromePath) launchOpts.executablePath = chromePath;
+
+  const browser = await puppeteer.launch(launchOpts);
 
   try {
     const page = await browser.newPage();

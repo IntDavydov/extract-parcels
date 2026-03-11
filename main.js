@@ -609,7 +609,10 @@ ipcMain.handle('read-kml-bbox', async (_event, filePath) => {
 ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
   try {
     const onProgress = msg => event.sender.send('log', msg);
-    const result = await lookupEland(csvPath, outputXlsx, onProgress);
+    onProgress('🔍 Checking Chrome availability...');
+    const chromePath = await ensurePuppeteerChrome();
+    if (chromePath) onProgress(`✅ Chrome: ${chromePath}`);
+    const result = await lookupEland(csvPath, outputXlsx, onProgress, chromePath);
     return result;
   } catch (err) {
     event.sender.send('log', `❌ e.land lookup failed: ${err.message}`);
