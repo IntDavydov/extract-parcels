@@ -1,7 +1,39 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
+
+// Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
+async function ensurePuppeteerChrome() {
+  try {
+    const puppeteer = require('puppeteer');
+    const chromePath = puppeteer.executablePath();
+    if (fs.existsSync(chromePath)) return chromePath;
+  } catch (_) {}
+
+  // Chrome missing — run puppeteer's own install script
+  const puppeteerDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer')
+    : path.join(__dirname, 'node_modules', 'puppeteer');
+  const installScript = path.join(puppeteerDir, 'install.mjs');
+  if (!fs.existsSync(installScript)) return null;
+
+  await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [installScript], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: 'pipe',
+    });
+    proc.on('close', resolve);
+  });
+
+  try {
+    const puppeteer = require('puppeteer');
+    const chromePath = puppeteer.executablePath();
+    if (fs.existsSync(chromePath)) return chromePath;
+  } catch (_) {}
+  return null;
+}
 
 let mainWindow;
 let scrapingProcess = null;
@@ -54,7 +86,7 @@ app.on('window-all-closed', () => {
 });
 
 // IPC: start kadastr scraping
-ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells }) => {
+ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -73,6 +105,16 @@ ipcMain.handle('start-scraping', (event, { url, outputPath, headless, boundaryFi
   if (boundaryFilter)  env.BOUNDARY_FILTER = boundaryFilter;
   if (proxy)           env.KADASTR_PROXY = proxy;
   if (gridCells && gridCells.length) env.GRID_CELLS = JSON.stringify(gridCells);
+
+  // Ensure Chrome is available (downloads on first run if needed)
+  event.sender.send('log', '🔍 Checking Chrome availability...');
+  const chromePath = await ensurePuppeteerChrome();
+  if (chromePath) {
+    env.CHROME_PATH = chromePath;
+    event.sender.send('log', `✅ Chrome: ${chromePath}`);
+  } else {
+    event.sender.send('log', '⚠️  Chrome path unknown — puppeteer will auto-detect');
+  }
 
   const kmzPath = outputPath
     ? path.join(outputPath, 'land_plots.kmz')

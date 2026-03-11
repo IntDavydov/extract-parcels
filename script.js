@@ -101,17 +101,30 @@ function featureInBoundary(feature, rings) {
 
 // Resolve Chrome executable path for the current platform
 function getChromePath() {
+  // Prefer the path resolved and passed by main.js
+  if (process.env.CHROME_PATH && fsSync.existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
+
   if (process.platform === "win32") {
     const candidates = [
       "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      process.env.LOCALAPPDATA + "\\Google\\Chrome\\Application\\chrome.exe",
+      (process.env.LOCALAPPDATA || '') + "\\Google\\Chrome\\Application\\chrome.exe",
+      (process.env.LOCALAPPDATA || '') + "\\Chromium\\Application\\chrome.exe",
     ];
     for (const p of candidates) {
-      if (fsSync.existsSync(p)) return p;
+      if (p && fsSync.existsSync(p)) return p;
     }
   }
-  return undefined; // let puppeteer use bundled Chromium on other platforms
+
+  // Fall back to puppeteer's bundled Chrome (any platform)
+  try {
+    const execPath = puppeteer.executablePath();
+    if (fsSync.existsSync(execPath)) return execPath;
+  } catch (_) {}
+
+  return undefined;
 }
 
 // Configuration
