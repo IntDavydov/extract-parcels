@@ -6,29 +6,34 @@ const { lookupEland, stopLookup } = require('./src/eland');
 
 // Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
 async function ensurePuppeteerChrome() {
+  // When packaged, load puppeteer from app.asar.unpacked to avoid asar path issues
+  function loadPuppeteer() {
+    if (app.isPackaged) {
+      return require(path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer'));
+    }
+    return require('puppeteer');
+  }
+
   try {
-    const puppeteer = require('puppeteer');
+    const puppeteer = loadPuppeteer();
     const chromePath = puppeteer.executablePath();
     if (fs.existsSync(chromePath)) return chromePath;
   } catch (_) {}
 
-  // Chrome missing — run puppeteer's own install script
-  const puppeteerDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer')
-    : path.join(__dirname, 'node_modules', 'puppeteer');
-  const installScript = path.join(puppeteerDir, 'install.mjs');
-  if (!fs.existsSync(installScript)) return null;
-
-  await new Promise((resolve) => {
-    const proc = spawn(process.execPath, [installScript], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      stdio: 'pipe',
-    });
-    proc.on('close', resolve);
-  });
+  // Chrome missing — download it via puppeteer's CJS install API
+  try {
+    const installPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer', 'lib', 'cjs', 'puppeteer', 'node', 'install.js')
+      : path.join(__dirname, 'node_modules', 'puppeteer', 'lib', 'cjs', 'puppeteer', 'node', 'install.js');
+    const installMod = require(installPath);
+    await installMod.downloadBrowsers();
+  } catch (e) {
+    console.error('Chrome download failed:', e.message);
+    return null;
+  }
 
   try {
-    const puppeteer = require('puppeteer');
+    const puppeteer = loadPuppeteer();
     const chromePath = puppeteer.executablePath();
     if (fs.existsSync(chromePath)) return chromePath;
   } catch (_) {}

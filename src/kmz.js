@@ -22,7 +22,7 @@ const LAYER_STYLES = {
   'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
   'Nature Reserves':    { poly: 'cc00aaaa', line: 'ff00aaaa', width: 2 },
   'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2 },
-  'Forest Buffers':        { poly: '337fff00', line: '667fff00', width: 2 },
+  'Forest Buffers':        { poly: '337fff00', line: '007fff00', width: 2 },
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2 },
   'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2 },
   'Nature Reserve Buffer': { poly: '3300aaaa', line: '6600aaaa', width: 2 },

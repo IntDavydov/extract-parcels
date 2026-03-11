@@ -1141,6 +1141,23 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (waterBufs.length) layerMap['Water Buffers'] = waterBufs;
     }
 
+    // Keep only polygon forests wider than 50m.
+    // Lines (tree rows mapped as LineString in OSM) are excluded entirely since
+    // they have no width. Polygons are tested with a −25m inward buffer: if the
+    // polygon survives shrinking by half of 50m it is wide enough to keep.
+    if (layerMap['Forests']) {
+      layerMap['Forests'] = layerMap['Forests'].filter(f => {
+        const type = f.geometry && f.geometry.type;
+        if (type !== 'Polygon' && type !== 'MultiPolygon') return false;
+        try {
+          const shrunk = turfBuffer(f, -0.025, { units: 'kilometers' }); // −25 m
+          return !!(shrunk && shrunk.geometry);
+        } catch (_) {
+          return true;
+        }
+      });
+    }
+
     // Forest Buffers: 700m around forest polygons
     if (layerMap['Forests']) {
       const forestBufs = layerMap['Forests']
