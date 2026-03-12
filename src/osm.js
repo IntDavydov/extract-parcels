@@ -964,12 +964,17 @@ async function fetchWindData(boundaryGeojson, bbox, windOptions, onProgress) {
 }
 
 // ── Global Wind Atlas: fetch wind speed from COG via range requests ────────
+// GWA3 Cloud-Optimized GeoTIFF sources for Ukraine.
+// Each height lists candidate URLs tried in order; the first successful read wins.
 const GWA_COG_URLS = {
-  80:  'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_80m.tif',
-  100: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_100m.tif',
-  120: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_120m.tif',
-  160: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_160m.tif',
-  200: 'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_200m.tif',
+  100: [
+    'https://gwa.cdn.nazkamapps.com/country_tifs_v3/UKR_wind-speed_100m.tif',
+    'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_100m.tif',
+  ],
+  150: [
+    'https://gwa.cdn.nazkamapps.com/country_tifs_v3/UKR_wind-speed_150m.tif',
+    'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_150m.tif',
+  ],
 };
 
 // GWA color scale: wind speed (m/s) → [R, G, B]
@@ -1039,9 +1044,9 @@ function windArrayToPng(data, width, height) {
 
 async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   const { west, south, east, north } = bbox;
-  onProgress(`🌬 Fetching wind speed from Global Wind Atlas (${hubHeight}m)…`);
+  const height = Number(hubHeight);
+  onProgress(`🌬 Fetching wind speed from Global Wind Atlas GWA3 (${height}m)…`);
 
-  const cogUrl = GWA_COG_URLS[hubHeight] || GWA_COG_URLS[100];
   let geotiff;
   try {
     geotiff = require('geotiff');
@@ -1049,7 +1054,20 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
     throw new Error('geotiff module not available: ' + e.message);
   }
 
-  const tiff = await geotiff.fromUrl(cogUrl);
+  const candidates = GWA_COG_URLS[height] || GWA_COG_URLS[100];
+  let tiff, lastErr;
+  for (const url of candidates) {
+    try {
+      onProgress(`  → Trying ${url}`);
+      tiff = await geotiff.fromUrl(url);
+      break;
+    } catch (e) {
+      lastErr = e;
+      onProgress(`  ⚠ Failed: ${e.message}`);
+    }
+  }
+  if (!tiff) throw new Error(`No GWA source available for ${height}m: ${lastErr && lastErr.message}`);
+
   const image = await tiff.getImage(0);
   const cogBbox = image.getBoundingBox(); // [west, south, east, north]
   const W = image.getWidth(), H = image.getHeight();
@@ -1071,13 +1089,13 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   onProgress(`  → Reading ${right - left}×${bottom - top}px window from COG…`);
   const rasters = await image.readRasters({ window: [left, top, right, bottom] });
   const data = rasters[0]; // Float32Array of wind speeds
-  const { width, height } = rasters;
+  const { width, height: h } = rasters;
 
-  onProgress(`  → Raster ${width}×${height} px, building PNG…`);
-  const png = windArrayToPng(Array.from(data), width, height);
+  onProgress(`  → Raster ${width}×${h} px, building PNG…`);
+  const png = windArrayToPng(Array.from(data), width, h);
   onProgress(`  → GWA wind PNG generated (${png.length} bytes)`);
 
-  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap', hubHeight }];
+  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap', hubHeight: height }];
 }
 
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {
@@ -1293,17 +1311,9 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
-  // 8. Fetch Wind Speed from NREL Sup3rWind Ukraine + GWA heatmap
+  // 8. Fetch Wind Speed from Global Wind Atlas (GWA3) — heatmap only
   const groundOverlays = [];
   if (layers.includes('wind') && windOptions) {
-    try {
-      const windFeatures = await fetchWindData(bbox.boundaryGeojson, bbox, windOptions, onProgress);
-      if (windFeatures.length) layerMap['Wind Speed'] = windFeatures;
-    } catch (err) {
-      onProgress(`  ⚠ NREL unavailable: ${err.message}`);
-      onProgress(`  → Falling back to Global Wind Atlas (GWA) heatmap…`);
-    }
-    // Always try GWA heatmap regardless of NREL result
     try {
       const tiles = await fetchWindHeatmap(bbox, windOptions.hubHeight, onProgress);
       groundOverlays.push(...tiles);

@@ -249,9 +249,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   }
 
   const windOptions = layers.includes('wind') ? {
-    apiKey: 'hWrMKuAzGg0OCHhfidHrcuygKydLiRhyWuhXEUeZ',
-    hubHeight: document.getElementById('wind-hub-height').value,
-    year: '2019', email: 'successful0506@gmail.com',
+    hubHeight: parseInt(document.getElementById('wind-hub-height').value, 10),
   } : null;
 
   document.getElementById('main-log').textContent = '';

@@ -52,19 +52,16 @@
           <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
           <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
           <label><input type="checkbox" name="layer" value="nature_reserves" /> 🌿 Nature Reserves (PZF)</label>
-          <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (NREL)</label>
+          <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
         </div>
 
         <!-- Wind settings — shown only when wind checkbox is checked -->
         <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
           <div class="field" style="margin-bottom:0;">
-            <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· 2019 data</span></label>
+            <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
             <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-              <option value="80">80 m</option>
               <option value="100" selected>100 m (recommended)</option>
-              <option value="120">120 m</option>
-              <option value="160">160 m</option>
-              <option value="200">200 m</option>
+              <option value="150">150 m</option>
             </select>
           </div>
         </div>
