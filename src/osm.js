@@ -1211,7 +1211,53 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       f.properties._type  = layerName.toLowerCase();
       layerMap[layerName].push(f);
     }
-    // 4b. Build buffer zones from OSM layers
+
+    // 4b. Inherit voltage from power lines onto tower/pole nodes.
+    // OSM tower nodes rarely carry a voltage tag — it lives on the line way.
+    // We build a flat list of all line segments, then for each tower find the
+    // nearest line segment (within 500m) and copy its voltage.
+    if (layerMap['Towers'] && layerMap['Power Lines']) {
+      // Flatten all power line coords into segments with their voltage
+      const segments = [];
+      for (const line of layerMap['Power Lines']) {
+        const v = line.properties && line.properties.voltage;
+        if (!v) continue;
+        const coords = line.geometry.type === 'LineString'
+          ? line.geometry.coordinates
+          : line.geometry.coordinates.flat();
+        for (let i = 0; i < coords.length - 1; i++) {
+          segments.push({ ax: coords[i][0], ay: coords[i][1], bx: coords[i+1][0], by: coords[i+1][1], voltage: v });
+        }
+      }
+
+      if (segments.length) {
+        // Point-to-segment distance squared (in degrees, good enough for proximity test)
+        function distSqToSegment(px, py, ax, ay, bx, by) {
+          const dx = bx - ax, dy = by - ay;
+          const lenSq = dx*dx + dy*dy;
+          if (lenSq === 0) return (px-ax)*(px-ax) + (py-ay)*(py-ay);
+          const t = Math.max(0, Math.min(1, ((px-ax)*dx + (py-ay)*dy) / lenSq));
+          return (px - ax - t*dx) ** 2 + (py - ay - t*dy) ** 2;
+        }
+        const MAX_DIST_DEG_SQ = (0.005) ** 2; // ~500m
+
+        for (const tower of layerMap['Towers']) {
+          if (tower.properties.voltage) continue; // already has voltage
+          if (tower.geometry.type !== 'Point') continue;
+          const [px, py] = tower.geometry.coordinates;
+          let bestDist = Infinity, bestVoltage = null;
+          for (const seg of segments) {
+            const d = distSqToSegment(px, py, seg.ax, seg.ay, seg.bx, seg.by);
+            if (d < bestDist) { bestDist = d; bestVoltage = seg.voltage; }
+          }
+          if (bestDist <= MAX_DIST_DEG_SQ && bestVoltage) {
+            tower.properties.voltage = bestVoltage;
+          }
+        }
+      }
+    }
+
+    // 4c. Build buffer zones from OSM layers
     const PAVED_ROAD_TYPES = new Set([
       'motorway','motorway_link','trunk','trunk_link',
       'primary','primary_link','secondary','secondary_link',

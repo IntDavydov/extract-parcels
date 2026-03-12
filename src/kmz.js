@@ -10,7 +10,11 @@ const LAYER_STYLES = {
   'Territory Boundary': { line: 'ffffffff', width: 4 },
   'Land Parcels':       { poly: '00000000', line: 'ffffffff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
-  'Towers':             { point: 'ff00ffff' },
+  'Towers':             { point: 'ff00ffff' },         // fallback (unknown voltage)
+  'Towers_Low':         { point: 'ff00ff00' },         // < 20 kV  — Green
+  'Towers_Medium':      { point: 'ff00ffff' },         // 20–110 kV — Yellow
+  'Towers_High':        { point: 'ff00a5ff' },         // 110–220 kV — Orange
+  'Towers_Extra':       { point: 'ff0000ff' },         // > 220 kV  — Red
   'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
   'Roads':              { line: 'ff000000' },
   'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
@@ -102,6 +106,19 @@ function featureToKml(f, styleId) {
 
 function escXml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Map OSM voltage tag (volts or kV string) to a tower style ID
+function towerStyleId(voltageTag) {
+  if (!voltageTag) return 'Towers';
+  // OSM stores voltage in volts (e.g. "110000") or sometimes kV ("110")
+  let kv = parseFloat(String(voltageTag).split(';')[0]); // take first value if semicolon-separated
+  if (!isFinite(kv)) return 'Towers';
+  if (kv > 1000) kv /= 1000; // convert V → kV
+  if (kv < 20)  return 'Towers_Low';
+  if (kv < 110) return 'Towers_Medium';
+  if (kv < 220) return 'Towers_High';
+  return 'Towers_Extra';
 }
 
 function buildStyles() {
@@ -205,6 +222,14 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
         continue;
       }
       if (layerName === 'Power Line Buffers') continue; // already nested above
+      // Towers: color-coded by voltage tier
+      if (layerName === 'Towers') {
+        const towerPms = layerMap['Towers'].map(f =>
+          featureToKml(f, towerStyleId(f.properties && f.properties.voltage))
+        ).filter(Boolean);
+        subFolders.push(`<Folder><name>Towers</name>${towerPms.join('')}</Folder>`);
+        continue;
+      }
       // Default: add layer as a plain folder
       subFolders.push(layerFolder(layerName));
     }
