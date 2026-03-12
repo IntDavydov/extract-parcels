@@ -17,15 +17,15 @@ const LAYER_STYLES = {
   'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
   'Settlement Buffers': { poly: 'ccc9c9ff', line: 'ffc9c9ff' },
   'Water':              { poly: 'ccff6600', line: 'ccff6600' },
-  'Forests':            { poly: 'cc7fff00', line: '007fff00' },
-  'Emerald Network':    { poly: 'cc7fff00', line: '007fff00' },
-  'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2 },
+  'Forests':            { poly: 'cc7fff00', line: '007fff00', noOutline: true },
+  'Emerald Network':    { poly: 'cc7fff00', line: '007fff00', noOutline: true },
+  'Emerald Buffer':     { poly: '3300ff00', line: '8800ff00', width: 2, noOutline: true },
   'Nature Reserves':    { poly: 'cc00aaaa', line: 'ff00aaaa', width: 2 },
-  'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2 },
-  'Forest Buffers':        { poly: '337fff00', line: '007fff00', width: 2 },
-  'Road Buffers':          { poly: '33000080', line: '66000080', width: 2 },
-  'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2 },
-  'Nature Reserve Buffer': { poly: '3300aaaa', line: '6600aaaa', width: 2 },
+  'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2, noOutline: true },
+  'Forest Buffers':        { poly: '337fff00', line: '007fff00', width: 2, noOutline: true },
+  'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
+  'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2, noOutline: true },
+  'Nature Reserve Buffer': { poly: '3300aaaa', line: '6600aaaa', width: 2, noOutline: true },
   'Wind Speed':            { point: 'ff00d7ff' },
 };
 
@@ -115,10 +115,11 @@ function buildStyles() {
       ? `<IconStyle><color>${pointColor}</color><scale>1.0</scale><Icon><href>${colors.icon}</href></Icon></IconStyle>`
       : `<IconStyle><color>${pointColor}</color><scale>0.8</scale></IconStyle>`;
     const lineWidth = colors.width || 2;
+    const polyOutline = colors.noOutline ? '<outline>0</outline>' : '';
     lines.push(`<Style id="${id}">
   ${iconStyle}
   <LineStyle><color>${lineColor}</color><width>${lineWidth}</width></LineStyle>
-  <PolyStyle><color>${polyColor}</color></PolyStyle>
+  <PolyStyle><color>${polyColor}</color>${polyOutline}</PolyStyle>
 </Style>`);
   }
   return lines.join('\n');

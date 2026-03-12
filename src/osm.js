@@ -12,6 +12,37 @@ const pipelineAsync = promisify(pipeline);
 const osmtogeojson = require('osmtogeojson');
 const turfBuffer   = require('@turf/buffer').default || require('@turf/buffer');
 
+// Approximate polygon area in m² using the Shoelace formula with geodetic scaling
+function polygonAreaM2(ring) {
+  let area = 0;
+  const n = ring.length;
+  for (let i = 0; i < n - 1; i++) {
+    area += ring[i][0] * ring[i + 1][1];
+    area -= ring[i + 1][0] * ring[i][1];
+  }
+  const avgLat = ring.reduce((s, c) => s + c[1], 0) / ring.length;
+  const cosLat = Math.cos(avgLat * Math.PI / 180);
+  return (Math.abs(area) / 2) * 111320 * 111320 * cosLat;
+}
+
+function featureAreaM2(f) {
+  const g = f.geometry;
+  if (!g) return 0;
+  if (g.type === 'Polygon') return polygonAreaM2(g.coordinates[0]);
+  if (g.type === 'MultiPolygon') return g.coordinates.reduce((s, poly) => s + polygonAreaM2(poly[0]), 0);
+  return 0;
+}
+
+// Returns true if the polygon is at least minWidthM wide at its narrowest point
+function isWideEnough(f, minWidthM) {
+  try {
+    const shrunk = turfBuffer(f, -(minWidthM / 2) / 1000, { units: 'kilometers' });
+    return !!(shrunk && shrunk.geometry);
+  } catch (_) {
+    return false; // thin/degenerate polygons that fail turf are excluded
+  }
+}
+
 const HUMDATA_ZIP_URL  = 'https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/681beb86-391b-4a08-8140-ca52e80fcdce/download/ukr_admin_boundaries.geojson.zip';
 const HUMDATA_CACHE_DIR = path.join(os.homedir(), '.land-management-cache');
 const HUMDATA_CACHE_ZIP = path.join(HUMDATA_CACHE_DIR, 'ukr_admin_boundaries.geojson.zip');
@@ -1141,20 +1172,21 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (waterBufs.length) layerMap['Water Buffers'] = waterBufs;
     }
 
-    // Keep only polygon forests wider than 50m.
-    // Lines (tree rows mapped as LineString in OSM) are excluded entirely since
-    // they have no width. Polygons are tested with a −25m inward buffer: if the
-    // polygon survives shrinking by half of 50m it is wide enough to keep.
+    // Keep only polygon forests that are:
+    //   • at least 50m wide (negative buffer test), AND
+    //   • at least 1 ha in area (≥ 10 000 m²)
+    // This eliminates narrow windbreaks, tree rows mapped as thin polygons,
+    // and hedgerows — they would appear as lines and produce huge buffer corridors.
+    // MIN_WIDTH_M=100 uses a −50m inward buffer; the test shows windbreaks
+    // mapped up to ~90m wide in OSM still collapse and are excluded.
     if (layerMap['Forests']) {
+      const MIN_WIDTH_M = 100;
+      const MIN_AREA_M2 = 20000; // 2 hectares
       layerMap['Forests'] = layerMap['Forests'].filter(f => {
         const type = f.geometry && f.geometry.type;
         if (type !== 'Polygon' && type !== 'MultiPolygon') return false;
-        try {
-          const shrunk = turfBuffer(f, -0.025, { units: 'kilometers' }); // −25 m
-          return !!(shrunk && shrunk.geometry);
-        } catch (_) {
-          return true;
-        }
+        if (featureAreaM2(f) < MIN_AREA_M2) return false;
+        return isWideEnough(f, MIN_WIDTH_M);
       });
     }
 
