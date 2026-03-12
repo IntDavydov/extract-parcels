@@ -1091,11 +1091,52 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   const data = rasters[0]; // Float32Array of wind speeds
   const { width, height: h } = rasters;
 
+  // Compute average wind speed from valid pixels
+  let sum = 0, count = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (v > 0 && isFinite(v)) { sum += v; count++; }
+  }
+  const avgSpeed = count > 0 ? Math.round((sum / count) * 10) / 10 : null;
+  if (avgSpeed !== null) {
+    onProgress(`  🌬 Average wind speed (${height}m): ${avgSpeed} m/s over ${count} pixels`);
+  }
+
+  // Sample a sparse grid of point placemarks (~8×8 max across the area)
+  const GRID_STEPS = 8;
+  const stepX = Math.max(1, Math.floor(width  / GRID_STEPS));
+  const stepY = Math.max(1, Math.floor(h / GRID_STEPS));
+  const windPoints = [];
+  for (let row = Math.floor(stepY / 2); row < h; row += stepY) {
+    for (let col = Math.floor(stepX / 2); col < width; col += stepX) {
+      const v = data[row * width + col];
+      if (!v || v <= 0 || !isFinite(v)) continue;
+      const lon = w + (col + 0.5) / width  * (e - w);
+      const lat = n - (row + 0.5) / h * (n - s);
+      const spd = Math.round(v * 10) / 10;
+      windPoints.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lon, lat] },
+        properties: {
+          name: `${spd} m/s`,
+          windspeed_ms: spd,
+          hub_height_m: height,
+          source: 'GWA3',
+          _layer: 'Wind Speed',
+        },
+      });
+    }
+  }
+
   onProgress(`  → Raster ${width}×${h} px, building PNG…`);
   const png = windArrayToPng(Array.from(data), width, h);
   onProgress(`  → GWA wind PNG generated (${png.length} bytes)`);
 
-  return [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap', hubHeight: height }];
+  return {
+    overlays: [{ imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'wind_heatmap', hubHeight: height }],
+    points: windPoints,
+    avgSpeed,
+  };
 }
 
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {
@@ -1311,14 +1352,18 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
-  // 8. Fetch Wind Speed from Global Wind Atlas (GWA3) — heatmap only
+  // 8. Fetch Wind Speed from Global Wind Atlas (GWA3) — heatmap + sampled points
   const groundOverlays = [];
   if (layers.includes('wind') && windOptions) {
     try {
-      const tiles = await fetchWindHeatmap(bbox, windOptions.hubHeight, onProgress);
-      groundOverlays.push(...tiles);
+      const result = await fetchWindHeatmap(bbox, windOptions.hubHeight, onProgress);
+      groundOverlays.push(...result.overlays);
+      if (result.points.length) layerMap['Wind Speed'] = result.points;
+      if (result.avgSpeed !== null) {
+        onProgress(`📊 Area average wind speed at ${windOptions.hubHeight}m: ${result.avgSpeed} m/s`);
+      }
     } catch (err) {
-      onProgress(`  ⚠ Wind heatmap fetch failed: ${err.message}`);
+      onProgress(`  ⚠ Wind fetch failed: ${err.message}`);
     }
   }
 

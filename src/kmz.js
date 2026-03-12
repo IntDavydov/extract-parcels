@@ -37,7 +37,7 @@ const LAYER_GROUPS = [
   { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order
-const ROOT_ORDER = ['Wind Speed', 'Territory Boundary', 'Roads', 'Road Buffers'];
+const ROOT_ORDER = ['Territory Boundary', 'Roads', 'Road Buffers'];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -218,7 +218,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   const rootOrder = [
     ...ROOT_ORDER.filter(k => layerMap[k] && !grouped.has(k)),
     // Coords-named parcel layers before 'Parcel Boundaries' so nesting logic fires correctly
-    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k) && k !== 'Parcel Boundaries'),
+    ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k) && k !== 'Parcel Boundaries' && k !== 'Wind Speed'),
     // 'Parcel Boundaries' last — will be nested inside the coords folder above
     ...( layerMap['Parcel Boundaries'] ? ['Parcel Boundaries'] : [] ),
   ];
@@ -250,21 +250,28 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     folders.push(layerFolder(layerName));
   }
 
-  // Merge Wind Speed points + GroundOverlays into one folder
-  if (groundOverlays.length) {
-    const hubHeight = groundOverlays[0].hubHeight || '';
-    const overlayKmlItems = groundOverlays.map((ov) => {
-      const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
-      return `<GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>`;
-    });
-    // Find existing Wind Speed points folder and wrap together, or create folder with overlays only
-    const wsIdx = folders.findIndex(f => f.startsWith('<Folder><name>Wind Speed</name>'));
-    if (wsIdx >= 0) {
-      // Insert overlays inside the existing Wind Speed folder (before closing tag)
-      folders[wsIdx] = folders[wsIdx].replace('</Folder>', overlayKmlItems.join('') + '</Folder>');
-    } else {
-      folders.push(`<Folder><name>Wind Speed</name>${overlayKmlItems.join('')}</Folder>`);
+  // Build Wind Speed folder: "Average Pins" sub-folder + heatmap overlay
+  const hasWindPoints   = !!(layerMap['Wind Speed'] && layerMap['Wind Speed'].length);
+  const hasWindOverlays = groundOverlays.length > 0;
+  if (hasWindPoints || hasWindOverlays) {
+    const hubHeight = hasWindOverlays ? (groundOverlays[0].hubHeight || '') : '';
+    const parts = [];
+
+    if (hasWindPoints) {
+      const styleId = 'Wind_Speed';
+      const pms = layerMap['Wind Speed'].map(f => featureToKml(f, styleId)).filter(Boolean);
+      parts.push(`<Folder><name>Average Pins</name>${pms.join('')}</Folder>`);
     }
+
+    if (hasWindOverlays) {
+      const overlayItems = groundOverlays.map((ov) => {
+        const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
+        return `<GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>`;
+      });
+      parts.push(...overlayItems);
+    }
+
+    folders.push(`<Folder><name>Wind Speed${hubHeight ? ` ${hubHeight}m` : ''}</name>${parts.join('')}</Folder>`);
   }
 
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
