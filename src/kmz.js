@@ -24,12 +24,12 @@ const LAYER_STYLES = {
   'Forests':            { poly: 'cc7fff00', line: '007fff00', noOutline: true },
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00', noOutline: true },
   'Emerald Buffer':     { poly: '8000ff00', line: '8800ff00', width: 2, noOutline: true },
-  'Nature Reserves':    { poly: 'cc00ffff', line: 'ff00ffff', width: 2 },
+  'Nature Reserves':    { poly: 'cc005555', line: 'ff005555', width: 2 },
   'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2, noOutline: true },
   'Forest Buffers':        { poly: '807fff00', line: '007fff00', width: 2, noOutline: true },
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
   'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2, noOutline: true },
-  'Nature Reserve Buffer': { poly: '8000ffff', line: '6600ffff', width: 2, noOutline: true },
+  'Nature Reserve Buffer': { poly: '80005555', line: '66005555', width: 2, noOutline: true },
   'Wind Speed':            { point: 'ff00d7ff' },
 };
 
