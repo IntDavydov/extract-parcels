@@ -1382,7 +1382,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (pzfFeatures.length) {
         layerMap['Nature Reserves'] = pzfFeatures;
         layerMap['Nature Reserve Buffer'] = pzfFeatures
-          .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+          .filter(f => !!f.geometry)
           .map(f => {
             try {
               const buf = turfBuffer(f, 1, { units: 'kilometers' });
