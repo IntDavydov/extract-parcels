@@ -35,7 +35,7 @@ const LAYER_STYLES = {
   'Water Buffers':         { poly: '33ff6600', line: '66ff6600', width: 2, noOutline: true },
   'Forest Buffers':        { poly: '807fff00', line: '007fff00', width: 2, noOutline: true },
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
-  'Power Line Buffers':    { poly: '3300ffff', line: '6600ffff', width: 2, noOutline: true },
+  'Power Line Buffers':    { poly: '5500ffff', line: '8800ffff', width: 2, noOutline: true },
   'Nature Reserve Buffer': {
     poly: '80005555',
     line: '66005555',
