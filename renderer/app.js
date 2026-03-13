@@ -18,6 +18,24 @@ function sanitizeFilename(name) {
 // Forward all main-process log events to the single log area
 window.api.onLog((msg) => appendLog(msg));
 
+function initLeftTabs() {
+  const tabButtons = [...document.querySelectorAll('.left-tab-btn')];
+  const tabPanels = [...document.querySelectorAll('.left-tab-panel')];
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.tabTarget;
+      tabButtons.forEach((b) => {
+        const isActive = b === btn;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === targetId));
+    });
+  });
+}
+
+initLeftTabs();
+
 // ── State ──────────────────────────────────────────────────
 let outputFolder   = '';
 let boundaryFiles  = []; // [{path, url, bbox, name}]

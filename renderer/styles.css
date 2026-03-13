@@ -144,6 +144,50 @@ textarea {
 
 .field { margin-bottom: 12px; }
 
+/* ── Left tabs ──────────────────────────────────────────── */
+.left-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.left-tab-btn {
+  border: 1px solid #2a4a7f;
+  background: #0f3460;
+  color: #aaa;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.left-tab-btn:hover {
+  border-color: #e94560;
+  color: #eee;
+}
+
+.left-tab-btn.active {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+}
+
+.left-tab-panel {
+  display: none;
+}
+
+.left-tab-panel.active {
+  display: block;
+}
+
+.tab-section + .tab-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #2a4a7f;
+}
+
 /* ── Checkboxes grid ──────────────────────────────────── */
 .checkbox-grid {
   display: grid;

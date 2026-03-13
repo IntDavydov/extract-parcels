@@ -13,71 +13,118 @@
   <!-- ── Left: controls ───────────────────────────────── -->
   <div class="controls-col">
     <div class="card">
-      <h2>🗺 Parcels</h2>
-
-      <div class="field">
-        <label for="area-name">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate multiple with <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">...</code></span></label>
-        <textarea id="area-name" rows="2" placeholder="e.g. Остерська громада ... Ніжинська громада" style="resize:none;"></textarea>
+      <div class="left-tabs" role="tablist" aria-label="Task tabs">
+        <button class="left-tab-btn active" id="tab-btn-parcels" data-tab-target="tab-panel-parcels" role="tab" aria-selected="true">🗺 Parcels</button>
+        <button class="left-tab-btn" id="tab-btn-pre-research" data-tab-target="tab-panel-pre-research" role="tab" aria-selected="false">📊 Pre Research</button>
       </div>
 
-      <!-- chk-full-parcels checkbox hidden but logic preserved in app.js -->
-      <input type="checkbox" id="chk-full-parcels" style="display:none;" />
-
-      <div class="field">
-        <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping; select multiple for batch)</span></label>
-        <div id="drop-zone" style="border:2px dashed #2a4a7f;border-radius:6px;padding:16px 12px;margin-top:4px;cursor:pointer;transition:border-color 0.15s,background 0.15s;text-align:center;min-height:72px;display:flex;flex-direction:column;justify-content:center;">
-          <div id="drop-hint" style="color:#666;font-size:12px;">📎 Click to attach or drop KMZ/KML files here</div>
-          <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>
-          <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;margin-top:6px;">✕ Clear all</button>
-        </div>
-      </div>
-
-      <div class="field">
-        <label>Output folder <span style="color:#e05;">*required</span></label>
-        <div class="row" style="margin-top:4px;">
-          <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
-          <span class="path-display" id="output-folder-display">not selected</span>
-        </div>
-      </div>
-
-      <div class="field">
-        <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
-        <div class="checkbox-grid">
-          <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
-          <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
-          <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
-          <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
-          <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
-          <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
-          <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
-          <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
-          <label><input type="checkbox" name="layer" value="nature_reserves" /> 🌿 Nature Reserves (PZF)</label>
-          <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
+      <div class="left-tab-panel active" id="tab-panel-parcels" role="tabpanel">
+        <div class="field">
+          <label for="area-name">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate multiple with <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">...</code></span></label>
+          <textarea id="area-name" rows="2" placeholder="e.g. Остерська громада ... Ніжинська громада" style="resize:none;"></textarea>
         </div>
 
-        <!-- Wind settings — shown only when wind checkbox is checked -->
-        <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-          <div class="field" style="margin-bottom:0;">
-            <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
-            <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-              <option value="100" selected>100 m (recommended)</option>
-              <option value="150">150 m</option>
-            </select>
+        <!-- chk-full-parcels checkbox hidden but logic preserved in app.js -->
+        <input type="checkbox" id="chk-full-parcels" style="display:none;" />
+
+        <div class="field">
+          <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping; select multiple for batch)</span></label>
+          <div id="drop-zone" style="border:2px dashed #2a4a7f;border-radius:6px;padding:16px 12px;margin-top:4px;cursor:pointer;transition:border-color 0.15s,background 0.15s;text-align:center;min-height:72px;display:flex;flex-direction:column;justify-content:center;">
+            <div id="drop-hint" style="color:#666;font-size:12px;">📎 Click to attach or drop KMZ/KML files here</div>
+            <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>
+            <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;margin-top:6px;">✕ Clear all</button>
           </div>
         </div>
 
-        <div class="row" style="margin-bottom:0;">
-          <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
-          <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
+        <div class="field">
+          <label>Output folder <span style="color:#e05;">*required</span></label>
+          <div class="row" style="margin-top:4px;">
+            <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
+            <span class="path-display" id="output-folder-display">not selected</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
+          <div class="checkbox-grid">
+            <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
+            <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
+            <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
+            <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
+            <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
+            <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
+            <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
+            <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
+            <label><input type="checkbox" name="layer" value="nature_reserves" /> 🌿 Nature Reserves (PZF)</label>
+            <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
+          </div>
+
+          <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
+            <div class="field" style="margin-bottom:0;">
+              <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
+              <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
+                <option value="100" selected>100 m (recommended)</option>
+                <option value="150">150 m</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row" style="margin-bottom:0;">
+            <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
+            <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;margin-bottom:0;">
+          <button class="btn btn-primary" id="btn-start" disabled style="padding:12px 48px;font-size:15px;">▶ Start</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;margin-left:16px;font-size:12px;color:#aaa;cursor:pointer;" title="Skip proxy search — use when you have a VPN active">
+            <input type="checkbox" id="chk-use-vpn" style="width:14px;height:14px;cursor:pointer;" />
+            🔒 Use VPN
+          </label>
         </div>
       </div>
 
-      <div style="margin-top:14px;margin-bottom:0;">
-        <button class="btn btn-primary" id="btn-start" disabled style="padding:12px 48px;font-size:15px;">▶ Start</button>
-        <label style="display:inline-flex;align-items:center;gap:6px;margin-left:16px;font-size:12px;color:#aaa;cursor:pointer;" title="Skip proxy search — use when you have a VPN active">
-          <input type="checkbox" id="chk-use-vpn" style="width:14px;height:14px;cursor:pointer;" />
-          🔒 Use VPN
-        </label>
+      <div class="left-tab-panel" id="tab-panel-pre-research" role="tabpanel">
+        <div class="tab-section">
+          <h2>📊 Pre-Research XLSX</h2>
+          <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
+
+          <div class="field">
+            <label style="font-size:12px;">Oblast name <span style="color:#888;font-size:11px;">(e.g. Рівненська область)</span></label>
+            <input type="text" id="research-oblast" placeholder="Рівненська область" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:13px;width:100%;box-sizing:border-box;margin-top:4px;" />
+          </div>
+
+          <div class="field" style="margin-top:8px;">
+            <label style="font-size:12px;">Output folder</label>
+            <div class="row" style="margin-top:4px;">
+              <button class="btn btn-secondary btn-sm" id="btn-research-folder">📁 Choose folder</button>
+              <span class="path-display" id="research-folder-display">not selected</span>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-primary btn-sm" id="btn-research-start" disabled style="padding:8px 24px;">📊 Generate XLSX</button>
+            <button class="btn btn-secondary btn-sm" id="btn-research-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
+          </div>
+        </div>
+
+        <div class="tab-section">
+          <h2>📋 e.land.gov.ua Lookup</h2>
+          <p style="font-size:11px;color:#888;margin:0 0 10px;">Batch-fetch ownership data for scraped parcels. Opens a browser window — log in with your digital signature key, then the app will query each parcel automatically.</p>
+
+          <div class="field">
+            <label style="font-size:12px;">Cadnums CSV <span style="color:#888;font-size:11px;">(exported by scraper as <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">*_cadnums.csv</code>)</span></label>
+            <div class="row" style="margin-top:4px;">
+              <button class="btn btn-secondary btn-sm" id="btn-pick-cadnums-csv">📎 Choose CSV</button>
+              <span class="path-display" id="cadnums-csv-display">not selected</span>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-primary btn-sm" id="btn-eland-start" disabled style="padding:8px 24px;">🔍 Lookup on e.land</button>
+            <button class="btn btn-secondary btn-sm" id="btn-eland-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -87,49 +134,6 @@
     <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
       <h2>Log</h2>
       <div class="log-area" id="main-log"></div>
-    </div>
-
-    <!-- ── Pre-Research XLSX Generator ────────────────── -->
-    <div class="card" style="margin-top:12px;">
-      <h2>📊 Pre-Research XLSX</h2>
-      <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
-
-      <div class="field">
-        <label style="font-size:12px;">Oblast name <span style="color:#888;font-size:11px;">(e.g. Рівненська область)</span></label>
-        <input type="text" id="research-oblast" placeholder="Рівненська область" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:13px;width:100%;box-sizing:border-box;margin-top:4px;" />
-      </div>
-
-      <div class="field" style="margin-top:8px;">
-        <label style="font-size:12px;">Output folder</label>
-        <div class="row" style="margin-top:4px;">
-          <button class="btn btn-secondary btn-sm" id="btn-research-folder">📁 Choose folder</button>
-          <span class="path-display" id="research-folder-display">not selected</span>
-        </div>
-      </div>
-
-      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-        <button class="btn btn-primary btn-sm" id="btn-research-start" disabled style="padding:8px 24px;">📊 Generate XLSX</button>
-        <button class="btn btn-secondary btn-sm" id="btn-research-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
-      </div>
-    </div>
-
-    <!-- ── e.land.gov.ua Ownership Lookup ──────────────── -->
-    <div class="card" style="margin-top:12px;">
-      <h2>📋 e.land.gov.ua Lookup</h2>
-      <p style="font-size:11px;color:#888;margin:0 0 10px;">Batch-fetch ownership data for scraped parcels. Opens a browser window — log in with your digital signature key, then the app will query each parcel automatically.</p>
-
-      <div class="field">
-        <label style="font-size:12px;">Cadnums CSV <span style="color:#888;font-size:11px;">(exported by scraper as <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">*_cadnums.csv</code>)</span></label>
-        <div class="row" style="margin-top:4px;">
-          <button class="btn btn-secondary btn-sm" id="btn-pick-cadnums-csv">📎 Choose CSV</button>
-          <span class="path-display" id="cadnums-csv-display">not selected</span>
-        </div>
-      </div>
-
-      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-        <button class="btn btn-primary btn-sm" id="btn-eland-start" disabled style="padding:8px 24px;">🔍 Lookup on e.land</button>
-        <button class="btn btn-secondary btn-sm" id="btn-eland-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
-      </div>
     </div>
   </div>
 
