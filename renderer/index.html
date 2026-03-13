@@ -89,6 +89,30 @@
       <div class="log-area" id="main-log"></div>
     </div>
 
+    <!-- ── Pre-Research XLSX Generator ────────────────── -->
+    <div class="card" style="margin-top:12px;">
+      <h2>📊 Pre-Research XLSX</h2>
+      <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
+
+      <div class="field">
+        <label style="font-size:12px;">Oblast name <span style="color:#888;font-size:11px;">(e.g. Рівненська область)</span></label>
+        <input type="text" id="research-oblast" placeholder="Рівненська область" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:13px;width:100%;box-sizing:border-box;margin-top:4px;" />
+      </div>
+
+      <div class="field" style="margin-top:8px;">
+        <label style="font-size:12px;">Output folder</label>
+        <div class="row" style="margin-top:4px;">
+          <button class="btn btn-secondary btn-sm" id="btn-research-folder">📁 Choose folder</button>
+          <span class="path-display" id="research-folder-display">not selected</span>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+        <button class="btn btn-primary btn-sm" id="btn-research-start" disabled style="padding:8px 24px;">📊 Generate XLSX</button>
+        <button class="btn btn-secondary btn-sm" id="btn-research-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
+      </div>
+    </div>
+
     <!-- ── e.land.gov.ua Ownership Lookup ──────────────── -->
     <div class="card" style="margin-top:12px;">
       <h2>📋 e.land.gov.ua Lookup</h2>

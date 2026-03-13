@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
+const { generateResearchXlsx, stopResearch } = require('./src/research');
 
 // Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
 async function ensurePuppeteerChrome() {
@@ -621,3 +622,18 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
 });
 
 ipcMain.on('stop-eland-lookup', () => stopLookup());
+
+ipcMain.handle('generate-research-xlsx', async (event, { oblastName, outputPath }) => {
+  try {
+    const onProgress = msg => event.sender.send('log', msg);
+    onProgress('🔍 Checking Chrome availability…');
+    const chromePath = await ensurePuppeteerChrome();
+    if (chromePath) onProgress(`✅ Chrome: ${chromePath}`);
+    return await generateResearchXlsx(oblastName, outputPath, onProgress, chromePath);
+  } catch (err) {
+    event.sender.send('log', `❌ Research generation failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.on('stop-research', () => stopResearch());

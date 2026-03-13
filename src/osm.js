@@ -1434,4 +1434,4 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   return outputPath;
 }
 
-module.exports = { fetchOSM };
+module.exports = { fetchOSM, getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, httpGet, httpPost, polygonAreaM2 };

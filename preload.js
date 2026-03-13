@@ -55,6 +55,12 @@ contextBridge.exposeInMainWorld('api', {
   stopElandLookup: () =>
     ipcRenderer.send('stop-eland-lookup'),
 
+  generateResearchXlsx: (oblastName, outputPath) =>
+    ipcRenderer.invoke('generate-research-xlsx', { oblastName, outputPath }),
+
+  stopResearch: () =>
+    ipcRenderer.send('stop-research'),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
 });

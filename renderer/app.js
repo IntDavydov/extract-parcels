@@ -504,3 +504,55 @@ document.getElementById('btn-eland-start').addEventListener('click', async () =>
 document.getElementById('btn-eland-stop').addEventListener('click', () => {
   window.api.stopElandLookup();
 });
+
+// ── Pre-Research XLSX ───────────────────────────────────────
+let researchFolder = '';
+let researchBusy   = false;
+
+function checkResearchReady() {
+  const oblastVal = document.getElementById('research-oblast').value.trim();
+  document.getElementById('btn-research-start').disabled = !oblastVal || !researchFolder || researchBusy;
+}
+
+document.getElementById('research-oblast').addEventListener('input', checkResearchReady);
+
+document.getElementById('btn-research-folder').addEventListener('click', async () => {
+  const result = await window.api.openFolderDialog();
+  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
+    researchFolder = result.filePaths[0];
+    document.getElementById('research-folder-display').textContent = researchFolder.split(/[\\/]/).pop() || researchFolder;
+    checkResearchReady();
+  }
+});
+
+document.getElementById('btn-research-start').addEventListener('click', async () => {
+  const oblastName = document.getElementById('research-oblast').value.trim();
+  if (!oblastName || !researchFolder || researchBusy) return;
+
+  researchBusy = true;
+  document.getElementById('btn-research-start').disabled = true;
+  document.getElementById('btn-research-stop').style.display = '';
+
+  // Build output path: sanitize oblast name → filename
+  const safeName = oblastName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  const outputPath = researchFolder + (researchFolder.endsWith('/') || researchFolder.endsWith('\\') ? '' : '/') + safeName + '_research.xlsx';
+
+  appendLog(`📊 Generating pre-research XLSX for "${oblastName}"…`);
+  const result = await window.api.generateResearchXlsx(oblastName, outputPath);
+
+  if (result && result.success) {
+    appendLog(`✅ XLSX saved: ${result.outputPath} (${result.count} hromadas)`);
+    window.api.showInFolder(result.outputPath);
+  } else if (result && result.error) {
+    appendLog(`❌ Failed: ${result.error}`);
+  }
+
+  researchBusy = false;
+  checkResearchReady();
+  document.getElementById('btn-research-stop').style.display = 'none';
+});
+
+document.getElementById('btn-research-stop').addEventListener('click', () => {
+  window.api.stopResearch();
+  appendLog('⛔ Stop requested…');
+});
