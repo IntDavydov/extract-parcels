@@ -502,6 +502,180 @@ function classifyFeature(props) {
   return null;
 }
 
+function isAirportActiveMajorOrMilitary(props) {
+  const p = props || {};
+  const asStr = (v) => String(v || '').trim().toLowerCase();
+  const yes = (v) => ['yes', 'true', '1'].includes(asStr(v));
+
+  const aeroway = asStr(p.aeroway);
+  const military = asStr(p.military);
+  const status = asStr(p.status);
+  const airportType = asStr(p['aerodrome:type']);
+
+  // Inactive/obsolete features
+  const inactive = (
+    asStr(p.disused) === 'yes' ||
+    asStr(p.abandoned) === 'yes' ||
+    asStr(p.demolished) === 'yes' ||
+    asStr(p.proposed) === 'yes' ||
+    asStr(p.construction) === 'yes' ||
+    asStr(p['disused:aeroway']) !== '' ||
+    asStr(p['abandoned:aeroway']) !== '' ||
+    status === 'closed' ||
+    status === 'inactive'
+  );
+  if (inactive) return false;
+
+  const isMilitary = military === 'airfield' || military === 'yes';
+  if (isMilitary) return true;
+
+  // Exclude small/private/training-focused aviation facilities
+  if (aeroway === 'airstrip' || aeroway === 'helipad' || aeroway === 'heliport') return false;
+  if (airportType === 'private' || airportType === 'recreational' || airportType === 'gliding' || airportType === 'ultralight') return false;
+  if (asStr(p['access']) === 'private') return false;
+  if (asStr(p['usage']) === 'training') return false;
+  if (asStr(p['sport']) === 'gliding') return false;
+
+  // Keep only major/public-like aerodromes
+  const hasMajorCode = !!asStr(p.iata) || !!asStr(p.icao) || !!asStr(p.ref);
+  const scheduled = yes(p.scheduled_service);
+  const publicType = ['international', 'domestic', 'regional', 'public', 'civil'].includes(airportType);
+  return aeroway === 'aerodrome' && (hasMajorCode || scheduled || publicType);
+}
+
+function expandBBoxByKm(bbox, km) {
+  const { south, west, north, east } = bbox;
+  const latPad = km / 111.32;
+  const midLat = (south + north) / 2;
+  const lonPad = km / (111.32 * Math.max(0.2, Math.cos(midLat * Math.PI / 180)));
+  return {
+    south: south - latPad,
+    west: west - lonPad,
+    north: north + latPad,
+    east: east + lonPad,
+  };
+}
+
+function bboxCenterAndRadiusKm(bbox, extraKm = 0) {
+  const centerLat = (bbox.south + bbox.north) / 2;
+  const centerLon = (bbox.west + bbox.east) / 2;
+  const dxKm = (bbox.east - bbox.west) * 111.32 * Math.cos(centerLat * Math.PI / 180);
+  const dyKm = (bbox.north - bbox.south) * 111.32;
+  const radiusKm = Math.max(1, Math.sqrt(dxKm * dxKm + dyKm * dyKm) / 2 + extraKm);
+  return { centerLat, centerLon, radiusKm };
+}
+
+async function fetchNuclearFromWikidata(bbox, onProgress) {
+  const expanded = expandBBoxByKm(bbox, 30);
+  const { centerLat, centerLon, radiusKm } = bboxCenterAndRadiusKm(expanded, 0);
+  const sparql = `
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+SELECT ?item ?itemLabel ?coord WHERE {
+  SERVICE wikibase:around {
+    ?item wdt:P625 ?coord .
+    bd:serviceParam wikibase:center "Point(${centerLon} ${centerLat})"^^geo:wktLiteral .
+    bd:serviceParam wikibase:radius "${radiusKm.toFixed(2)}" .
+  }
+  ?item wdt:P31/wdt:P279* wd:Q159719 .
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "uk,en". }
+}
+LIMIT 250`;
+
+  const url = 'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
+  const raw = await httpGet(url, { Accept: 'application/sparql-results+json' }, 40000);
+  const data = JSON.parse(raw);
+  const bindings = (data.results && data.results.bindings) || [];
+  const features = [];
+  for (const b of bindings) {
+    const wkt = b.coord && b.coord.value;
+    const m = wkt && wkt.match(/^Point\(([-0-9.]+)\s+([-0-9.]+)\)$/);
+    if (!m) continue;
+    const lon = parseFloat(m[1]);
+    const lat = parseFloat(m[2]);
+    if (lon < expanded.west || lon > expanded.east || lat < expanded.south || lat > expanded.north) continue;
+    const itemUrl = (b.item && b.item.value) || '';
+    const qid = itemUrl.split('/').pop() || '';
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: {
+        name: (b.itemLabel && b.itemLabel.value) || qid || 'Nuclear plant',
+        wikidata: qid,
+        _layer: 'Nuclear Power Plants',
+        _type: 'nuclear_power_plant',
+        _source: 'Wikidata',
+      },
+    });
+  }
+  onProgress(`  → Wikidata fallback: ${features.length} nuclear site(s)`);
+  return features;
+}
+
+async function fetchNuclearFromOSM(bbox, onProgress, totalTimeoutMs = 90000) {
+  const expanded = expandBBoxByKm(bbox, 30);
+  const b = `${expanded.south},${expanded.west},${expanded.north},${expanded.east}`;
+  const ql = `[out:json][timeout:90];
+(
+  node["power"="plant"]["plant:source"="nuclear"](${b});
+  way["power"="plant"]["plant:source"="nuclear"](${b});
+  node["power"="generator"]["generator:source"="nuclear"](${b});
+  way["power"="generator"]["generator:source"="nuclear"](${b});
+  node["power"="plant"]["source"~"nuclear",i](${b});
+  way["power"="plant"]["source"~"nuclear",i](${b});
+  node["industrial"="nuclear"](${b});
+  way["industrial"="nuclear"](${b});
+);
+out body;
+>;
+out skel qt;`;
+
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+
+  const startedAt = Date.now();
+  let lastErr = null;
+  for (const endpoint of endpoints) {
+    const elapsed = Date.now() - startedAt;
+    const remaining = totalTimeoutMs - elapsed;
+    if (remaining <= 0) throw new Error(`OSM nuclear timeout after ${Math.round(totalTimeoutMs / 1000)}s`);
+    const reqTimeout = Math.min(remaining, 35000);
+    try {
+      const raw = await httpPost(endpoint, `data=${encodeURIComponent(ql)}`, {}, reqTimeout);
+      const trimmed = raw.trimStart();
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+        onProgress(`  ⚠ ${endpoint} returned non-JSON for nuclear query, trying next mirror…`);
+        continue;
+      }
+      const osmData = JSON.parse(raw);
+      const geojson = osmtogeojson(osmData);
+      const npp = geojson.features
+        .filter(f => classifyFeature(f.properties) === 'Nuclear Power Plants')
+        .map(f => ({
+          ...f,
+          properties: {
+            ...(f.properties || {}),
+            _layer: 'Nuclear Power Plants',
+            _type: 'nuclear_power_plant',
+            _source: 'OSM',
+          },
+        }));
+      onProgress(`  → OSM nuclear query returned ${npp.length} feature(s)`);
+      return npp;
+    } catch (e) {
+      lastErr = e;
+      onProgress(`  ⚠ ${endpoint} nuclear query failed: ${e.message}`);
+    }
+  }
+  throw new Error(lastErr ? lastErr.message : 'All OSM nuclear query mirrors failed');
+}
+
 // ── PZF Ukraine: fetch Nature Reserves from pzf.land.kiev.ua ─
 // Downloads KMZ files per category and oblast, parses KML, filters by bbox.
 
@@ -1199,8 +1373,8 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }];
   }
 
-  // 2. Build + run Overpass query (only if there are OSM vector layers to fetch)
-  const osmLayers = layers.filter(l => l !== 'wind');
+  // 2. Build + run Overpass query (only for non-wind, non-nuclear vector layers)
+  const osmLayers = layers.filter(l => l !== 'wind' && l !== 'nuclear_plants');
   if (osmLayers.length > 0) {
     const query = buildQuery(osmLayers, bbox);
     onProgress('📡 Sending query to Overpass API…');
@@ -1368,6 +1542,13 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (powerLineBufs.length) layerMap['Power Line Buffers'] = powerLineBufs;
     }
 
+    // Airoports: keep only active military + major/public airports
+    if (layerMap['Airoports']) {
+      const before = layerMap['Airoports'].length;
+      layerMap['Airoports'] = layerMap['Airoports'].filter(f => isAirportActiveMajorOrMilitary(f.properties));
+      onProgress(`  → Airoports filtered: ${layerMap['Airoports'].length}/${before} kept (active military/major only)`);
+    }
+
     // Airoports Buffer: 50km around all airport geometries
     if (layerMap['Airoports']) {
       const airportBufs = layerMap['Airoports']
@@ -1381,9 +1562,29 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (airportBufs.length) layerMap['Airoports Buffer'] = airportBufs;
     }
 
-    // Nuclear Power Plants Buffer: 30km around all nuclear plant geometries
-    if (layerMap['Nuclear Power Plants']) {
-      const nppBufs = layerMap['Nuclear Power Plants']
+    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport`);
+  } // end osmLayers block
+
+  // 3. Nuclear power plants: OSM (90s cap) -> Wikidata fallback
+  if (layers.includes('nuclear_plants')) {
+    let nppFeatures = [];
+    try {
+      onProgress('☢ Fetching nuclear power plants from OSM (timeout: 90s)…');
+      nppFeatures = await fetchNuclearFromOSM(bbox, onProgress, 90000);
+    } catch (err) {
+      onProgress(`  ⚠ OSM nuclear fetch failed/timed out: ${err.message}`);
+    }
+    if (!nppFeatures.length) {
+      onProgress('☢ Falling back to Wikidata (nuclear power plants only)…');
+      try {
+        nppFeatures = await fetchNuclearFromWikidata(bbox, onProgress);
+      } catch (err) {
+        onProgress(`  ⚠ Wikidata fallback failed: ${err.message}`);
+      }
+    }
+    if (nppFeatures.length) {
+      layerMap['Nuclear Power Plants'] = nppFeatures;
+      const nppBufs = nppFeatures
         .filter(f => f.geometry)
         .map(f => {
           try {
@@ -1392,12 +1593,13 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
           } catch (_) { return null; }
         }).filter(Boolean);
       if (nppBufs.length) layerMap['Nuclear Power Plants Buffer'] = nppBufs;
+      onProgress(`  → Nuclear layer: ${nppFeatures.length} plants, ${nppBufs.length} buffers`);
+    } else {
+      onProgress('  ⚠ No nuclear power plants found in OSM or Wikidata for this area');
     }
+  }
 
-    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport, ${layerMap['Nuclear Power Plants Buffer'] ? layerMap['Nuclear Power Plants Buffer'].length : 0} nuclear`);
-  } // end osmLayers block
-
-  // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
+  // 4. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
   if (layers.includes('settlements')) {
     onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
     try {
@@ -1410,7 +1612,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
-  // 6. Fetch Emerald Network from EEA official source
+  // 5. Fetch Emerald Network from EEA official source
   if (layers.includes('emerald')) {
     onProgress('🌿 Fetching Emerald Network from EEA (official data)…');
     try {
