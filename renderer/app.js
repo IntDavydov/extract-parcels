@@ -492,30 +492,54 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 });
 
 // ── e.land.gov.ua Lookup ────────────────────────────────────
+let preTabOutputFolder = '';
 let elandCsvPath = '';
 let elandBusy    = false;
+let researchBusy   = false;
+
+function checkElandReady() {
+  const ready = !!elandCsvPath && !!preTabOutputFolder && !elandBusy;
+  document.getElementById('btn-eland-start').disabled = !ready;
+}
+
+function checkResearchReady() {
+  const oblastVal = document.getElementById('research-oblast').value.trim();
+  document.getElementById('btn-research-start').disabled = !oblastVal || !preTabOutputFolder || researchBusy;
+}
+
+document.getElementById('btn-pre-tab-folder').addEventListener('click', async () => {
+  const result = await window.api.openFolderDialog();
+  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
+    preTabOutputFolder = result.filePaths[0];
+    document.getElementById('pre-tab-folder-display').textContent = preTabOutputFolder;
+    checkResearchReady();
+    checkElandReady();
+  }
+});
 
 document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async () => {
   const result = await window.api.openCsvDialog();
   if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
     elandCsvPath = result.filePaths[0];
     document.getElementById('cadnums-csv-display').textContent = elandCsvPath.split(/[\\/]/).pop();
-    document.getElementById('btn-eland-start').disabled = false;
+    checkElandReady();
   }
 });
 
 document.getElementById('btn-eland-start').addEventListener('click', async () => {
-  if (!elandCsvPath || elandBusy) return;
+  if (!elandCsvPath || !preTabOutputFolder || elandBusy) return;
   elandBusy = true;
-  document.getElementById('btn-eland-start').disabled = true;
+  checkElandReady();
   document.getElementById('btn-eland-stop').style.display = '';
 
-  const outputXlsx = elandCsvPath.replace(/\.csv$/i, '_eland.xlsx');
+  const csvName = elandCsvPath.split(/[\\/]/).pop() || 'cadnums.csv';
+  const baseName = csvName.replace(/\.csv$/i, '') || 'cadnums';
+  const outputXlsx = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + '_eland.xlsx';
   const result = await window.api.startElandLookup(elandCsvPath, outputXlsx);
   if (result && result.success) window.api.showInFolder(result.outputPath);
 
   elandBusy = false;
-  document.getElementById('btn-eland-start').disabled = false;
+  checkElandReady();
   document.getElementById('btn-eland-stop').style.display = 'none';
 });
 
@@ -524,36 +548,20 @@ document.getElementById('btn-eland-stop').addEventListener('click', () => {
 });
 
 // ── Pre-Research XLSX ───────────────────────────────────────
-let researchFolder = '';
-let researchBusy   = false;
-
-function checkResearchReady() {
-  const oblastVal = document.getElementById('research-oblast').value.trim();
-  document.getElementById('btn-research-start').disabled = !oblastVal || !researchFolder || researchBusy;
-}
 
 document.getElementById('research-oblast').addEventListener('input', checkResearchReady);
 
-document.getElementById('btn-research-folder').addEventListener('click', async () => {
-  const result = await window.api.openFolderDialog();
-  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
-    researchFolder = result.filePaths[0];
-    document.getElementById('research-folder-display').textContent = researchFolder.split(/[\\/]/).pop() || researchFolder;
-    checkResearchReady();
-  }
-});
-
 document.getElementById('btn-research-start').addEventListener('click', async () => {
   const oblastName = document.getElementById('research-oblast').value.trim();
-  if (!oblastName || !researchFolder || researchBusy) return;
+  if (!oblastName || !preTabOutputFolder || researchBusy) return;
 
   researchBusy = true;
-  document.getElementById('btn-research-start').disabled = true;
+  checkResearchReady();
   document.getElementById('btn-research-stop').style.display = '';
 
   // Build output path: sanitize oblast name → filename
   const safeName = oblastName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
-  const outputPath = researchFolder + (researchFolder.endsWith('/') || researchFolder.endsWith('\\') ? '' : '/') + safeName + '_research.xlsx';
+  const outputPath = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + safeName + '_research.xlsx';
 
   appendLog(`📊 Generating pre-research XLSX for "${oblastName}"…`);
   const result = await window.api.generateResearchXlsx(oblastName, outputPath);

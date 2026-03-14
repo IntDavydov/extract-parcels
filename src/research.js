@@ -5,16 +5,34 @@ const { getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatm
 // ── Overpass endpoint ─────────────────────────────────────
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const OVERPASS_ALT = 'https://overpass.kumi.systems/api/interpreter';
+const OVERPASS_ALT_2 = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+const OVERPASS_TIMEOUT_FAST_MS = 35000;
+const OVERPASS_TIMEOUT_NORMAL_MS = 55000;
 
-async function overpassQuery(ql, onProgress) {
+async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS) {
   const body = 'data=' + encodeURIComponent(ql);
-  for (const url of [OVERPASS_URL, OVERPASS_ALT]) {
+  let rawResponse = '';
+  for (const url of [OVERPASS_URL, OVERPASS_ALT, OVERPASS_ALT_2]) {
     try {
-      const raw = await httpPost(url, body, { 'Content-Type': 'application/x-www-form-urlencoded' });
-      return JSON.parse(raw);
+      rawResponse = await httpPost(
+        url,
+        body,
+        { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeoutMs
+      );
+      const trimmed = rawResponse.trimStart();
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+        onProgress && onProgress(`  ⚠ Overpass ${url} returned non-JSON, trying next mirror…`);
+        continue;
+      }
+      return JSON.parse(rawResponse);
     } catch (e) {
       onProgress && onProgress(`  ⚠ Overpass ${url} failed: ${e.message}`);
     }
+  }
+  if (rawResponse) {
+    const preview = rawResponse.slice(0, 300).replace(/\s+/g, ' ');
+    throw new Error(`All Overpass endpoints failed (last response was non-JSON): ${preview}`);
   }
   throw new Error('All Overpass endpoints failed');
 }
@@ -269,8 +287,13 @@ async function getBboxFromGeoJson(hromadaId, onProgress) {
   try {
     const raw = await httpGet(url);
     const geo = JSON.parse(raw);
-    if (!geo.geometry || geo.geometry.type !== 'Polygon') throw new Error('Invalid polygon geometry');
-    const coords = geo.geometry.coordinates[0] || [];
+    if (!geo.geometry || !['Polygon', 'MultiPolygon'].includes(geo.geometry.type)) {
+      throw new Error('Invalid polygon geometry');
+    }
+    const rings = geo.geometry.type === 'Polygon'
+      ? [geo.geometry.coordinates[0] || []]
+      : geo.geometry.coordinates.map(poly => poly[0] || []);
+    const coords = rings.flat();
     if (coords.length < 3) throw new Error('Polygon has less than 3 points');
     let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
     coords.forEach(([lon, lat]) => {
@@ -279,7 +302,10 @@ async function getBboxFromGeoJson(hromadaId, onProgress) {
       south = Math.min(south, lat);
       north = Math.max(north, lat);
     });
-    return { west, east, south, north };
+    return {
+      bbox: { west, east, south, north },
+      boundaryGeojson: geo.geometry,
+    };
   } catch (e) {
     throw new Error(`Failed to fetch geo_json for hromada ${hromadaId}: ${e.message}`);
   }
@@ -296,49 +322,83 @@ function bboxAreaKm2(bbox) {
   return (latM * lonM) / 1e6;
 }
 
-async function fetchOsmResearchData(bbox, onProgress) {
-  const { south, west, north, east } = bbox;
-  const b = `${south},${west},${north},${east}`;
+function ensureClosedRing(ring) {
+  if (!ring || ring.length < 3) return ring || [];
+  const [fx, fy] = ring[0];
+  const [lx, ly] = ring[ring.length - 1];
+  if (fx === lx && fy === ly) return ring;
+  return [...ring, ring[0]];
+}
 
-  const ql = `[out:json][timeout:180];
+function boundaryAreaM2(geometry) {
+  if (!geometry) return 0;
+  if (geometry.type === 'Polygon') {
+    const [outer = [], ...holes] = geometry.coordinates;
+    const outerArea = polygonAreaM2(ensureClosedRing(outer));
+    const holesArea = holes.reduce((sum, h) => sum + polygonAreaM2(ensureClosedRing(h)), 0);
+    return Math.max(0, outerArea - holesArea);
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.reduce((sum, poly) => {
+      const [outer = [], ...holes] = poly;
+      const outerArea = polygonAreaM2(ensureClosedRing(outer));
+      const holesArea = holes.reduce((hSum, h) => hSum + polygonAreaM2(ensureClosedRing(h)), 0);
+      return sum + Math.max(0, outerArea - holesArea);
+    }, 0);
+  }
+  return 0;
+}
+
+function normalizeElementBbox(el) {
+  if (typeof el.lon === 'number' && typeof el.lat === 'number') {
+    return { west: el.lon, east: el.lon, south: el.lat, north: el.lat };
+  }
+  if (el.center && typeof el.center.lon === 'number' && typeof el.center.lat === 'number') {
+    return { west: el.center.lon, east: el.center.lon, south: el.center.lat, north: el.center.lat };
+  }
+  if (Array.isArray(el.geometry) && el.geometry.length) {
+    let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+    el.geometry.forEach(p => {
+      if (typeof p.lon !== 'number' || typeof p.lat !== 'number') return;
+      west = Math.min(west, p.lon);
+      east = Math.max(east, p.lon);
+      south = Math.min(south, p.lat);
+      north = Math.max(north, p.lat);
+    });
+    if (Number.isFinite(west)) return { west, east, south, north };
+  }
+  return null;
+}
+
+function bboxesIntersect(a, b) {
+  return !(a.east < b.west || a.west > b.east || a.north < b.south || a.south > b.north);
+}
+
+async function prefetchOblastInfraData(oblastBbox, onProgress) {
+  const { south, west, north, east } = oblastBbox;
+  const b = `${south},${west},${north},${east}`;
+  const infraQl = `[out:json][timeout:120];
 (
-  way["landuse"="forest"](${b});
-  way["natural"="wood"](${b});
-  relation["landuse"="forest"](${b});
-  relation["natural"="wood"](${b});
-  way["power"="line"](${b});
-  node["power"="substation"](${b});
-  way["power"="substation"](${b});
+  way["power"="line"]["voltage"](${b});
+  node["power"="substation"]["name"](${b});
+  node["power"="substation"]["voltage"](${b});
+  way["power"="substation"]["name"](${b});
+  way["power"="substation"]["voltage"](${b});
   way["man_made"="pipeline"]["substance"="gas"](${b});
   way["pipeline"="gas"](${b});
 );
 out geom tags;`;
+  onProgress(`🌍 Prefetching oblast infrastructure (power/substations/gas) once…`);
+  const data = await overpassQuery(infraQl, onProgress, OVERPASS_TIMEOUT_NORMAL_MS);
+  const elements = (data.elements || []).map(el => ({ ...el, _bbox: normalizeElementBbox(el) }));
+  onProgress(`  ✅ Infra cache loaded: ${elements.length} elements`);
+  return elements;
+}
 
-  onProgress(`  → Querying Overpass for forest/power/gas data…`);
-  const data = await overpassQuery(ql, onProgress);
-  const elements = data.elements || [];
-
-  // ── Forest coverage ──────────────────────────────────────
-  let forestAreaM2 = 0;
-  elements.forEach(el => {
-    if (!['way', 'relation'].includes(el.type)) return;
-    const tags = el.tags || {};
-    if (tags.landuse !== 'forest' && tags.natural !== 'wood') return;
-    if (!el.geometry && !el.members) return;
-    // Build a ring from geometry if available
-    let ring = null;
-    if (el.geometry && el.geometry.length >= 3) {
-      ring = el.geometry.map(p => [p.lon, p.lat]);
-    }
-    if (ring) forestAreaM2 += polygonAreaM2(ring);
-  });
-
-  const totalAreaM2 = bboxAreaKm2(bbox) * 1e6;
-  const forestPct = totalAreaM2 > 0 ? Math.round((forestAreaM2 / totalAreaM2) * 1000) / 1000 : 0;
-
+function infraSummaryFromElements(infraElements) {
   // ── Power lines ──────────────────────────────────────────
   const voltages = new Set();
-  elements.forEach(el => {
+  infraElements.forEach(el => {
     if (el.type !== 'way') return;
     const tags = el.tags || {};
     if (tags.power !== 'line') return;
@@ -356,7 +416,7 @@ out geom tags;`;
 
   // ── Substations ──────────────────────────────────────────
   const substationNames = [];
-  elements.forEach(el => {
+  infraElements.forEach(el => {
     const tags = el.tags || {};
     if (tags.power !== 'substation') return;
     const name = tags.name || tags['name:uk'] || '';
@@ -369,10 +429,80 @@ out geom tags;`;
   const substationsText = substationNames.slice(0, 5).join('; ');
 
   // ── Gas pipelines ────────────────────────────────────────
-  const hasGas = elements.some(el => {
+  const hasGas = infraElements.some(el => {
     const tags = el.tags || {};
     return (tags.man_made === 'pipeline' && tags.substance === 'gas') || tags.pipeline === 'gas';
   });
+
+  return { powerLinesText, substationsText, hasGas };
+}
+
+async function fetchOsmResearchData(bbox, boundaryGeometry, onProgress, infraCacheElements = null) {
+  const { south, west, north, east } = bbox;
+  const b = `${south},${west},${north},${east}`;
+
+  const forestQl = `[out:json][timeout:120];
+(
+  way["landuse"="forest"](${b});
+  way["natural"="wood"](${b});
+ );
+ out geom tags;`;
+
+  const infraQl = `[out:json][timeout:90];
+(
+  way["power"="line"]["voltage"](${b});
+  node["power"="substation"]["name"](${b});
+  node["power"="substation"]["voltage"](${b});
+  way["power"="substation"]["name"](${b});
+  way["power"="substation"]["voltage"](${b});
+  way["man_made"="pipeline"]["substance"="gas"](${b});
+  way["pipeline"="gas"](${b});
+);
+out geom tags;`;
+
+  onProgress(`  → Querying Overpass for forest cover…`);
+  let forestElements = [];
+  try {
+    const forestData = await overpassQuery(forestQl, onProgress, OVERPASS_TIMEOUT_NORMAL_MS);
+    forestElements = forestData.elements || [];
+  } catch (e) {
+    onProgress(`  ⚠ Forest query timed out/failed: ${e.message}`);
+  }
+
+  let infraElements = [];
+  if (infraCacheElements && infraCacheElements.length) {
+    infraElements = infraCacheElements.filter(el => el._bbox && bboxesIntersect(el._bbox, bbox));
+    onProgress(`  → Using oblast infra cache: ${infraElements.length} nearby elements`);
+  } else {
+    onProgress(`  → Querying Overpass for power/substations/gas…`);
+    try {
+      const infraData = await overpassQuery(infraQl, onProgress, OVERPASS_TIMEOUT_FAST_MS);
+      infraElements = (infraData.elements || []).map(el => ({ ...el, _bbox: normalizeElementBbox(el) }));
+    } catch (e) {
+      onProgress(`  ⚠ Infra query timed out/failed: ${e.message}`);
+    }
+  }
+
+  // ── Forest coverage ──────────────────────────────────────
+  let forestAreaM2 = 0;
+  forestElements.forEach(el => {
+    if (el.type !== 'way') return;
+    const tags = el.tags || {};
+    if (tags.landuse !== 'forest' && tags.natural !== 'wood') return;
+    if (!el.geometry) return;
+    // Build a ring from geometry if available
+    let ring = null;
+    if (el.geometry && el.geometry.length >= 3) {
+      ring = el.geometry.map(p => [p.lon, p.lat]);
+    }
+    if (ring) forestAreaM2 += polygonAreaM2(ring);
+  });
+
+  const totalAreaM2 = boundaryAreaM2(boundaryGeometry) || (bboxAreaKm2(bbox) * 1e6);
+  const forestPctRaw = totalAreaM2 > 0 ? (forestAreaM2 / totalAreaM2) : 0;
+  const forestPct = Math.max(0, Math.min(1, Math.round(forestPctRaw * 1000) / 1000));
+
+  const { powerLinesText, substationsText, hasGas } = infraSummaryFromElements(infraElements);
 
   return {
     forestPct,
@@ -426,6 +556,8 @@ async function buildXlsx(rows, outputPath, oblastName) {
     const col = ws.getColumn(i + 1);
     col.width = colWidths[i] || 20;
   });
+  // Forest cover is stored as a fraction (e.g. 0.2) — display as percentage in Excel.
+  ws.getColumn(5).numFmt = '0%';
 
   // Header row
   const headerRow = ws.addRow(HEADERS);
@@ -529,8 +661,40 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
 
     onProgress(`  ✅ ${hromadas.length} hromadas to process`);
 
-    // 4. Process each hromada sequentially (Overpass throttles parallel requests)
+    // 4. Preload hromada boundaries + oblast infra cache
+    onProgress(`📐 Loading hromada boundaries for cache planning…`);
+    const hromadaGeo = new Map();
+    let oblastBbox = { west: Infinity, east: -Infinity, south: Infinity, north: -Infinity };
+    for (let i = 0; i < hromadas.length; i++) {
+      if (_stopRequested) { onProgress('⛔ Stopped by user'); break; }
+      const h = hromadas[i];
+      try {
+        const geo = await getBboxFromGeoJson(h.id, onProgress);
+        hromadaGeo.set(h.id, geo);
+        oblastBbox.west = Math.min(oblastBbox.west, geo.bbox.west);
+        oblastBbox.east = Math.max(oblastBbox.east, geo.bbox.east);
+        oblastBbox.south = Math.min(oblastBbox.south, geo.bbox.south);
+        oblastBbox.north = Math.max(oblastBbox.north, geo.bbox.north);
+      } catch (e) {
+        onProgress(`  ⚠ ${h.name}: boundary preload failed: ${e.message}`);
+      }
+      if ((i + 1) % 10 === 0 || i + 1 === hromadas.length) {
+        onProgress(`  → Boundaries loaded: ${i + 1}/${hromadas.length}`);
+      }
+    }
+
+    let oblastInfraCache = null;
+    if (Number.isFinite(oblastBbox.west)) {
+      try {
+        oblastInfraCache = await prefetchOblastInfraData(oblastBbox, onProgress);
+      } catch (e) {
+        onProgress(`  ⚠ Oblast infra prefetch failed, falling back to per-hromada infra queries: ${e.message}`);
+      }
+    }
+
+    // 5. Process each hromada sequentially (Overpass throttles parallel requests)
     const BATCH = 1;  // Process one at a time to avoid Overpass overload
+    const PARTIAL_SAVE_EVERY = 5;
     const results = [];
 
     for (let i = 0; i < hromadas.length; i += BATCH) {
@@ -562,69 +726,78 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
         try {
           // Resolve bbox using REST API geo_json endpoint
           onProgress(`  🔍 ${hromada.name}: fetching boundary…`);
-          const bbox = await getBboxFromGeoJson(hromada.id, onProgress);
+          const geo = hromadaGeo.get(hromada.id) || await getBboxFromGeoJson(hromada.id, onProgress);
+          const { bbox, boundaryGeojson } = geo;
 
-          // OSM data
-          try {
-            const osm = await fetchOsmResearchData(bbox, msg => onProgress(`  [${hromada.name}] ${msg}`));
-            row.forestPct = osm.forestPct;
-            row.powerLines = osm.powerLinesText;
-            row.substations = osm.substationsText;
-            row.hasGas = osm.hasGas;
-            row.roughness = estimateRoughnessLength(osm.forestPct);
-          } catch (e) {
-            onProgress(`  ⚠ ${hromada.name}: OSM error: ${e.message}`);
-          }
-
-          // Wind speed (150m)
-          try {
-            const wind = await fetchWindHeatmap(bbox, 150, msg => {});
-            row.windSpeed = wind.avgSpeed;
-          } catch (e) {
-            onProgress(`  ⚠ ${hromada.name}: Wind error: ${e.message}`);
-          }
-
-          // Emerald Network
-          try {
-            const emerald = await fetchEmeraldFromEEA(bbox, msg => {});
-            row.emerald = emerald.length > 0 ? '+' : '';
-          } catch (e) {
-            onProgress(`  ⚠ ${hromada.name}: Emerald error: ${e.message}`);
-          }
-
-          // Nature reserves (PZF)
-          try {
-            const pzf = await fetchNatureReservesFromPZF(bbox, msg => {});
-            if (pzf.length > 0) {
-              const names = [...new Set(pzf.map(f => f.properties.name).filter(Boolean))];
-              row.natureReserves = names.slice(0, 5).join('; ');
-            }
-          } catch (e) {
-            onProgress(`  ⚠ ${hromada.name}: PZF error: ${e.message}`);
-          }
-
-          // Decentralization.ua hromada page
-          if (hromada.id) {
-            try {
-              const pageInfo = await getHromadaPageInfo(hromada.id, browser, onProgress);
-              row.kpStage = pageInfo.kpStage;
-
-              if (pageInfo.officialSiteUrl) {
-                try {
-                  const siteInfo = await getOfficialSiteInfo(pageInfo.officialSiteUrl, browser, onProgress);
-                  row.address = siteInfo.address;
-                  row.head = siteInfo.head;
-                  row.urbanPlanningUrl = siteInfo.urbanPlanningUrl;
-                } catch (e) {
-                  onProgress(`  ⚠ ${hromada.name}: official site error: ${e.message}`);
-                }
+          const tasks = [
+            (async () => {
+              try {
+                const osm = await fetchOsmResearchData(
+                  bbox,
+                  boundaryGeojson,
+                  msg => onProgress(`  [${hromada.name}] ${msg}`),
+                  oblastInfraCache
+                );
+                row.forestPct = osm.forestPct;
+                row.powerLines = osm.powerLinesText;
+                row.substations = osm.substationsText;
+                row.hasGas = osm.hasGas;
+                row.roughness = estimateRoughnessLength(osm.forestPct);
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: OSM error: ${e.message}`);
               }
-            } catch (e) {
-              onProgress(`  ⚠ ${hromada.name}: page scrape error: ${e.message}`);
-            }
-          }
+            })(),
+            (async () => {
+              try {
+                const wind = await fetchWindHeatmap(bbox, 150, msg => {});
+                row.windSpeed = wind.avgSpeed;
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: Wind error: ${e.message}`);
+              }
+            })(),
+            (async () => {
+              try {
+                const emerald = await fetchEmeraldFromEEA(bbox, msg => {});
+                row.emerald = emerald.length > 0 ? '+' : '';
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: Emerald error: ${e.message}`);
+              }
+            })(),
+            (async () => {
+              try {
+                const pzf = await fetchNatureReservesFromPZF(bbox, msg => {});
+                if (pzf.length > 0) {
+                  const names = [...new Set(pzf.map(f => f.properties.name).filter(Boolean))];
+                  row.natureReserves = names.slice(0, 5).join('; ');
+                }
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: PZF error: ${e.message}`);
+              }
+            })(),
+            (async () => {
+              if (!hromada.id) return;
+              try {
+                const pageInfo = await getHromadaPageInfo(hromada.id, browser, onProgress);
+                row.kpStage = pageInfo.kpStage;
+                if (pageInfo.officialSiteUrl) {
+                  try {
+                    const siteInfo = await getOfficialSiteInfo(pageInfo.officialSiteUrl, browser, onProgress);
+                    row.address = siteInfo.address;
+                    row.head = siteInfo.head;
+                    row.urbanPlanningUrl = siteInfo.urbanPlanningUrl;
+                  } catch (e) {
+                    onProgress(`  ⚠ ${hromada.name}: official site error: ${e.message}`);
+                  }
+                }
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: page scrape error: ${e.message}`);
+              }
+            })(),
+          ];
+          await Promise.allSettled(tasks);
 
-          onProgress(`  ✅ ${hromada.name}: forest=${(row.forestPct * 100).toFixed(1)}%, wind=${row.windSpeed ?? '?'} m/s, emerald=${row.emerald || '-'}`);
+          const forestLog = row.forestPct != null ? `${(row.forestPct * 100).toFixed(1)}%` : '?';
+          onProgress(`  ✅ ${hromada.name}: forest=${forestLog}, wind=${row.windSpeed ?? '?'} m/s, emerald=${row.emerald || '-'}`);
         } catch (e) {
           onProgress(`  ❌ ${hromada.name}: ${e.message}`);
         }
@@ -637,9 +810,11 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
 
       results.push(...batchResults);
 
-      // Save after each hromada
-      await buildXlsx(results, outputPath, oblastName);
-      onProgress(`  💾 Partial save: ${results.length}/${hromadas.length} rows written`);
+      // Save periodically to reduce IO overhead
+      if (results.length % PARTIAL_SAVE_EVERY === 0 || results.length === hromadas.length) {
+        await buildXlsx(results, outputPath, oblastName);
+        onProgress(`  💾 Partial save: ${results.length}/${hromadas.length} rows written`);
+      }
     }
 
     // Final save

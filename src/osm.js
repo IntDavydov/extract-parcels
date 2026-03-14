@@ -81,7 +81,7 @@ function httpGetBuffer(url, headers = {}, timeoutMs = 120000) {
   });
 }
 
-function httpPost(url, body, headers = {}) {
+function httpPost(url, body, headers = {}, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const buf = Buffer.from(body);
@@ -102,7 +102,7 @@ function httpPost(url, body, headers = {}) {
       res.on('end', () => resolve(data));
     });
     req.on('error', reject);
-    req.setTimeout(300000, () => { req.destroy(); reject(new Error('Request timeout')); });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Request timeout')); });
     req.write(buf);
     req.end();
   });
@@ -417,6 +417,12 @@ async function getBbox(territory, onProgress, fallbackBbox) {
 function buildQuery(layers, bbox) {
   const { south, west, north, east } = bbox;
   const b = `${south},${west},${north},${east}`;
+  const expandBBoxKm = (km) => {
+    const latPad = km / 111.32;
+    const midLat = (south + north) / 2;
+    const lonPad = km / (111.32 * Math.max(0.2, Math.cos(midLat * Math.PI / 180)));
+    return `${south - latPad},${west - lonPad},${north + latPad},${east + lonPad}`;
+  };
   const parts = [];
 
   if (layers.includes('power_lines'))  parts.push(`way[power=line](${b});`);
@@ -450,6 +456,15 @@ function buildQuery(layers, bbox) {
     parts.push(`relation[boundary=protected_area](${b});`);
     parts.push(`way[boundary=protected_area](${b});`);
   }
+  if (layers.includes('airports')) {
+    const b50 = expandBBoxKm(50);
+    parts.push(`node["aeroway"~"^(aerodrome|airstrip|heliport|helipad)$"](${b50});`);
+    parts.push(`way["aeroway"~"^(aerodrome|airstrip|heliport|helipad)$"](${b50});`);
+    parts.push(`relation["aeroway"~"^(aerodrome|airstrip|heliport|helipad)$"](${b50});`);
+    parts.push(`node["military"="airfield"](${b50});`);
+    parts.push(`way["military"="airfield"](${b50});`);
+    parts.push(`relation["military"="airfield"](${b50});`);
+  }
 
   return `[out:json][timeout:180];\n(\n  ${parts.join('\n  ')}\n);\nout body;\n>;\nout skel qt;`;
 }
@@ -464,6 +479,7 @@ function classifyFeature(props) {
   if (p.place && ['city','town','village','hamlet','suburb'].includes(p.place)) return 'Settlements';
   if (p.waterway || p.natural === 'water' || p.landuse === 'reservoir') return 'Water';
   if (p.landuse === 'forest' || p.natural === 'wood') return 'Forests';
+  if (p.aeroway || p.military === 'airfield') return 'Airoports';
   if (p.boundary === 'protected_area' || p.protect_class) return 'Emerald Network';
   return null;
 }
@@ -1334,7 +1350,20 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (powerLineBufs.length) layerMap['Power Line Buffers'] = powerLineBufs;
     }
 
-    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line`);
+    // Airoports Buffer: 50km around all airport geometries
+    if (layerMap['Airoports']) {
+      const airportBufs = layerMap['Airoports']
+        .filter(f => f.geometry)
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 50, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Airoports Buffer', _type: 'buffer_50km' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (airportBufs.length) layerMap['Airoports Buffer'] = airportBufs;
+    }
+
+    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport`);
   } // end osmLayers block
 
   // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)

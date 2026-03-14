@@ -55,6 +55,7 @@
             <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
             <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
             <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
+            <label><input type="checkbox" name="layer" value="airports" /> ✈ Airoports + 50km buffer</label>
             <label><input type="checkbox" name="layer" value="nature_reserves" /> 🌿 Nature Reserves (PZF)</label>
             <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
           </div>
@@ -85,6 +86,14 @@
       </div>
 
       <div class="left-tab-panel" id="tab-panel-pre-research" role="tabpanel">
+        <div class="field">
+          <label style="font-size:12px;">Output folder for this tab <span style="color:#e05;">*required</span></label>
+          <div class="row" style="margin-top:4px;">
+            <button class="btn btn-secondary btn-sm" id="btn-pre-tab-folder">📁 Choose folder</button>
+            <span class="path-display" id="pre-tab-folder-display">not selected</span>
+          </div>
+        </div>
+
         <div class="tab-section">
           <h2>📊 Pre-Research XLSX</h2>
           <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
@@ -92,14 +101,6 @@
           <div class="field">
             <label style="font-size:12px;">Oblast name <span style="color:#888;font-size:11px;">(e.g. Рівненська область)</span></label>
             <input type="text" id="research-oblast" placeholder="Рівненська область" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:13px;width:100%;box-sizing:border-box;margin-top:4px;" />
-          </div>
-
-          <div class="field" style="margin-top:8px;">
-            <label style="font-size:12px;">Output folder</label>
-            <div class="row" style="margin-top:4px;">
-              <button class="btn btn-secondary btn-sm" id="btn-research-folder">📁 Choose folder</button>
-              <span class="path-display" id="research-folder-display">not selected</span>
-            </div>
           </div>
 
           <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">

@@ -16,6 +16,13 @@ const LAYER_STYLES = {
   'Towers_High':        { point: 'ff00a5ff' },         // 110–220 kV — Orange
   'Towers_Extra':       { point: 'ff0000ff' },         // > 220 kV  — Red
   'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
+  'Airoports':          {
+    poly: '66ffbf00',
+    line: 'ffffbf00',
+    point: 'ffffbf00',
+    icon: 'http://maps.google.com/mapfiles/kml/paddle/wht-blank.png',
+    width: 2,
+  },
   'Roads':              { line: 'ff000000' },
   'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
   'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
@@ -36,6 +43,7 @@ const LAYER_STYLES = {
   'Forest Buffers':        { poly: '807fff00', line: '007fff00', width: 2, noOutline: true },
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
   'Power Line Buffers':    { poly: '5500ffff', line: '8800ffff', width: 2, noOutline: true },
+  'Airoports Buffer':      { poly: '33ffbf00', line: '88ffbf00', width: 2, noOutline: true },
   'Nature Reserve Buffer': {
     poly: '80005555',
     line: '66005555',
@@ -55,7 +63,7 @@ const LAYER_GROUPS = [
   { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order
-const ROOT_ORDER = ['Territory Boundary', 'Roads', 'Road Buffers'];
+const ROOT_ORDER = ['Territory Boundary', 'Roads', 'Road Buffers', 'Airoports', 'Airoports Buffer'];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -274,6 +282,15 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       continue;
     }
     if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue; // already nested above
+    // Airoports: nest 50km buffer inside the Airoports folder
+    if (layerName === 'Airoports' && layerMap['Airoports Buffer']) {
+      const airportsFolder = layerFolder('Airoports');
+      const bufferFolder = layerFolder('Airoports Buffer');
+      addedRoot.add('Airoports Buffer');
+      folders.push(`<Folder><name>${escXml('Airoports')}</name>${airportsFolder}${bufferFolder}</Folder>`);
+      continue;
+    }
+    if (layerName === 'Airoports Buffer' && addedRoot.has('Airoports Buffer')) continue;
     // Coords-named parcel layer: wrap in Parcels > coords/folder > Boundary + Parcels subfolder
     if (!LAYER_STYLES[layerName] && !addedRoot.has('Parcel Boundaries')) {
       addedRoot.add('Parcel Boundaries');
