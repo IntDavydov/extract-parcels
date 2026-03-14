@@ -17,6 +17,15 @@ function sanitizeFilename(name) {
 
 // Forward all main-process log events to the single log area
 window.api.onLog((msg) => appendLog(msg));
+window.api.onDownloadProgress((data) => {
+  const progress = document.getElementById('offline-download-progress');
+  const status = document.getElementById('offline-download-status');
+  if (!progress || !status || !data) return;
+  const overall = Math.max(0, Math.min(100, Number(data.overallPercent || 0)));
+  progress.style.width = `${overall}%`;
+  const perFile = Number.isFinite(Number(data.percent)) ? `${Math.max(0, Math.min(100, Number(data.percent)))}%` : '?';
+  status.textContent = `${data.file || 'Downloading'}: ${perFile} (overall ${overall}%)`;
+});
 
 function initLeftTabs() {
   const tabButtons = [...document.querySelectorAll('.left-tab-btn')];
@@ -496,6 +505,7 @@ let preTabOutputFolder = '';
 let elandCsvPath = '';
 let elandBusy    = false;
 let researchBusy   = false;
+let offlineDownloadBusy = false;
 
 function checkElandReady() {
   const ready = !!elandCsvPath && !!preTabOutputFolder && !elandBusy;
@@ -581,4 +591,39 @@ document.getElementById('btn-research-start').addEventListener('click', async ()
 document.getElementById('btn-research-stop').addEventListener('click', () => {
   window.api.stopResearch();
   appendLog('⛔ Stop requested…');
+});
+
+document.getElementById('btn-offline-download').addEventListener('click', async () => {
+  if (offlineDownloadBusy) return;
+  offlineDownloadBusy = true;
+  const btn = document.getElementById('btn-offline-download');
+  const status = document.getElementById('offline-download-status');
+  const progress = document.getElementById('offline-download-progress');
+  const worldcoverUrl = document.getElementById('offline-worldcover-url').value.trim();
+  const geologyUrl = document.getElementById('offline-geology-url').value.trim();
+  btn.disabled = true;
+  progress.style.width = '0%';
+  status.textContent = 'starting...';
+  appendLog('⬇ Starting offline dataset download...');
+  const result = await window.api.downloadOfflineData({ worldcoverUrl, geologyUrl });
+  if (result && result.success) {
+    status.textContent = 'done';
+    progress.style.width = '100%';
+    appendLog(`✅ Offline datasets downloaded to: ${result.cacheDir}`);
+    if (result.skipped && result.skipped.length) {
+      appendLog(`ℹ Skipped optional datasets: ${result.skipped.map(s => s.label).join(', ')}`);
+    }
+    if (result.failed && result.failed.length) {
+      appendLog(`⚠ Failed datasets: ${result.failed.map(f => `${f.label} (${f.reason})`).join('; ')}`);
+    }
+    window.api.showInFolder(result.cacheDir);
+  } else {
+    status.textContent = 'failed';
+    appendLog(`❌ Offline download failed: ${result?.error || 'unknown error'}`);
+    if (result?.failed?.length) {
+      appendLog(`⚠ Failed datasets: ${result.failed.map(f => `${f.label} (${f.reason})`).join('; ')}`);
+    }
+  }
+  btn.disabled = false;
+  offlineDownloadBusy = false;
 });

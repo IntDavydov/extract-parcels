@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, httpGet, httpPost, polygonAreaM2 } = require('./osm');
 
 // ── Overpass endpoint ─────────────────────────────────────
@@ -16,6 +19,56 @@ const TASK_TIMEOUTS_MS = {
   pzf: 35000,
   page: 45000,
 };
+const LOCAL_WIND_TIFF_CANDIDATES = [
+  'test-files/UKR_wind-speed_150m.tif',
+  'test-files/ukr_wind_speed_150m.tif',
+  'test-files/wind-speed-150m-ukraine.tif',
+  'test-files/gwa_wind_150m.tif',
+  'UKR_wind-speed_150m.tif',
+  'ukr_wind_speed_150m.tif',
+  'wind-speed-150m-ukraine.tif',
+  'gwa_wind_150m.tif',
+];
+let _localWindDatasetPromise = null;
+const LOCAL_INFRA_CACHE_CANDIDATES = [
+  'test-files/ukraine-infra-cache.json',
+  'test-files/infra-cache.json',
+  'test-files/ukraine-infra-cache.geojson',
+  'ukraine-infra-cache.json',
+  'infra-cache.json',
+  'ukraine-infra-cache.geojson',
+];
+let _localInfraCachePromise = null;
+const GENERATED_INFRA_CACHE_PATH = path.join(os.homedir(), '.land-management-cache', 'ukraine-infra-cache.json');
+const LOCAL_PBF_CANDIDATES = [
+  'test-files/ukraine-latest.osm.pbf',
+  'test-files/ukraine.osm.pbf',
+  'test-files/ukraine-latest.pbf',
+  'ukraine-latest.osm.pbf',
+  'ukraine.osm.pbf',
+  'ukraine-latest.pbf',
+];
+const LOCAL_WORLDCOVER_TIFF_CANDIDATES = [
+  'test-files/ESA_WorldCover_2021_Ukraine.tif',
+  'test-files/ESA_WorldCover_Ukraine.tif',
+  'test-files/worldcover-ukraine.tif',
+  'test-files/worldcover_ukraine.tif',
+  'ESA_WorldCover_2021_Ukraine.tif',
+  'ESA_WorldCover_Ukraine.tif',
+  'worldcover-ukraine.tif',
+  'worldcover_ukraine.tif',
+];
+const TREE_COVER_CLASSES = new Set([10]);
+let _localWorldCoverDatasetPromise = null;
+const LOCAL_GEOLOGY_CANDIDATES = [
+  'test-files/geology-karst.geojson',
+  'test-files/geology.geojson',
+  'test-files/karst.geojson',
+  'geology-karst.geojson',
+  'geology.geojson',
+  'karst.geojson',
+];
+let _localGeologyDatasetPromise = null;
 
 function withTimeout(promise, timeoutMs, label) {
   let timer = null;
@@ -25,6 +78,243 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+}
+
+function getGeometryCentroid(geometry, fallbackBbox = null) {
+  if (!geometry) {
+    if (!fallbackBbox) return null;
+    return [(fallbackBbox.west + fallbackBbox.east) / 2, (fallbackBbox.south + fallbackBbox.north) / 2];
+  }
+  const rings = [];
+  if (geometry.type === 'Polygon') {
+    if (Array.isArray(geometry.coordinates[0])) rings.push(geometry.coordinates[0]);
+  } else if (geometry.type === 'MultiPolygon') {
+    for (const poly of geometry.coordinates) {
+      if (Array.isArray(poly[0])) rings.push(poly[0]);
+    }
+  }
+  let sumLon = 0;
+  let sumLat = 0;
+  let count = 0;
+  for (const ring of rings) {
+    for (const p of ring) {
+      if (!Array.isArray(p) || p.length < 2) continue;
+      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+      sumLon += p[0];
+      sumLat += p[1];
+      count += 1;
+    }
+  }
+  if (count > 0) return [sumLon / count, sumLat / count];
+  if (!fallbackBbox) return null;
+  return [(fallbackBbox.west + fallbackBbox.east) / 2, (fallbackBbox.south + fallbackBbox.north) / 2];
+}
+
+function pointInRing(point, ring) {
+  const [px, py] = point;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-12) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function pointInGeometry(point, geometry) {
+  if (!geometry) return false;
+  if (geometry.type === 'Polygon') {
+    const [outer = [], ...holes] = geometry.coordinates || [];
+    if (!outer.length || !pointInRing(point, outer)) return false;
+    return !holes.some(h => h.length && pointInRing(point, h));
+  }
+  if (geometry.type === 'MultiPolygon') {
+    for (const poly of geometry.coordinates || []) {
+      const [outer = [], ...holes] = poly || [];
+      if (!outer.length || !pointInRing(point, outer)) continue;
+      if (!holes.some(h => h.length && pointInRing(point, h))) return true;
+    }
+  }
+  return false;
+}
+
+function getSearchRoots() {
+  const isPackaged = __dirname.includes('app.asar');
+  const appRoot = isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : path.join(__dirname, '..');
+  const appAsarRoot = isPackaged ? path.join(process.resourcesPath, 'app.asar') : null;
+  const cacheRoot = path.dirname(GENERATED_INFRA_CACHE_PATH);
+  return [appRoot, appAsarRoot, process.cwd(), cacheRoot].filter(Boolean);
+}
+
+function resolveFromCandidates(candidates) {
+  const roots = getSearchRoots();
+  for (const root of roots) {
+    for (const rel of candidates) {
+      const full = path.join(root, rel);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
+function resolveLocalWindTiffPath() {
+  return resolveFromCandidates(LOCAL_WIND_TIFF_CANDIDATES);
+}
+
+async function loadLocalWindDataset(onProgress) {
+  if (!_localWindDatasetPromise) {
+    _localWindDatasetPromise = (async () => {
+      const tiffPath = resolveLocalWindTiffPath();
+      if (!tiffPath) return null;
+      const geotiff = require('geotiff');
+      const tiffBuffer = fs.readFileSync(tiffPath);
+      const tiff = await geotiff.fromArrayBuffer(
+        tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
+      );
+      const image = await tiff.getImage();
+      const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
+      const width = image.getWidth();
+      const height = image.getHeight();
+      const noDataRaw = image.getGDALNoData && image.getGDALNoData();
+      const noData = noDataRaw == null ? null : Number(noDataRaw);
+      if (onProgress) onProgress(`  → Local wind GeoTIFF loaded: ${path.basename(tiffPath)} (${width}x${height})`);
+      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+    })().catch((err) => {
+      _localWindDatasetPromise = Promise.resolve(null);
+      if (onProgress) onProgress(`  ⚠ Local wind GeoTIFF unavailable: ${err.message}`);
+      return null;
+    });
+  }
+  return _localWindDatasetPromise;
+}
+
+async function getLocalWindSpeedAtCentroid(boundaryGeometry, bbox, onProgress) {
+  const dataset = await loadLocalWindDataset(onProgress);
+  if (!dataset) return null;
+  const centroid = getGeometryCentroid(boundaryGeometry, bbox);
+  if (!centroid) return null;
+  const [lon, lat] = centroid;
+  const { minLon, minLat, maxLon, maxLat, width, height } = dataset;
+  if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) return null;
+  const xRes = (maxLon - minLon) / width;
+  const yRes = (maxLat - minLat) / height;
+  if (!isFinite(xRes) || !isFinite(yRes) || xRes <= 0 || yRes <= 0) return null;
+  const px = Math.max(0, Math.min(width - 1, Math.floor((lon - minLon) / xRes)));
+  const py = Math.max(0, Math.min(height - 1, Math.floor((maxLat - lat) / yRes)));
+  const values = await dataset.image.readRasters({ window: [px, py, px + 1, py + 1] });
+  const v = values && values[0] ? Number(values[0][0]) : NaN;
+  if (!isFinite(v)) return null;
+  if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(v - dataset.noData) < 1e-6) return null;
+  if (v <= 0 || v > 80) return null;
+  return Math.round(v * 100) / 100;
+}
+
+async function loadLocalWorldCoverDataset(onProgress) {
+  if (!_localWorldCoverDatasetPromise) {
+    _localWorldCoverDatasetPromise = (async () => {
+      const tiffPath = resolveFromCandidates(LOCAL_WORLDCOVER_TIFF_CANDIDATES);
+      if (!tiffPath) return null;
+      const geotiff = require('geotiff');
+      const tiffBuffer = fs.readFileSync(tiffPath);
+      const tiff = await geotiff.fromArrayBuffer(
+        tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
+      );
+      const image = await tiff.getImage();
+      const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
+      const width = image.getWidth();
+      const height = image.getHeight();
+      const noDataRaw = image.getGDALNoData && image.getGDALNoData();
+      const noData = noDataRaw == null ? null : Number(noDataRaw);
+      if (onProgress) onProgress(`  → Local WorldCover loaded: ${path.basename(tiffPath)} (${width}x${height})`);
+      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+    })().catch((err) => {
+      _localWorldCoverDatasetPromise = Promise.resolve(null);
+      if (onProgress) onProgress(`  ⚠ Local WorldCover unavailable: ${err.message}`);
+      return null;
+    });
+  }
+  return _localWorldCoverDatasetPromise;
+}
+
+async function getLocalForestPct(boundaryGeometry, bbox, onProgress) {
+  const dataset = await loadLocalWorldCoverDataset(onProgress);
+  if (!dataset || !boundaryGeometry) return null;
+  const { minLon, minLat, maxLon, maxLat, width, height } = dataset;
+  const clipWest = Math.max(minLon, bbox.west);
+  const clipEast = Math.min(maxLon, bbox.east);
+  const clipSouth = Math.max(minLat, bbox.south);
+  const clipNorth = Math.min(maxLat, bbox.north);
+  if (!(clipWest < clipEast && clipSouth < clipNorth)) return null;
+  const xRes = (maxLon - minLon) / width;
+  const yRes = (maxLat - minLat) / height;
+  if (!isFinite(xRes) || !isFinite(yRes) || xRes <= 0 || yRes <= 0) return null;
+
+  const left = Math.max(0, Math.floor((clipWest - minLon) / xRes));
+  const right = Math.min(width, Math.ceil((clipEast - minLon) / xRes));
+  const top = Math.max(0, Math.floor((maxLat - clipNorth) / yRes));
+  const bottom = Math.min(height, Math.ceil((maxLat - clipSouth) / yRes));
+  if (!(left < right && top < bottom)) return null;
+
+  const rasters = await dataset.image.readRasters({ window: [left, top, right, bottom] });
+  const data = rasters && rasters[0] ? rasters[0] : null;
+  if (!data) return null;
+
+  const winWidth = right - left;
+  const winHeight = bottom - top;
+  let total = 0;
+  let tree = 0;
+  for (let y = 0; y < winHeight; y++) {
+    for (let x = 0; x < winWidth; x++) {
+      const idx = y * winWidth + x;
+      const cls = Number(data[idx]);
+      if (!Number.isFinite(cls)) continue;
+      if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(cls - dataset.noData) < 1e-6) continue;
+      const lon = minLon + (left + x + 0.5) * xRes;
+      const lat = maxLat - (top + y + 0.5) * yRes;
+      if (!pointInGeometry([lon, lat], boundaryGeometry)) continue;
+      total += 1;
+      if (TREE_COVER_CLASSES.has(cls)) tree += 1;
+    }
+  }
+  if (!total) return null;
+  return Math.max(0, Math.min(1, Math.round((tree / total) * 1000) / 1000));
+}
+
+async function loadLocalGeologyDataset(onProgress) {
+  if (!_localGeologyDatasetPromise) {
+    _localGeologyDatasetPromise = (async () => {
+      const geoPath = resolveFromCandidates(LOCAL_GEOLOGY_CANDIDATES);
+      if (!geoPath) return null;
+      const raw = fs.readFileSync(geoPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const features = parsed && parsed.type === 'FeatureCollection' ? (parsed.features || []) : [];
+      if (onProgress) onProgress(`  → Local geology dataset loaded: ${path.basename(geoPath)} (${features.length} features)`);
+      return { geoPath, features };
+    })().catch((err) => {
+      _localGeologyDatasetPromise = Promise.resolve(null);
+      if (onProgress) onProgress(`  ⚠ Local geology dataset unavailable: ${err.message}`);
+      return null;
+    });
+  }
+  return _localGeologyDatasetPromise;
+}
+
+async function getLocalGeologyAndKarst(boundaryGeometry, bbox, onProgress) {
+  const ds = await loadLocalGeologyDataset(onProgress);
+  if (!ds || !boundaryGeometry) return { karstRisk: '', geologicalConditions: '' };
+  const centroid = getGeometryCentroid(boundaryGeometry, bbox);
+  if (!centroid) return { karstRisk: '', geologicalConditions: '' };
+  const found = ds.features.find(f => pointInGeometry(centroid, f.geometry));
+  if (!found) return { karstRisk: '', geologicalConditions: '' };
+  const p = found.properties || {};
+  const karstRisk = p.karst_risk || p.karstRisk || p.karst || p.risk || p['Ризик'] || '';
+  const geologicalConditions =
+    p.geology || p.geological || p.lithology || p.formation || p.name || p['Характеристика'] || '';
+  return { karstRisk: String(karstRisk || ''), geologicalConditions: String(geologicalConditions || '') };
 }
 
 async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS, totalTimeoutMs = 0) {
@@ -400,6 +690,159 @@ function bboxesIntersect(a, b) {
   return !(a.east < b.west || a.west > b.east || a.north < b.south || a.south > b.north);
 }
 
+function resolveLocalInfraCachePath() {
+  const predefined = resolveFromCandidates(LOCAL_INFRA_CACHE_CANDIDATES);
+  if (predefined) return predefined;
+  return fs.existsSync(GENERATED_INFRA_CACHE_PATH) ? GENERATED_INFRA_CACHE_PATH : null;
+}
+
+function resolveLocalPbfPath() {
+  return resolveFromCandidates(LOCAL_PBF_CANDIDATES);
+}
+
+function convertGeoJsonFeatureToInfraElement(feature) {
+  if (!feature || feature.type !== 'Feature' || !feature.geometry || !feature.properties) return null;
+  const tags = feature.properties.tags || feature.properties;
+  const g = feature.geometry;
+  if (!tags || (!tags.power && !tags.pipeline && !tags.man_made)) return null;
+  const el = { type: 'way', tags: { ...tags } };
+  if (g.type === 'Point' && Array.isArray(g.coordinates)) {
+    el.type = 'node';
+    el.lon = Number(g.coordinates[0]);
+    el.lat = Number(g.coordinates[1]);
+  } else if (g.type === 'LineString' && Array.isArray(g.coordinates)) {
+    el.geometry = g.coordinates.map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
+  } else if (g.type === 'Polygon' && Array.isArray(g.coordinates[0])) {
+    el.geometry = g.coordinates[0].map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
+  } else if (g.type === 'MultiLineString' && Array.isArray(g.coordinates[0])) {
+    el.geometry = g.coordinates[0].map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
+  } else {
+    return null;
+  }
+  return el;
+}
+
+function isInfraTagged(tags) {
+  if (!tags) return false;
+  if (tags.power === 'line') return true;
+  if (tags.power === 'substation') return true;
+  if (tags.man_made === 'pipeline' && tags.substance === 'gas') return true;
+  if (tags.pipeline === 'gas') return true;
+  return false;
+}
+
+async function parsePbfCollectInfra(pbfPath, onProgress) {
+  const parseOSM = require('osm-pbf-parser');
+  const wayCandidates = new Map();
+  const nodeInfra = [];
+  const neededNodeIds = new Set();
+  const pass1Stats = { node: 0, way: 0 };
+  await new Promise((resolve, reject) => {
+    const parser = parseOSM();
+    fs.createReadStream(pbfPath)
+      .pipe(parser)
+      .on('data', (items) => {
+        for (const item of items || []) {
+          if (!item || !item.tags) continue;
+          if (item.type === 'node') {
+            if (item.tags.power === 'substation') {
+              nodeInfra.push({
+                type: 'node',
+                lon: Number(item.lon),
+                lat: Number(item.lat),
+                tags: item.tags,
+              });
+              pass1Stats.node += 1;
+            }
+            continue;
+          }
+          if (item.type !== 'way' || !isInfraTagged(item.tags) || !Array.isArray(item.refs) || !item.refs.length) continue;
+          const id = String(item.id);
+          if (!wayCandidates.has(id)) {
+            wayCandidates.set(id, { id, refs: item.refs.slice(), tags: { ...item.tags } });
+            item.refs.forEach((ref) => neededNodeIds.add(String(ref)));
+            pass1Stats.way += 1;
+          }
+        }
+      })
+      .on('error', reject)
+      .on('end', resolve);
+  });
+  onProgress(`  → PBF pass 1 done: ${pass1Stats.way} ways, ${pass1Stats.node} tagged nodes`);
+
+  const nodeCoords = new Map();
+  await new Promise((resolve, reject) => {
+    const parser = parseOSM();
+    fs.createReadStream(pbfPath)
+      .pipe(parser)
+      .on('data', (items) => {
+        for (const item of items || []) {
+          if (!item || item.type !== 'node') continue;
+          const id = String(item.id);
+          if (!neededNodeIds.has(id)) continue;
+          nodeCoords.set(id, [Number(item.lon), Number(item.lat)]);
+        }
+      })
+      .on('error', reject)
+      .on('end', resolve);
+  });
+  onProgress(`  → PBF pass 2 done: ${nodeCoords.size}/${neededNodeIds.size} referenced nodes resolved`);
+
+  const elements = [];
+  for (const entry of wayCandidates.values()) {
+    const geometry = entry.refs
+      .map((ref) => nodeCoords.get(String(ref)))
+      .filter(Boolean)
+      .map(([lon, lat]) => ({ lon, lat }));
+    if (!geometry.length) continue;
+    elements.push({ type: 'way', tags: entry.tags, geometry });
+  }
+  elements.push(...nodeInfra.filter((n) => Number.isFinite(n.lon) && Number.isFinite(n.lat)));
+  return elements;
+}
+
+async function buildInfraCacheFromPbf(onProgress) {
+  const pbfPath = resolveLocalPbfPath();
+  if (!pbfPath) return null;
+  onProgress(`📦 Building offline infra cache from PBF: ${path.basename(pbfPath)} (one-time)…`);
+  const elements = await parsePbfCollectInfra(pbfPath, onProgress);
+  const outDir = path.dirname(GENERATED_INFRA_CACHE_PATH);
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(GENERATED_INFRA_CACHE_PATH, JSON.stringify({ elements }, null, 2), 'utf8');
+  onProgress(`  ✅ Offline infra cache saved: ${GENERATED_INFRA_CACHE_PATH} (${elements.length} elements)`);
+  return GENERATED_INFRA_CACHE_PATH;
+}
+
+async function loadLocalInfraCache(onProgress) {
+  if (_localInfraCachePromise) return _localInfraCachePromise;
+  _localInfraCachePromise = (async () => {
+    let cachePath = resolveLocalInfraCachePath();
+    if (!cachePath) cachePath = await buildInfraCacheFromPbf(onProgress);
+    if (!cachePath) return null;
+    const raw = fs.readFileSync(cachePath, 'utf8');
+    let parsed = JSON.parse(raw);
+    let elements = [];
+    if (Array.isArray(parsed)) {
+      elements = parsed;
+    } else if (parsed && Array.isArray(parsed.elements)) {
+      elements = parsed.elements;
+    } else if (parsed && parsed.type === 'FeatureCollection' && Array.isArray(parsed.features)) {
+      elements = parsed.features.map(convertGeoJsonFeatureToInfraElement).filter(Boolean);
+    } else {
+      throw new Error('Unsupported infra cache format');
+    }
+    const normalized = elements
+      .map((el) => ({ ...el, _bbox: normalizeElementBbox(el) }))
+      .filter((el) => el._bbox);
+    onProgress(`📦 Using local infra cache: ${path.basename(cachePath)} (${normalized.length} elements)`);
+    return normalized;
+  })().catch((err) => {
+    onProgress(`  ⚠ Local infra cache load failed: ${err.message}`);
+    return null;
+  });
+  return _localInfraCachePromise;
+}
+
 async function prefetchOblastInfraData(oblastBbox, onProgress) {
   const { south, west, north, east } = oblastBbox;
   const b = `${south},${west},${north},${east}`;
@@ -463,7 +906,7 @@ function infraSummaryFromElements(infraElements) {
   return { powerLinesText, substationsText, hasGas };
 }
 
-async function fetchOsmResearchData(bbox, boundaryGeometry, onProgress, infraCacheElements = null) {
+async function fetchOsmResearchData(bbox, boundaryGeometry, onProgress, infraCacheElements = null, forestOverride = null) {
   const { south, west, north, east } = bbox;
   const b = `${south},${west},${north},${east}`;
 
@@ -486,18 +929,20 @@ async function fetchOsmResearchData(bbox, boundaryGeometry, onProgress, infraCac
 );
 out geom tags;`;
 
-  onProgress(`  → Querying Overpass for forest cover…`);
   let forestElements = [];
-  try {
-    const forestData = await overpassQuery(
-      forestQl,
-      onProgress,
-      20000,
-      OVERPASS_FOREST_TOTAL_TIMEOUT_MS
-    );
-    forestElements = forestData.elements || [];
-  } catch (e) {
-    onProgress(`  ⚠ Forest query timed out/failed: ${e.message}`);
+  if (forestOverride == null) {
+    onProgress(`  → Querying Overpass for forest cover…`);
+    try {
+      const forestData = await overpassQuery(
+        forestQl,
+        onProgress,
+        20000,
+        OVERPASS_FOREST_TOTAL_TIMEOUT_MS
+      );
+      forestElements = forestData.elements || [];
+    } catch (e) {
+      onProgress(`  ⚠ Forest query timed out/failed: ${e.message}`);
+    }
   }
 
   let infraElements = [];
@@ -530,7 +975,9 @@ out geom tags;`;
   });
 
   const totalAreaM2 = boundaryAreaM2(boundaryGeometry) || (bboxAreaKm2(bbox) * 1e6);
-  const forestPctRaw = totalAreaM2 > 0 ? (forestAreaM2 / totalAreaM2) : 0;
+  const forestPctRaw = forestOverride != null
+    ? forestOverride
+    : (totalAreaM2 > 0 ? (forestAreaM2 / totalAreaM2) : 0);
   const forestPct = Math.max(0, Math.min(1, Math.round(forestPctRaw * 1000) / 1000));
 
   const { powerLinesText, substationsText, hasGas } = infraSummaryFromElements(infraElements);
@@ -620,8 +1067,8 @@ async function buildXlsx(rows, outputPath, oblastName) {
       r.substations || '',
       r.kpStage || '',
       r.roughness != null ? r.roughness : '',
-      '',  // Карст — blank
-      '',  // Геологія — blank
+      r.karstRisk || '',
+      r.geologicalConditions || '',
       '',  // Висновки — blank
       r.address || '',
       r.head || '',
@@ -717,7 +1164,13 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
     let oblastInfraCache = null;
     if (Number.isFinite(oblastBbox.west)) {
       try {
-        oblastInfraCache = await prefetchOblastInfraData(oblastBbox, onProgress);
+        const localInfraCache = await loadLocalInfraCache(onProgress);
+        if (localInfraCache && localInfraCache.length) {
+          oblastInfraCache = localInfraCache.filter(el => bboxesIntersect(el._bbox, oblastBbox));
+          onProgress(`  ✅ Local infra cache prepared: ${oblastInfraCache.length} elements in oblast bbox`);
+        } else {
+          oblastInfraCache = await prefetchOblastInfraData(oblastBbox, onProgress);
+        }
       } catch (e) {
         onProgress(`  ⚠ Oblast infra prefetch failed, falling back to per-hromada infra queries: ${e.message}`);
       }
@@ -749,6 +1202,8 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
           substations: '',
           kpStage: '',
           roughness: null,
+          karstRisk: '',
+          geologicalConditions: '',
           address: '',
           head: '',
           urbanPlanningUrl: '',
@@ -763,12 +1218,18 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
           const tasks = [
             (async () => {
               try {
+                const localForest = await withTimeout(
+                  getLocalForestPct(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+                  TASK_TIMEOUTS_MS.osm,
+                  'Local forest task'
+                );
                 const osm = await withTimeout(
                   fetchOsmResearchData(
                     bbox,
                     boundaryGeojson,
                     msg => onProgress(`  [${hromada.name}] ${msg}`),
-                    oblastInfraCache
+                    oblastInfraCache,
+                    localForest
                   ),
                   TASK_TIMEOUTS_MS.osm,
                   'OSM task'
@@ -784,6 +1245,15 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
             })(),
             (async () => {
               try {
+                const localWind = await withTimeout(
+                  getLocalWindSpeedAtCentroid(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+                  TASK_TIMEOUTS_MS.wind,
+                  'Local wind task'
+                );
+                if (localWind != null) {
+                  row.windSpeed = localWind;
+                  return;
+                }
                 const wind = await withTimeout(
                   fetchWindHeatmap(bbox, 150, msg => {}),
                   TASK_TIMEOUTS_MS.wind,
@@ -846,6 +1316,19 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
                 }
               } catch (e) {
                 onProgress(`  ⚠ ${hromada.name}: page scrape error: ${e.message}`);
+              }
+            })(),
+            (async () => {
+              try {
+                const geoInfo = await withTimeout(
+                  getLocalGeologyAndKarst(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+                  12000,
+                  'Geology task'
+                );
+                row.karstRisk = geoInfo.karstRisk || '';
+                row.geologicalConditions = geoInfo.geologicalConditions || '';
+              } catch (e) {
+                onProgress(`  ⚠ ${hromada.name}: geology error: ${e.message}`);
               }
             })(),
           ];

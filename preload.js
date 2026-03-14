@@ -61,6 +61,15 @@ contextBridge.exposeInMainWorld('api', {
   stopResearch: () =>
     ipcRenderer.send('stop-research'),
 
+  downloadOfflineData: (options = {}) =>
+    ipcRenderer.invoke('download-offline-data', options),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
+
+  onDownloadProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('download-progress', handler);
+    return () => ipcRenderer.removeListener('download-progress', handler);
+  },
 });

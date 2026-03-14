@@ -96,6 +96,30 @@
         </div>
 
         <div class="tab-section">
+          <h2>⬇ Offline Data Installer</h2>
+          <p style="font-size:11px;color:#888;margin:0 0 10px;">Downloads large datasets into your local cache folder (<code style="background:#0f3460;padding:1px 4px;border-radius:3px;">~/.land-management-cache</code> or Windows equivalent).</p>
+
+          <div class="field">
+            <label style="font-size:12px;">WorldCover GeoTIFF URL <span style="color:#888;font-size:11px;">(optional)</span></label>
+            <input type="text" id="offline-worldcover-url" placeholder="https://.../ESA_WorldCover_2021_Ukraine.tif" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;margin-top:4px;" />
+          </div>
+
+          <div class="field">
+            <label style="font-size:12px;">Geology/Karst GeoJSON URL <span style="color:#888;font-size:11px;">(optional)</span></label>
+            <input type="text" id="offline-geology-url" placeholder="https://.../geology-karst.geojson" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;margin-top:4px;" />
+          </div>
+
+          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-secondary btn-sm" id="btn-offline-download" style="padding:8px 20px;">⬇ Download Offline Data</button>
+            <span id="offline-download-status" style="font-size:11px;color:#aaa;">idle</span>
+          </div>
+
+          <div class="offline-progress-wrap">
+            <div class="offline-progress-bar" id="offline-download-progress"></div>
+          </div>
+        </div>
+
+        <div class="tab-section">
           <h2>📊 Pre-Research XLSX</h2>
           <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
 

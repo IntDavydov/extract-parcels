@@ -1,6 +1,9 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
 const { generateResearchXlsx, stopResearch } = require('./src/research');
@@ -43,6 +46,111 @@ async function ensurePuppeteerChrome() {
 
 let mainWindow;
 let scrapingProcess = null;
+const OFFLINE_CACHE_DIR = path.join(os.homedir(), '.land-management-cache');
+const DEFAULT_OFFLINE_DATASETS = [
+  {
+    key: 'pbf',
+    label: 'OSM Ukraine PBF',
+    filename: 'ukraine-latest.osm.pbf',
+    url: 'https://download.geofabrik.de/europe/ukraine-latest.osm.pbf',
+    required: true,
+  },
+  {
+    key: 'wind',
+    label: 'GWA Wind 150m GeoTIFF',
+    filename: 'UKR_wind-speed_150m.tif',
+    urls: [
+      'https://gwa.cdn.nazkamapps.com/country_tifs_v4/UKR_wind-speed_150m.tif',
+      'https://gwa.cdn.nazkamapps.com/country_tifs_v3/UKR_wind-speed_150m.tif',
+    ],
+    required: false,
+  },
+  {
+    key: 'worldcover',
+    label: 'ESA WorldCover GeoTIFF',
+    filename: 'ESA_WorldCover_2021_Ukraine.tif',
+    url: '',
+    required: false,
+  },
+  {
+    key: 'geology',
+    label: 'Geology/Karst GeoJSON',
+    filename: 'geology-karst.geojson',
+    url: '',
+    required: false,
+  },
+];
+
+function ensureCacheDir() {
+  if (!fs.existsSync(OFFLINE_CACHE_DIR)) fs.mkdirSync(OFFLINE_CACHE_DIR, { recursive: true });
+}
+
+function downloadAssetStream(fileUrl, targetPath, onProgress, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const urlObj = new URL(fileUrl);
+    const client = urlObj.protocol === 'https:' ? https : http;
+    const request = client.get(fileUrl, { headers: { 'User-Agent': 'land-management-app/1.0' } }, (response) => {
+      const code = response.statusCode || 0;
+      if (code >= 300 && code < 400 && response.headers.location) {
+        if (redirectsLeft <= 0) {
+          response.resume();
+          reject(new Error(`Too many redirects for ${fileUrl}`));
+          return;
+        }
+        response.resume();
+        downloadAssetStream(response.headers.location, targetPath, onProgress, redirectsLeft - 1)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+      if (code !== 200) {
+        response.resume();
+        reject(new Error(`Failed to download (${code}): ${fileUrl}`));
+        return;
+      }
+
+      const totalBytes = parseInt(response.headers['content-length'] || '0', 10) || 0;
+      let downloadedBytes = 0;
+      const tmpPath = `${targetPath}.tmp`;
+      const fileStream = fs.createWriteStream(tmpPath);
+
+      response.on('data', (chunk) => {
+        downloadedBytes += chunk.length;
+        onProgress(downloadedBytes, totalBytes);
+      });
+
+      response.pipe(fileStream);
+
+      fileStream.on('finish', () => {
+        fileStream.close(() => {
+          if (settled) return;
+          settled = true;
+          fs.rename(tmpPath, targetPath, (err) => {
+            if (err) return reject(err);
+            resolve(targetPath);
+          });
+        });
+      });
+
+      fileStream.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        response.destroy();
+        fs.unlink(tmpPath, () => reject(err));
+      });
+    });
+
+    request.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      fs.unlink(`${targetPath}.tmp`, () => reject(err));
+    });
+    request.setTimeout(300000, () => {
+      request.destroy(new Error('Download timeout'));
+    });
+  });
+}
 
 // When packaged, script.js is in app.asar.unpacked — not inside the asar archive
 function getUnpackedPath(...parts) {
@@ -622,6 +730,96 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
 });
 
 ipcMain.on('stop-eland-lookup', () => stopLookup());
+
+ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '' } = {}) => {
+  try {
+    ensureCacheDir();
+    const datasets = DEFAULT_OFFLINE_DATASETS.map((d) => {
+      if (d.key === 'worldcover') return { ...d, urls: worldcoverUrl ? [worldcoverUrl] : (d.urls || (d.url ? [d.url] : [])) };
+      if (d.key === 'geology') return { ...d, urls: geologyUrl ? [geologyUrl] : (d.urls || (d.url ? [d.url] : [])) };
+      if (d.urls) return d;
+      return { ...d, urls: d.url ? [d.url] : [] };
+    });
+
+    const toDownload = datasets.filter((d) => Array.isArray(d.urls) && d.urls.length > 0);
+    const skipped = datasets
+      .filter((d) => !Array.isArray(d.urls) || d.urls.length === 0)
+      .map((d) => ({ key: d.key, label: d.label, reason: 'No URL provided' }));
+
+    if (!toDownload.length) {
+      return { success: false, error: 'No dataset URLs configured', skipped, cacheDir: OFFLINE_CACHE_DIR };
+    }
+
+    const installed = [];
+    const failed = [];
+    for (let i = 0; i < toDownload.length; i++) {
+      const item = toDownload[i];
+      const targetPath = path.join(OFFLINE_CACHE_DIR, item.filename);
+      event.sender.send('log', `📥 Downloading ${item.label}…`);
+      let downloaded = false;
+      let lastErr = null;
+      for (let u = 0; u < item.urls.length; u++) {
+        const candidateUrl = item.urls[u];
+        try {
+          if (u > 0) event.sender.send('log', `  ↪ retry source ${u + 1}/${item.urls.length}: ${candidateUrl}`);
+          await downloadAssetStream(candidateUrl, targetPath, (downloadedBytes, totalBytes) => {
+            const filePercent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
+            const overallPercent = Math.round(((i + (filePercent / 100)) / toDownload.length) * 100);
+            event.sender.send('download-progress', {
+              file: item.label,
+              filename: item.filename,
+              percent: filePercent,
+              downloadedBytes,
+              totalBytes,
+              index: i + 1,
+              totalFiles: toDownload.length,
+              overallPercent,
+            });
+          });
+          downloaded = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (downloaded) {
+        installed.push({ key: item.key, label: item.label, path: targetPath });
+        event.sender.send('log', `✅ Downloaded: ${item.label}`);
+      } else {
+        const reason = lastErr ? lastErr.message : 'unknown error';
+        failed.push({ key: item.key, label: item.label, required: !!item.required, reason });
+        event.sender.send('log', `⚠️ Failed: ${item.label} (${reason})`);
+      }
+    }
+
+    event.sender.send('download-progress', {
+      file: 'All datasets',
+      filename: '',
+      percent: 100,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      index: toDownload.length,
+      totalFiles: toDownload.length,
+      overallPercent: 100,
+    });
+    const failedRequired = failed.filter((f) => f.required);
+    const success = failedRequired.length === 0;
+    if (!success) {
+      return {
+        success: false,
+        error: `Required datasets failed: ${failedRequired.map((f) => f.label).join(', ')}`,
+        installed,
+        failed,
+        skipped,
+        cacheDir: OFFLINE_CACHE_DIR,
+      };
+    }
+    return { success: true, installed, failed, skipped, cacheDir: OFFLINE_CACHE_DIR };
+  } catch (err) {
+    event.sender.send('log', `❌ Offline data download failed: ${err.message}`);
+    return { success: false, error: err.message, cacheDir: OFFLINE_CACHE_DIR };
+  }
+});
 
 ipcMain.handle('generate-research-xlsx', async (event, { oblastName, outputPath }) => {
   try {

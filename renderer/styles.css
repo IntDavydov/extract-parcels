@@ -188,6 +188,23 @@ textarea {
   border-top: 1px solid #2a4a7f;
 }
 
+.offline-progress-wrap {
+  margin-top: 8px;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #0f3460;
+  border: 1px solid #2a4a7f;
+  overflow: hidden;
+}
+
+.offline-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: #e94560;
+  transition: width 0.15s ease;
+}
+
 /* ── Checkboxes grid ──────────────────────────────────── */
 .checkbox-grid {
   display: grid;
