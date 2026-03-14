@@ -23,6 +23,13 @@ const LAYER_STYLES = {
     icon: 'http://maps.google.com/mapfiles/kml/paddle/wht-blank.png',
     width: 2,
   },
+  'Nuclear Power Plants': {
+    poly: '66ff00ff',
+    line: 'ffff00ff',
+    point: 'ffff00ff',
+    icon: 'http://maps.google.com/mapfiles/kml/paddle/wht-blank.png',
+    width: 2,
+  },
   'Roads':              { line: 'ff000000' },
   'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
   'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
@@ -44,6 +51,7 @@ const LAYER_STYLES = {
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
   'Power Line Buffers':    { poly: '5500ffff', line: '8800ffff', width: 2, noOutline: true },
   'Airoports Buffer':      { poly: '33ffbf00', line: '88ffbf00', width: 2, noOutline: true },
+  'Nuclear Power Plants Buffer': { poly: '33ff00ff', line: '88ff00ff', width: 2, noOutline: true },
   'Nature Reserve Buffer': {
     poly: '80005555',
     line: '66005555',
@@ -63,7 +71,7 @@ const LAYER_GROUPS = [
   { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order
-const ROOT_ORDER = ['Territory Boundary', 'Roads', 'Road Buffers', 'Airoports', 'Airoports Buffer'];
+const ROOT_ORDER = ['Territory Boundary', 'Roads', 'Road Buffers', 'Airoports', 'Airoports Buffer', 'Nuclear Power Plants', 'Nuclear Power Plants Buffer'];
 
 function coordsToKml(coords, depth = 0) {
   if (depth === 0 && typeof coords[0] === 'number') {
@@ -291,6 +299,15 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       continue;
     }
     if (layerName === 'Airoports Buffer' && addedRoot.has('Airoports Buffer')) continue;
+    // Nuclear Power Plants: nest 30km buffer inside the Nuclear Power Plants folder
+    if (layerName === 'Nuclear Power Plants' && layerMap['Nuclear Power Plants Buffer']) {
+      const nppFolder = layerFolder('Nuclear Power Plants');
+      const bufferFolder = layerFolder('Nuclear Power Plants Buffer');
+      addedRoot.add('Nuclear Power Plants Buffer');
+      folders.push(`<Folder><name>${escXml('Nuclear Power Plants')}</name>${nppFolder}${bufferFolder}</Folder>`);
+      continue;
+    }
+    if (layerName === 'Nuclear Power Plants Buffer' && addedRoot.has('Nuclear Power Plants Buffer')) continue;
     // Coords-named parcel layer: wrap in Parcels > coords/folder > Boundary + Parcels subfolder
     if (!LAYER_STYLES[layerName] && !addedRoot.has('Parcel Boundaries')) {
       addedRoot.add('Parcel Boundaries');

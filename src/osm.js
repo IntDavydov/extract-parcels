@@ -465,6 +465,18 @@ function buildQuery(layers, bbox) {
     parts.push(`way["military"="airfield"](${b50});`);
     parts.push(`relation["military"="airfield"](${b50});`);
   }
+  if (layers.includes('nuclear_plants')) {
+    const b30 = expandBBoxKm(30);
+    parts.push(`node["power"="plant"]["plant:source"="nuclear"](${b30});`);
+    parts.push(`way["power"="plant"]["plant:source"="nuclear"](${b30});`);
+    parts.push(`relation["power"="plant"]["plant:source"="nuclear"](${b30});`);
+    parts.push(`node["power"="generator"]["generator:source"="nuclear"](${b30});`);
+    parts.push(`way["power"="generator"]["generator:source"="nuclear"](${b30});`);
+    parts.push(`relation["power"="generator"]["generator:source"="nuclear"](${b30});`);
+    parts.push(`node["power"="plant"]["source"~"nuclear",i](${b30});`);
+    parts.push(`way["power"="plant"]["source"~"nuclear",i](${b30});`);
+    parts.push(`relation["power"="plant"]["source"~"nuclear",i](${b30});`);
+  }
 
   return `[out:json][timeout:180];\n(\n  ${parts.join('\n  ')}\n);\nout body;\n>;\nout skel qt;`;
 }
@@ -480,6 +492,10 @@ function classifyFeature(props) {
   if (p.waterway || p.natural === 'water' || p.landuse === 'reservoir') return 'Water';
   if (p.landuse === 'forest' || p.natural === 'wood') return 'Forests';
   if (p.aeroway || p.military === 'airfield') return 'Airoports';
+  if (
+    (p.power === 'plant' && (p['plant:source'] === 'nuclear' || /nuclear/i.test(String(p.source || '')))) ||
+    (p.power === 'generator' && p['generator:source'] === 'nuclear')
+  ) return 'Nuclear Power Plants';
   if (p.boundary === 'protected_area' || p.protect_class) return 'Emerald Network';
   return null;
 }
@@ -1363,7 +1379,20 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (airportBufs.length) layerMap['Airoports Buffer'] = airportBufs;
     }
 
-    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport`);
+    // Nuclear Power Plants Buffer: 30km around all nuclear plant geometries
+    if (layerMap['Nuclear Power Plants']) {
+      const nppBufs = layerMap['Nuclear Power Plants']
+        .filter(f => f.geometry)
+        .map(f => {
+          try {
+            const buf = turfBuffer(f, 30, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Nuclear Power Plants Buffer', _type: 'buffer_30km' } } : null;
+          } catch (_) { return null; }
+        }).filter(Boolean);
+      if (nppBufs.length) layerMap['Nuclear Power Plants Buffer'] = nppBufs;
+    }
+
+    onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport, ${layerMap['Nuclear Power Plants Buffer'] ? layerMap['Nuclear Power Plants Buffer'].length : 0} nuclear`);
   } // end osmLayers block
 
   // 5. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
