@@ -8,17 +8,43 @@ const OVERPASS_ALT = 'https://overpass.kumi.systems/api/interpreter';
 const OVERPASS_ALT_2 = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
 const OVERPASS_TIMEOUT_FAST_MS = 35000;
 const OVERPASS_TIMEOUT_NORMAL_MS = 55000;
+const OVERPASS_FOREST_TOTAL_TIMEOUT_MS = 25000;
+const TASK_TIMEOUTS_MS = {
+  osm: 65000,
+  wind: 45000,
+  emerald: 35000,
+  pzf: 35000,
+  page: 45000,
+};
 
-async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS) {
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS, totalTimeoutMs = 0) {
   const body = 'data=' + encodeURIComponent(ql);
   let rawResponse = '';
+  const startedAt = Date.now();
   for (const url of [OVERPASS_URL, OVERPASS_ALT, OVERPASS_ALT_2]) {
+    let reqTimeoutMs = timeoutMs;
+    if (totalTimeoutMs > 0) {
+      const elapsed = Date.now() - startedAt;
+      const remaining = totalTimeoutMs - elapsed;
+      if (remaining <= 0) throw new Error(`Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s)`);
+      reqTimeoutMs = Math.min(timeoutMs, remaining);
+    }
     try {
       rawResponse = await httpPost(
         url,
         body,
         { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeoutMs
+        reqTimeoutMs
       );
       const trimmed = rawResponse.trimStart();
       if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
@@ -463,7 +489,12 @@ out geom tags;`;
   onProgress(`  → Querying Overpass for forest cover…`);
   let forestElements = [];
   try {
-    const forestData = await overpassQuery(forestQl, onProgress, OVERPASS_TIMEOUT_NORMAL_MS);
+    const forestData = await overpassQuery(
+      forestQl,
+      onProgress,
+      20000,
+      OVERPASS_FOREST_TOTAL_TIMEOUT_MS
+    );
     forestElements = forestData.elements || [];
   } catch (e) {
     onProgress(`  ⚠ Forest query timed out/failed: ${e.message}`);
@@ -732,11 +763,15 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
           const tasks = [
             (async () => {
               try {
-                const osm = await fetchOsmResearchData(
-                  bbox,
-                  boundaryGeojson,
-                  msg => onProgress(`  [${hromada.name}] ${msg}`),
-                  oblastInfraCache
+                const osm = await withTimeout(
+                  fetchOsmResearchData(
+                    bbox,
+                    boundaryGeojson,
+                    msg => onProgress(`  [${hromada.name}] ${msg}`),
+                    oblastInfraCache
+                  ),
+                  TASK_TIMEOUTS_MS.osm,
+                  'OSM task'
                 );
                 row.forestPct = osm.forestPct;
                 row.powerLines = osm.powerLinesText;
@@ -749,7 +784,11 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
             })(),
             (async () => {
               try {
-                const wind = await fetchWindHeatmap(bbox, 150, msg => {});
+                const wind = await withTimeout(
+                  fetchWindHeatmap(bbox, 150, msg => {}),
+                  TASK_TIMEOUTS_MS.wind,
+                  'Wind task'
+                );
                 row.windSpeed = wind.avgSpeed;
               } catch (e) {
                 onProgress(`  ⚠ ${hromada.name}: Wind error: ${e.message}`);
@@ -757,7 +796,11 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
             })(),
             (async () => {
               try {
-                const emerald = await fetchEmeraldFromEEA(bbox, msg => {});
+                const emerald = await withTimeout(
+                  fetchEmeraldFromEEA(bbox, msg => {}),
+                  TASK_TIMEOUTS_MS.emerald,
+                  'Emerald task'
+                );
                 row.emerald = emerald.length > 0 ? '+' : '';
               } catch (e) {
                 onProgress(`  ⚠ ${hromada.name}: Emerald error: ${e.message}`);
@@ -765,7 +808,11 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
             })(),
             (async () => {
               try {
-                const pzf = await fetchNatureReservesFromPZF(bbox, msg => {});
+                const pzf = await withTimeout(
+                  fetchNatureReservesFromPZF(bbox, msg => {}),
+                  TASK_TIMEOUTS_MS.pzf,
+                  'PZF task'
+                );
                 if (pzf.length > 0) {
                   const names = [...new Set(pzf.map(f => f.properties.name).filter(Boolean))];
                   row.natureReserves = names.slice(0, 5).join('; ');
@@ -777,11 +824,19 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
             (async () => {
               if (!hromada.id) return;
               try {
-                const pageInfo = await getHromadaPageInfo(hromada.id, browser, onProgress);
+                const pageInfo = await withTimeout(
+                  getHromadaPageInfo(hromada.id, browser, onProgress),
+                  TASK_TIMEOUTS_MS.page,
+                  'Community page task'
+                );
                 row.kpStage = pageInfo.kpStage;
                 if (pageInfo.officialSiteUrl) {
                   try {
-                    const siteInfo = await getOfficialSiteInfo(pageInfo.officialSiteUrl, browser, onProgress);
+                    const siteInfo = await withTimeout(
+                      getOfficialSiteInfo(pageInfo.officialSiteUrl, browser, onProgress),
+                      TASK_TIMEOUTS_MS.page,
+                      'Official site task'
+                    );
                     row.address = siteInfo.address;
                     row.head = siteInfo.head;
                     row.urbanPlanningUrl = siteInfo.urbanPlanningUrl;

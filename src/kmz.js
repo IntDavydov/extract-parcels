@@ -17,9 +17,9 @@ const LAYER_STYLES = {
   'Towers_Extra':       { point: 'ff0000ff' },         // > 220 kV  — Red
   'Substations':        { poly: 'ff00ffff', line: 'ff00ffff' },
   'Airoports':          {
-    poly: '66ffbf00',
-    line: 'ffffbf00',
-    point: 'ffffbf00',
+    poly: '99ffff00',
+    line: 'ffffff00',
+    point: 'ffffff00',
     icon: 'http://maps.google.com/mapfiles/kml/paddle/wht-blank.png',
     width: 2,
   },
@@ -50,7 +50,7 @@ const LAYER_STYLES = {
   'Forest Buffers':        { poly: '807fff00', line: '007fff00', width: 2, noOutline: true },
   'Road Buffers':          { poly: '33000080', line: '66000080', width: 2, noOutline: true },
   'Power Line Buffers':    { poly: '5500ffff', line: '8800ffff', width: 2, noOutline: true },
-  'Airoports Buffer':      { poly: '33ffbf00', line: '88ffbf00', width: 2, noOutline: true },
+  'Airoports Buffer':      { poly: '66ffff00', line: 'aaffff00', width: 2, noOutline: true },
   'Nuclear Power Plants Buffer': { poly: '33ff00ff', line: '88ff00ff', width: 2, noOutline: true },
   'Nature Reserve Buffer': {
     poly: '80005555',
@@ -60,7 +60,7 @@ const LAYER_STYLES = {
     width: 2,
     noOutline: true,
   },
-  'Wind Speed':            { point: 'ff00d7ff' },
+  'Wind Speed':            { point: 'ffffffff', icon: 'files/windmill.png' },
 };
 
 // Group definitions — layers are nested inside parent folders in the KMZ
@@ -151,7 +151,11 @@ function towerStyleId(voltageTag) {
   return 'Towers_Extra';
 }
 
-function buildStyles() {
+function customIconStyleId(iconName) {
+  return `Custom_Icon_${iconName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+}
+
+function buildStyles(customIconNames = []) {
   const lines = [];
   for (const [layerName, colors] of Object.entries(LAYER_STYLES)) {
     const id = layerName.replace(/[^a-zA-Z0-9]/g, '_');
@@ -169,12 +173,62 @@ function buildStyles() {
   <PolyStyle><color>${polyColor}</color>${polyOutline}</PolyStyle>
 </Style>`);
   }
+  for (const iconName of customIconNames) {
+    const id = customIconStyleId(iconName);
+    lines.push(`<Style id="${id}">
+  <IconStyle><color>ffffffff</color><scale>1.0</scale><Icon><href>files/${escXml(iconName)}</href></Icon></IconStyle>
+  <LineStyle><color>ffffffff</color><width>2</width></LineStyle>
+  <PolyStyle><color>00000000</color><outline>0</outline></PolyStyle>
+</Style>`);
+  }
   return lines.join('\n');
+}
+
+function findTemplatePoint(layerMap) {
+  for (const features of Object.values(layerMap || {})) {
+    for (const f of features || []) {
+      const g = f && f.geometry;
+      if (!g) continue;
+      if (g.type === 'Point' && Array.isArray(g.coordinates)) return g.coordinates;
+      if (g.type === 'MultiPoint' && g.coordinates[0]) return g.coordinates[0];
+      if (g.type === 'LineString' && g.coordinates[0]) return g.coordinates[0];
+      if (g.type === 'MultiLineString' && g.coordinates[0] && g.coordinates[0][0]) return g.coordinates[0][0];
+      if (g.type === 'Polygon' && g.coordinates[0] && g.coordinates[0][0]) return g.coordinates[0][0];
+      if (g.type === 'MultiPolygon' && g.coordinates[0] && g.coordinates[0][0] && g.coordinates[0][0][0]) return g.coordinates[0][0][0];
+    }
+  }
+  return [30.5234, 50.4501]; // fallback: Kyiv
 }
 
 async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], docName = 'Kadastr') {
   onProgress('🗺 Building KML…');
-  const styles = buildStyles();
+  const isPackaged = __dirname.includes('app.asar');
+  const appRoot = isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : path.join(__dirname, '..');
+  const bundledIcons = new Set(['houses.png', 'windmill.png']);
+  const iconDirs = [
+    path.join(appRoot, 'icons'),
+    isPackaged ? path.join(process.resourcesPath, 'app.asar', 'icons') : '',
+    path.join(path.dirname(outputPath), 'icons'),
+    path.join(process.cwd(), 'icons'),
+  ].filter(Boolean);
+  for (const iconDir of iconDirs) {
+    if (!fs.existsSync(iconDir)) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(iconDir, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      if (!/\.png$/i.test(ent.name)) continue;
+      bundledIcons.add(ent.name);
+    }
+  }
+  const customIconNames = [...bundledIcons].filter(n => !['houses.png', 'windmill.png'].includes(n)).sort();
+  const styles = buildStyles(customIconNames);
   const folders = [];
 
   function layerFolder(layerName) {
@@ -347,6 +401,15 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     folders.push(`<Folder><name>Wind Speed${hubHeight ? ` ${hubHeight}m` : ''}</name>${parts.join('')}</Folder>`);
   }
 
+  if (customIconNames.length) {
+    const [tplLon, tplLat] = findTemplatePoint(layerMap);
+    const templatePlacemarks = customIconNames.map((iconName) => {
+      const id = customIconStyleId(iconName);
+      return `<Placemark><name>${escXml(`Template: ${iconName}`)}</name><styleUrl>#${id}</styleUrl><Point><coordinates>${tplLon},${tplLat},0</coordinates></Point></Placemark>`;
+    }).join('');
+    folders.push(`<Folder><name>Custom Icon Templates</name><visibility>0</visibility>${templatePlacemarks}</Folder>`);
+  }
+
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
@@ -361,20 +424,38 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   zip.file('doc.kml', kml);
 
   // Bundle icon files into files/ so they're available for use in Google Earth
-  const isPackaged = __dirname.includes('app.asar');
-  const appRoot = isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked')
-    : path.join(__dirname, '..');
-  const bundledIcons = ['houses.png', 'windmill.png'];
+  const zippedIcons = new Set();
   for (const icon of bundledIcons) {
     const src = path.join(appRoot, icon);
-    if (fs.existsSync(src)) zip.file(`files/${icon}`, fs.readFileSync(src));
+    if (fs.existsSync(src)) {
+      zip.file(`files/${icon}`, fs.readFileSync(src));
+      zippedIcons.add(icon);
+    }
+  }
+
+  // Auto-bundle user custom icons from icons/*.png into files/
+  for (const iconDir of iconDirs) {
+    if (!fs.existsSync(iconDir)) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(iconDir, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      if (!/\.png$/i.test(ent.name)) continue;
+      if (zippedIcons.has(ent.name)) continue;
+      const src = path.join(iconDir, ent.name);
+      zip.file(`files/${ent.name}`, fs.readFileSync(src));
+      zippedIcons.add(ent.name);
+    }
   }
   // Also bundle any additional icons referenced in layer styles
   for (const colors of Object.values(LAYER_STYLES)) {
     if (colors.icon) {
       const iconName = path.basename(colors.icon);
-      if (!bundledIcons.includes(iconName)) {
+      if (!bundledIcons.has(iconName)) {
         const src = path.join(appRoot, iconName);
         if (fs.existsSync(src)) zip.file(colors.icon, fs.readFileSync(src));
       }
