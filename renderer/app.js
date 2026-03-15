@@ -23,6 +23,10 @@ window.api.onDownloadProgress((data) => {
   if (!progress || !status || !data) return;
   const overall = Math.max(0, Math.min(100, Number(data.overallPercent || 0)));
   progress.style.width = `${overall}%`;
+  if (data.status === 'already_installed') {
+    status.textContent = `${data.file || 'Dataset'}: already installed (overall ${overall}%)`;
+    return;
+  }
   const perFile = Number.isFinite(Number(data.percent)) ? `${Math.max(0, Math.min(100, Number(data.percent)))}%` : '?';
   status.textContent = `${data.file || 'Downloading'}: ${perFile} (overall ${overall}%)`;
 });
@@ -601,11 +605,12 @@ document.getElementById('btn-offline-download').addEventListener('click', async 
   const progress = document.getElementById('offline-download-progress');
   const worldcoverUrl = document.getElementById('offline-worldcover-url').value.trim();
   const geologyUrl = document.getElementById('offline-geology-url').value.trim();
+  const forceUpdate = !!document.getElementById('offline-force-update').checked;
   btn.disabled = true;
   progress.style.width = '0%';
   status.textContent = 'starting...';
   appendLog('⬇ Starting offline dataset download...');
-  const result = await window.api.downloadOfflineData({ worldcoverUrl, geologyUrl });
+  const result = await window.api.downloadOfflineData({ worldcoverUrl, geologyUrl, forceUpdate });
   if (result && result.success) {
     status.textContent = 'done';
     progress.style.width = '100%';

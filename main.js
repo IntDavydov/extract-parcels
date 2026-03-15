@@ -54,6 +54,7 @@ const DEFAULT_OFFLINE_DATASETS = [
     filename: 'ukraine-latest.osm.pbf',
     url: 'https://download.geofabrik.de/europe/ukraine-latest.osm.pbf',
     required: true,
+    estimatedBytes: 560 * 1024 * 1024,
   },
   {
     key: 'wind',
@@ -64,6 +65,7 @@ const DEFAULT_OFFLINE_DATASETS = [
       'https://gwa.cdn.nazkamapps.com/country_tifs_v3/UKR_wind-speed_150m.tif',
     ],
     required: false,
+    estimatedBytes: 60 * 1024 * 1024,
   },
   {
     key: 'worldcover',
@@ -71,6 +73,7 @@ const DEFAULT_OFFLINE_DATASETS = [
     filename: 'ESA_WorldCover_2021_Ukraine.tif',
     url: '',
     required: false,
+    estimatedBytes: 180 * 1024 * 1024,
   },
   {
     key: 'geology',
@@ -78,11 +81,17 @@ const DEFAULT_OFFLINE_DATASETS = [
     filename: 'geology-karst.geojson',
     url: '',
     required: false,
+    estimatedBytes: 20 * 1024 * 1024,
   },
 ];
 
 function ensureCacheDir() {
   if (!fs.existsSync(OFFLINE_CACHE_DIR)) fs.mkdirSync(OFFLINE_CACHE_DIR, { recursive: true });
+  // Cleanup stale partial downloads from interrupted sessions.
+  for (const name of fs.readdirSync(OFFLINE_CACHE_DIR)) {
+    if (!name.endsWith('.tmp')) continue;
+    try { fs.unlinkSync(path.join(OFFLINE_CACHE_DIR, name)); } catch (_) {}
+  }
 }
 
 function downloadAssetStream(fileUrl, targetPath, onProgress, redirectsLeft = 5) {
@@ -731,7 +740,7 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
 
 ipcMain.on('stop-eland-lookup', () => stopLookup());
 
-ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '' } = {}) => {
+ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '', forceUpdate = false } = {}) => {
   try {
     ensureCacheDir();
     const datasets = DEFAULT_OFFLINE_DATASETS.map((d) => {
@@ -752,9 +761,30 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
 
     const installed = [];
     const failed = [];
+    const totalEstimatedBytes = toDownload.reduce((sum, item) => sum + Math.max(1, Number(item.estimatedBytes || 0)), 0);
+    let completedEstimatedBytes = 0;
     for (let i = 0; i < toDownload.length; i++) {
       const item = toDownload[i];
       const targetPath = path.join(OFFLINE_CACHE_DIR, item.filename);
+      const itemEstimatedBytes = Math.max(1, Number(item.estimatedBytes || 0));
+      if (!forceUpdate && fs.existsSync(targetPath)) {
+        completedEstimatedBytes += itemEstimatedBytes;
+        const overallPercent = Math.round((completedEstimatedBytes / totalEstimatedBytes) * 100);
+        event.sender.send('download-progress', {
+          file: item.label,
+          filename: item.filename,
+          percent: 100,
+          downloadedBytes: itemEstimatedBytes,
+          totalBytes: itemEstimatedBytes,
+          index: i + 1,
+          totalFiles: toDownload.length,
+          overallPercent,
+          status: 'already_installed',
+        });
+        installed.push({ key: item.key, label: item.label, path: targetPath, status: 'already_installed' });
+        event.sender.send('log', `✅ Already installed: ${item.label}`);
+        continue;
+      }
       event.sender.send('log', `📥 Downloading ${item.label}…`);
       let downloaded = false;
       let lastErr = null;
@@ -764,7 +794,8 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
           if (u > 0) event.sender.send('log', `  ↪ retry source ${u + 1}/${item.urls.length}: ${candidateUrl}`);
           await downloadAssetStream(candidateUrl, targetPath, (downloadedBytes, totalBytes) => {
             const filePercent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
-            const overallPercent = Math.round(((i + (filePercent / 100)) / toDownload.length) * 100);
+            const weightedCurrent = Math.min(itemEstimatedBytes, downloadedBytes || 0);
+            const overallPercent = Math.round(((completedEstimatedBytes + weightedCurrent) / totalEstimatedBytes) * 100);
             event.sender.send('download-progress', {
               file: item.label,
               filename: item.filename,
@@ -783,9 +814,11 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
         }
       }
       if (downloaded) {
-        installed.push({ key: item.key, label: item.label, path: targetPath });
+        completedEstimatedBytes += itemEstimatedBytes;
+        installed.push({ key: item.key, label: item.label, path: targetPath, status: 'downloaded' });
         event.sender.send('log', `✅ Downloaded: ${item.label}`);
       } else {
+        completedEstimatedBytes += itemEstimatedBytes;
         const reason = lastErr ? lastErr.message : 'unknown error';
         failed.push({ key: item.key, label: item.label, required: !!item.required, reason });
         event.sender.send('log', `⚠️ Failed: ${item.label} (${reason})`);

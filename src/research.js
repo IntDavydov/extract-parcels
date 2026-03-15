@@ -13,11 +13,11 @@ const OVERPASS_TIMEOUT_FAST_MS = 35000;
 const OVERPASS_TIMEOUT_NORMAL_MS = 55000;
 const OVERPASS_FOREST_TOTAL_TIMEOUT_MS = 25000;
 const TASK_TIMEOUTS_MS = {
-  osm: 65000,
+  osm: 90000,
   wind: 45000,
-  emerald: 35000,
-  pzf: 35000,
-  page: 45000,
+  emerald: 90000,
+  pzf: 90000,
+  page: 60000,
 };
 const LOCAL_WIND_TIFF_CANDIDATES = [
   'test-files/UKR_wind-speed_150m.tif',
@@ -1127,7 +1127,19 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
     throw new Error('Puppeteer not available: ' + e.message);
   }
 
-  const launchOpts = { headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+  const launchOpts = { 
+    headless: 'new', 
+    ignoreHTTPSErrors: true,
+    args: [
+      '--no-sandbox', 
+      '--disable-dev-shm-usage',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--ignore-certificate-errors',
+      '--window-size=1920,1080',
+      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ] 
+  };
   if (chromePath) launchOpts.executablePath = chromePath;
   const browser = await puppeteer.launch(launchOpts);
 
