@@ -2,7 +2,10 @@ node_modules
 node_modules/
 dist
 dist/
+extra/
+extra
 *.env
 .env
 *.exe
 *.png
+
