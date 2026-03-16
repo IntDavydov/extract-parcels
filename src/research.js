@@ -49,6 +49,7 @@ const LOCAL_PBF_CANDIDATES = [
   'ukraine-latest.pbf',
 ];
 const LOCAL_WORLDCOVER_TIFF_CANDIDATES = [
+  'extra/ESA_WORLDCOVER_10M_2021_V200/MAP',
   'test-files/ESA_WorldCover_2021_Ukraine.tif',
   'test-files/ESA_WorldCover_Ukraine.tif',
   'test-files/worldcover-ukraine.tif',
@@ -213,75 +214,133 @@ async function getLocalWindSpeedAtCentroid(boundaryGeometry, bbox, onProgress) {
   return Math.round(v * 100) / 100;
 }
 
-async function loadLocalWorldCoverDataset(onProgress) {
+async function loadLocalWorldCoverDatasets(onProgress) {
   if (!_localWorldCoverDatasetPromise) {
     _localWorldCoverDatasetPromise = (async () => {
-      const tiffPath = resolveFromCandidates(LOCAL_WORLDCOVER_TIFF_CANDIDATES);
-      if (!tiffPath) return null;
+      const resolvedPath = resolveFromCandidates(LOCAL_WORLDCOVER_TIFF_CANDIDATES);
+      if (!resolvedPath) return [];
+
       const geotiff = require('geotiff');
-      const tiffBuffer = fs.readFileSync(tiffPath);
-      const tiff = await geotiff.fromArrayBuffer(
-        tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
-      );
-      const image = await tiff.getImage();
-      const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
-      const width = image.getWidth();
-      const height = image.getHeight();
-      const noDataRaw = image.getGDALNoData && image.getGDALNoData();
-      const noData = noDataRaw == null ? null : Number(noDataRaw);
-      if (onProgress) onProgress(`  → Local WorldCover loaded: ${path.basename(tiffPath)} (${width}x${height})`);
-      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+      const datasets = [];
+
+      async function loadTiff(tiffPath) {
+        const tiffBuffer = fs.readFileSync(tiffPath);
+        const tiff = await geotiff.fromArrayBuffer(
+          tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
+        );
+        const image = await tiff.getImage();
+        const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
+        const width = image.getWidth();
+        const height = image.getHeight();
+        const noDataRaw = image.getGDALNoData && image.getGDALNoData();
+        const noData = noDataRaw == null ? null : Number(noDataRaw);
+        return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+      }
+
+      const stat = fs.statSync(resolvedPath);
+      if (stat.isDirectory()) {
+        if (onProgress) onProgress(`  → Scanning directory for WorldCover tiles: ${resolvedPath}`);
+        
+        function findTifs(dir) {
+          let results = [];
+          const list = fs.readdirSync(dir);
+          for (const file of list) {
+            const fullPath = path.join(dir, file);
+            const s = fs.statSync(fullPath);
+            if (s.isDirectory()) {
+              results = results.concat(findTifs(fullPath));
+            } else if (file.endsWith('_Map.tif')) {
+              results.push(fullPath);
+            }
+          }
+          return results;
+        }
+
+        const tifs = findTifs(resolvedPath);
+        if (onProgress) onProgress(`  → Found ${tifs.length} WorldCover tiles. Loading...`);
+        for (const t of tifs) {
+          try {
+            datasets.push(await loadTiff(t));
+          } catch (e) {
+            if (onProgress) onProgress(`  ⚠ Failed to load tile ${t}: ${e.message}`);
+          }
+        }
+      } else {
+        try {
+          datasets.push(await loadTiff(resolvedPath));
+          if (onProgress) onProgress(`  → Local WorldCover loaded: ${path.basename(resolvedPath)}`);
+        } catch (e) {
+          if (onProgress) onProgress(`  ⚠ Failed to load WorldCover file ${resolvedPath}: ${e.message}`);
+        }
+      }
+
+      return datasets;
     })().catch((err) => {
-      _localWorldCoverDatasetPromise = Promise.resolve(null);
+      _localWorldCoverDatasetPromise = Promise.resolve([]);
       if (onProgress) onProgress(`  ⚠ Local WorldCover unavailable: ${err.message}`);
-      return null;
+      return [];
     });
   }
   return _localWorldCoverDatasetPromise;
 }
 
 async function getLocalForestPct(boundaryGeometry, bbox, onProgress) {
-  const dataset = await loadLocalWorldCoverDataset(onProgress);
-  if (!dataset || !boundaryGeometry) return null;
-  const { minLon, minLat, maxLon, maxLat, width, height } = dataset;
-  const clipWest = Math.max(minLon, bbox.west);
-  const clipEast = Math.min(maxLon, bbox.east);
-  const clipSouth = Math.max(minLat, bbox.south);
-  const clipNorth = Math.min(maxLat, bbox.north);
-  if (!(clipWest < clipEast && clipSouth < clipNorth)) return null;
-  const xRes = (maxLon - minLon) / width;
-  const yRes = (maxLat - minLat) / height;
-  if (!isFinite(xRes) || !isFinite(yRes) || xRes <= 0 || yRes <= 0) return null;
+  const datasets = await loadLocalWorldCoverDatasets(onProgress);
+  if (!datasets || datasets.length === 0 || !boundaryGeometry) return null;
 
-  const left = Math.max(0, Math.floor((clipWest - minLon) / xRes));
-  const right = Math.min(width, Math.ceil((clipEast - minLon) / xRes));
-  const top = Math.max(0, Math.floor((maxLat - clipNorth) / yRes));
-  const bottom = Math.min(height, Math.ceil((maxLat - clipSouth) / yRes));
-  if (!(left < right && top < bottom)) return null;
+  let totalPixels = 0;
+  let treePixels = 0;
 
-  const rasters = await dataset.image.readRasters({ window: [left, top, right, bottom] });
-  const data = rasters && rasters[0] ? rasters[0] : null;
-  if (!data) return null;
+  for (const dataset of datasets) {
+    const { minLon, minLat, maxLon, maxLat, width, height } = dataset;
+    
+    // Check if tile intersects the hromada bbox at all
+    if (bbox.west > maxLon || bbox.east < minLon || bbox.south > maxLat || bbox.north < minLat) {
+      continue;
+    }
 
-  const winWidth = right - left;
-  const winHeight = bottom - top;
-  let total = 0;
-  let tree = 0;
-  for (let y = 0; y < winHeight; y++) {
-    for (let x = 0; x < winWidth; x++) {
-      const idx = y * winWidth + x;
-      const cls = Number(data[idx]);
-      if (!Number.isFinite(cls)) continue;
-      if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(cls - dataset.noData) < 1e-6) continue;
-      const lon = minLon + (left + x + 0.5) * xRes;
-      const lat = maxLat - (top + y + 0.5) * yRes;
-      if (!pointInGeometry([lon, lat], boundaryGeometry)) continue;
-      total += 1;
-      if (TREE_COVER_CLASSES.has(cls)) tree += 1;
+    const clipWest = Math.max(minLon, bbox.west);
+    const clipEast = Math.min(maxLon, bbox.east);
+    const clipSouth = Math.max(minLat, bbox.south);
+    const clipNorth = Math.min(maxLat, bbox.north);
+    if (!(clipWest < clipEast && clipSouth < clipNorth)) continue;
+
+    const xRes = (maxLon - minLon) / width;
+    const yRes = (maxLat - minLat) / height;
+    if (!isFinite(xRes) || !isFinite(yRes) || xRes <= 0 || yRes <= 0) continue;
+
+    const left = Math.max(0, Math.floor((clipWest - minLon) / xRes));
+    const right = Math.min(width, Math.ceil((clipEast - minLon) / xRes));
+    const top = Math.max(0, Math.floor((maxLat - clipNorth) / yRes));
+    const bottom = Math.min(height, Math.ceil((maxLat - clipSouth) / yRes));
+    if (!(left < right && top < bottom)) continue;
+
+    const rasters = await dataset.image.readRasters({ window: [left, top, right, bottom] });
+    const data = rasters && rasters[0] ? rasters[0] : null;
+    if (!data) continue;
+
+    const winWidth = right - left;
+    const winHeight = bottom - top;
+    
+    for (let y = 0; y < winHeight; y++) {
+      for (let x = 0; x < winWidth; x++) {
+        const idx = y * winWidth + x;
+        const cls = Number(data[idx]);
+        if (!Number.isFinite(cls)) continue;
+        if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(cls - dataset.noData) < 1e-6) continue;
+        
+        const lon = minLon + (left + x + 0.5) * xRes;
+        const lat = maxLat - (top + y + 0.5) * yRes;
+        
+        if (!pointInGeometry([lon, lat], boundaryGeometry)) continue;
+        totalPixels += 1;
+        if (TREE_COVER_CLASSES.has(cls)) treePixels += 1;
+      }
     }
   }
-  if (!total) return null;
-  return Math.max(0, Math.min(1, Math.round((tree / total) * 1000) / 1000));
+
+  if (!totalPixels) return null;
+  return Math.max(0, Math.min(1, Math.round((treePixels / totalPixels) * 1000) / 1000));
 }
 
 async function loadLocalGeologyDataset(onProgress) {

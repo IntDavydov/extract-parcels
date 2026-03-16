@@ -196,7 +196,7 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
   const admin3 = JSON.parse(admin3Raw.toString('utf8'));
 
-  const searchName = territory.toLowerCase().replace(/\s+громада$/i, '').trim();
+  const searchName = normalizeTerritoryName(territory);
   let matchedPcode = null;
   let matchedFeature = null;
 
@@ -222,10 +222,10 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
 
   for (const f of admin3.features) {
     const p = f.properties;
-    const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(n => n.toLowerCase());
+    const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(normalizeTerritoryName);
     // Require the core name token to match AND centroid to be inside the Nominatim bbox
     const nameHit = names.some(n => {
-      const core = n.replace(/\s+громада$/i, '').trim();
+      const core = n.trim();
       return core === searchName || core.includes(searchName) || searchName.includes(core);
     });
     if (nameHit && inBbox(featureCentroid(f))) {
@@ -254,6 +254,18 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
         matchedFeature = f;
         onProgress(`  → Using: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
         break;
+      }
+    }
+  }
+
+  if (!matchedPcode) {
+    const fuzzy = fuzzyMatchHumdata(territory, admin3.features);
+    if (fuzzy) {
+      const fb = featureBbox(fuzzy.f);
+      if (bboxesIntersect(fb, bbox) || fuzzy.dist <= 3) {
+        matchedPcode = fuzzy.f.properties.adm3_pcode;
+        matchedFeature = fuzzy.f;
+        onProgress(`  → Fuzzy fallback: ${fuzzy.name} (pcode: ${matchedPcode})`);
       }
     }
   }
@@ -331,15 +343,56 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
+function normalizeTerritoryName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[.,/\\()\-–—_]/g, ' ')
+    .replace(/\b(україна|ukraine)\b/g, ' ')
+    .replace(/\b(область|район|громада|територіальна|міська|селищна|сільська|тергромада)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractNameTokens(s) {
+  return [...new Set(normalizeTerritoryName(s).split(/\s+/).filter(w => w.length >= 3))];
+}
+
+function scoreNominatimResult(territory, result) {
+  const queryTokens = extractNameTokens(territory);
+  const text = `${result.display_name || ''} ${result.name || ''} ${result.type || ''} ${result.class || ''} ${
+    result.address ? Object.values(result.address).join(' ') : ''
+  }`.toLowerCase();
+  const textNorm = normalizeTerritoryName(text);
+  const textTokens = new Set(textNorm.split(/\s+/).filter(Boolean));
+  let missing = 0;
+  for (const t of queryTokens) {
+    let matched = textTokens.has(t);
+    if (!matched) {
+      for (const token of textTokens) {
+        if (token.startsWith(t) || t.startsWith(token)) { matched = true; break; }
+      }
+    }
+    if (!matched) missing += 1;
+  }
+  let score = missing * 8;
+  if ((result.class || '') === 'boundary') score -= 2;
+  if ((result.type || '') === 'administrative') score -= 2;
+  if ((result.addresstype || '') === 'administrative') score -= 1;
+  if ((result.display_name || '').toLowerCase().includes('громада')) score -= 1;
+  const importance = Number(result.importance || 0);
+  if (Number.isFinite(importance)) score -= Math.min(3, importance * 3);
+  return score;
+}
+
 // Fuzzy-match territory name against HUMDATA admin3 list
 function fuzzyMatchHumdata(territory, admin3Features) {
-  const q = territory.toLowerCase().replace(/\s+громада$/i, '').trim();
+  const q = normalizeTerritoryName(territory);
   let best = null, bestScore = Infinity;
   for (const f of admin3Features) {
     const p = f.properties;
     const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean);
     for (const name of names) {
-      const n = name.toLowerCase().replace(/\s+громада$/i, '').trim();
+      const n = normalizeTerritoryName(name);
       const dist = levenshtein(q, n);
       // also check word-level overlap for long names
       const qWords = q.split(/\s+/);
@@ -369,24 +422,38 @@ function featureBbox(f) {
 
 async function getBbox(territory, onProgress, fallbackBbox) {
   // 1. Try Nominatim exact + short form
-  const attempts = [territory, territory.replace(/\s+громада$/i, '').trim()];
+  const attempts = [
+    territory,
+    territory.replace(/\s+громада$/i, '').trim(),
+    `${territory}, Україна`,
+  ];
+  let bestNominatim = null;
+  let bestNominatimScore = Infinity;
   for (const q of [...new Set(attempts)]) {
     onProgress(`🔍 Looking up "${q}" via Nominatim…`);
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=ua&polygon_geojson=1`;
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=8&addressdetails=1&countrycodes=ua&polygon_geojson=1`;
     try {
       const raw = await httpGet(url);
       const results = JSON.parse(raw);
       if (results.length) {
-        const r = results[0];
-        const [south, north, west, east] = r.boundingbox.map(Number);
-        onProgress(`📍 Found: ${r.display_name}`);
-        return { south, north, west, east, boundaryGeojson: r.geojson || null, displayName: r.display_name };
+        for (const r of results) {
+          const score = scoreNominatimResult(territory, r);
+          if (score < bestNominatimScore) {
+            bestNominatimScore = score;
+            bestNominatim = r;
+          }
+        }
       }
     } catch (_) {}
   }
+  if (bestNominatim && bestNominatimScore <= 3) {
+    const [south, north, west, east] = bestNominatim.boundingbox.map(Number);
+    onProgress(`📍 Found: ${bestNominatim.display_name}`);
+    return { south, north, west, east, boundaryGeojson: bestNominatim.geojson || null, displayName: bestNominatim.display_name };
+  }
 
   // 2. Fuzzy match against HUMDATA admin3 list (already cached)
-  onProgress(`  ⚠ Nominatim miss — trying fuzzy match against Ukraine admin boundaries…`);
+  onProgress(`  ⚠ Nominatim ambiguous/miss — trying fuzzy match against Ukraine admin boundaries…`);
   try {
     await ensureHumdataZip(onProgress);
     const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
@@ -401,6 +468,12 @@ async function getBbox(territory, onProgress, fallbackBbox) {
     onProgress(`  ⚠ No close fuzzy match found`);
   } catch (e) {
     onProgress(`  ⚠ Fuzzy match failed: ${e.message}`);
+  }
+
+  if (bestNominatim) {
+    const [south, north, west, east] = bestNominatim.boundingbox.map(Number);
+    onProgress(`  ⚠ Using best Nominatim candidate: ${bestNominatim.display_name}`);
+    return { south, north, west, east, boundaryGeojson: bestNominatim.geojson || null, displayName: bestNominatim.display_name };
   }
 
   // 3. Fall back to boundary KMZ bbox if provided
@@ -1381,20 +1454,30 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
     let rawResponse;
     const overpassEndpoints = [
-      'https://overpass-api.de/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
       'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+      'https://overpass-api.de/api/interpreter',
     ];
+    const startedAt = Date.now();
+    const totalTimeoutMs = 55000;
     for (const endpoint of overpassEndpoints) {
+      const elapsed = Date.now() - startedAt;
+      const remaining = totalTimeoutMs - elapsed;
+      if (remaining <= 0) {
+        onProgress(`  ⚠ Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s), stopping mirror retries`);
+        break;
+      }
+      const reqTimeoutMs = Math.max(8000, Math.min(22000, remaining));
       try {
-        rawResponse = await httpPost(endpoint, `data=${encodeURIComponent(query)}`);
+        rawResponse = await httpPost(endpoint, `data=${encodeURIComponent(query)}`, {}, reqTimeoutMs);
         if (rawResponse.trimStart().startsWith('{') || rawResponse.trimStart().startsWith('[')) break;
         onProgress(`  ⚠ ${endpoint} returned non-JSON, trying next mirror…`);
-      } catch (_) {
-        onProgress(`  ⚠ ${endpoint} failed, trying next mirror…`);
+      } catch (e) {
+        onProgress(`  ⚠ ${endpoint} failed (${e.message}), trying next mirror…`);
       }
     }
 
+    if (!rawResponse) throw new Error('Overpass mirrors did not return data within timeout');
     let osmData;
     try { osmData = JSON.parse(rawResponse); }
     catch (_) {
