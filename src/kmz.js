@@ -155,9 +155,9 @@ function customIconStyleId(iconName) {
   return `Custom_Icon_${iconName.replace(/[^a-zA-Z0-9]/g, '_')}`;
 }
 
-function buildStyles(customIconNames = []) {
+function buildStyles(stylesMap, customIconNames = []) {
   const lines = [];
-  for (const [layerName, colors] of Object.entries(LAYER_STYLES)) {
+  for (const [layerName, colors] of Object.entries(stylesMap || {})) {
     const id = layerName.replace(/[^a-zA-Z0-9]/g, '_');
     const pointColor = colors.point || colors.line || 'ffffffff';
     const lineColor  = colors.line  || 'ffffffff';
@@ -227,8 +227,25 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       bundledIcons.add(ent.name);
     }
   }
+  const iconSearchDirs = [
+    appRoot,
+    ...iconDirs,
+    process.cwd(),
+  ];
+  const findIconSource = (iconName) => {
+    for (const dir of iconSearchDirs) {
+      const src = path.join(dir, iconName);
+      if (fs.existsSync(src)) return src;
+    }
+    return null;
+  };
+  const runtimeStyles = JSON.parse(JSON.stringify(LAYER_STYLES));
+  if (!findIconSource('windmill.png')) {
+    runtimeStyles['Wind Speed'].icon = 'http://maps.google.com/mapfiles/kml/pushpin/red-pushpin.png';
+    onProgress('  ⚠ windmill.png not found; using default pushpin for Wind Speed');
+  }
   const customIconNames = [...bundledIcons].filter(n => !['houses.png', 'windmill.png'].includes(n)).sort();
-  const styles = buildStyles(customIconNames);
+  const styles = buildStyles(runtimeStyles, customIconNames);
   const folders = [];
 
   function layerFolder(layerName) {
@@ -426,8 +443,8 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   // Bundle icon files into files/ so they're available for use in Google Earth
   const zippedIcons = new Set();
   for (const icon of bundledIcons) {
-    const src = path.join(appRoot, icon);
-    if (fs.existsSync(src)) {
+    const src = findIconSource(icon);
+    if (src && fs.existsSync(src)) {
       zip.file(`files/${icon}`, fs.readFileSync(src));
       zippedIcons.add(icon);
     }
@@ -452,7 +469,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     }
   }
   // Also bundle any additional icons referenced in layer styles
-  for (const colors of Object.values(LAYER_STYLES)) {
+  for (const colors of Object.values(runtimeStyles)) {
     if (colors.icon) {
       const iconName = path.basename(colors.icon);
       if (!bundledIcons.has(iconName)) {
