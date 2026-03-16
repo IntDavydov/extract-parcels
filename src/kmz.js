@@ -60,7 +60,7 @@ const LAYER_STYLES = {
     width: 2,
     noOutline: true,
   },
-  'Wind Speed':            { point: 'ffffffff', icon: 'files/windmill.png' },
+  'Wind Speed':            { point: 'ffffffff', icon: 'http://maps.google.com/mapfiles/kml/pushpin/blue-pushpin.png' },
 };
 
 // Group definitions — layers are nested inside parent folders in the KMZ
@@ -241,8 +241,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   };
   const runtimeStyles = JSON.parse(JSON.stringify(LAYER_STYLES));
   if (!findIconSource('windmill.png')) {
-    runtimeStyles['Wind Speed'].icon = 'http://maps.google.com/mapfiles/kml/pushpin/red-pushpin.png';
-    onProgress('  ⚠ windmill.png not found; using default pushpin for Wind Speed');
+    runtimeStyles['Wind Speed'].icon = 'http://maps.google.com/mapfiles/kml/pushpin/blue-pushpin.png';
   }
   const customIconNames = [...bundledIcons].filter(n => !['houses.png', 'windmill.png'].includes(n)).sort();
   const styles = buildStyles(runtimeStyles, customIconNames);
