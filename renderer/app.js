@@ -603,14 +603,13 @@ document.getElementById('btn-offline-download').addEventListener('click', async 
   const btn = document.getElementById('btn-offline-download');
   const status = document.getElementById('offline-download-status');
   const progress = document.getElementById('offline-download-progress');
-  const worldcoverUrl = document.getElementById('offline-worldcover-url').value.trim();
   const geologyUrl = document.getElementById('offline-geology-url').value.trim();
-  const forceUpdate = !!document.getElementById('offline-force-update').checked;
+  const forceUpdate = !!document.getElementById('offline-force-update')?.checked;
   btn.disabled = true;
   progress.style.width = '0%';
   status.textContent = 'starting...';
   appendLog('⬇ Starting offline dataset download...');
-  const result = await window.api.downloadOfflineData({ worldcoverUrl, geologyUrl, forceUpdate });
+  const result = await window.api.downloadOfflineData({ worldcoverUrl: '', geologyUrl, forceUpdate });
   if (result && result.success) {
     status.textContent = 'done';
     progress.style.width = '100%';

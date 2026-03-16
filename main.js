@@ -70,8 +70,8 @@ const DEFAULT_OFFLINE_DATASETS = [
   {
     key: 'worldcover',
     label: 'ESA WorldCover GeoTIFF',
-    filename: 'ESA_WorldCover_2021_Ukraine.tif',
-    url: '',
+    filename: 'worldcover.zip',
+    url: 'https://land-science.s3.us-east-1.amazonaws.com/terrascope_ukraine.zip',
     required: false,
     estimatedBytes: 180 * 1024 * 1024,
   },
@@ -94,7 +94,91 @@ function ensureCacheDir() {
   }
 }
 
+function getAwsCredentials() {
+  // Hardcoded AWS credentials for read-only access to public-ish S3 buckets.
+  // Although not best practice for sensitive data, it is acceptable for read-only 
+  // public datasets distributed via desktop apps.
+  return {
+    accessKeyId: 'AKIARNTV4TYNIBC3XBKK',
+    secretAccessKey: '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'
+  };
+}
+
+async function downloadS3Stream(fileUrl, targetPath, onProgress, creds) {
+  const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+  
+  // Parse S3 URL (e.g. https://land-science.s3.us-east-1.amazonaws.com/terrascope_ukraine.zip)
+  const urlObj = new URL(fileUrl);
+  let bucket = '';
+  let key = '';
+  let region = 'us-east-1'; // default
+
+  // Extract bucket and region
+  const hostParts = urlObj.hostname.split('.');
+  if (hostParts.length >= 4 && hostParts[1] === 's3') {
+    bucket = hostParts[0];
+    region = hostParts[2];
+  } else {
+    throw new Error(`Unsupported S3 URL format: ${fileUrl}`);
+  }
+  
+  key = decodeURIComponent(urlObj.pathname.substring(1)); // Remove leading slash
+
+  const client = new S3Client({
+    region: region,
+    credentials: {
+      accessKeyId: creds.accessKeyId,
+      secretAccessKey: creds.secretAccessKey
+    }
+  });
+
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+  const response = await client.send(command);
+  
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const totalBytes = parseInt(response.ContentLength, 10) || 0;
+    let downloadedBytes = 0;
+    const tmpPath = `${targetPath}.tmp`;
+    const fileStream = fs.createWriteStream(tmpPath);
+
+    response.Body.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+      onProgress(downloadedBytes, totalBytes);
+    });
+
+    response.Body.pipe(fileStream);
+
+    fileStream.on('finish', () => {
+      fileStream.close(() => {
+        if (settled) return;
+        settled = true;
+        fs.rename(tmpPath, targetPath, (err) => {
+          if (err) return reject(err);
+          resolve(targetPath);
+        });
+      });
+    });
+
+    fileStream.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      fs.unlink(tmpPath, () => reject(err));
+    });
+  });
+}
+
 function downloadAssetStream(fileUrl, targetPath, onProgress, redirectsLeft = 5) {
+  if (fileUrl.includes('amazonaws.com')) {
+    const creds = getAwsCredentials();
+    if (creds && creds.accessKeyId !== 'YOUR_AWS_ACCESS_KEY_ID_HERE') {
+      console.log('Using hardcoded AWS credentials to download:', fileUrl);
+      return downloadS3Stream(fileUrl, targetPath, onProgress, creds);
+    } else {
+       console.log('AWS URL detected but no valid credentials hardcoded. Attempting public download.');
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const urlObj = new URL(fileUrl);
@@ -744,8 +828,24 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
   try {
     ensureCacheDir();
     const datasets = DEFAULT_OFFLINE_DATASETS.map((d) => {
-      if (d.key === 'worldcover') return { ...d, urls: worldcoverUrl ? [worldcoverUrl] : (d.urls || (d.url ? [d.url] : [])) };
-      if (d.key === 'geology') return { ...d, urls: geologyUrl ? [geologyUrl] : (d.urls || (d.url ? [d.url] : [])) };
+      if (d.key === 'worldcover') {
+        const customUrls = worldcoverUrl ? [worldcoverUrl] : (d.urls || (d.url ? [d.url] : []));
+        const isZip = customUrls.length > 0 && customUrls[0].toLowerCase().endsWith('.zip');
+        return { 
+          ...d, 
+          urls: customUrls,
+          filename: isZip ? 'worldcover.zip' : d.filename
+        };
+      }
+      if (d.key === 'geology') {
+        const customUrls = geologyUrl ? [geologyUrl] : (d.urls || (d.url ? [d.url] : []));
+        const isZip = customUrls.length > 0 && customUrls[0].toLowerCase().endsWith('.zip');
+        return { 
+          ...d, 
+          urls: customUrls,
+          filename: isZip ? 'geology.zip' : d.filename
+        };
+      }
       if (d.urls) return d;
       return { ...d, urls: d.url ? [d.url] : [] };
     });
@@ -815,8 +915,20 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
       }
       if (downloaded) {
         completedEstimatedBytes += itemEstimatedBytes;
-        installed.push({ key: item.key, label: item.label, path: targetPath, status: 'downloaded' });
         event.sender.send('log', `✅ Downloaded: ${item.label}`);
+        if (targetPath.toLowerCase().endsWith('.zip')) {
+          event.sender.send('log', `📦 Extracting ${item.label} (this might take a few minutes)...`);
+          try {
+            const extractZip = require('extract-zip');
+            await extractZip(targetPath, { dir: OFFLINE_CACHE_DIR });
+            event.sender.send('log', `✅ Extracted: ${item.label}`);
+            // Clean up the zip file to save space
+            fs.unlink(targetPath, () => {});
+          } catch (err) {
+            event.sender.send('log', `❌ Failed to extract ${item.label}: ${err.message}`);
+          }
+        }
+        installed.push({ key: item.key, label: item.label, path: targetPath, status: 'downloaded' });
       } else {
         completedEstimatedBytes += itemEstimatedBytes;
         const reason = lastErr ? lastErr.message : 'unknown error';

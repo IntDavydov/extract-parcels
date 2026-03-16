@@ -558,6 +558,12 @@ function buildQuery(layers, bbox) {
 // ── Tag → layer name ───────────────────────────────────────
 function classifyFeature(props) {
   const p = props || {};
+  const asStr = (v) => String(v || '').toLowerCase();
+  const hydroLike = /(^|[;,\s])(hydro|hydroelectric|water)([;,\s]|$)/i;
+  const hydroFlag = hydroLike.test(asStr(p.source)) ||
+    hydroLike.test(asStr(p['plant:source'])) ||
+    hydroLike.test(asStr(p['generator:source'])) ||
+    /(^|[;,\s])(ges|гес|hpp)([;,\s]|$)/i.test(asStr(p.name));
   if (p.power === 'line')                            return 'Power Lines';
   if (p.power === 'tower' || p.power === 'pole')     return 'Towers';
   if (p.power === 'substation')                      return 'Substations';
@@ -567,9 +573,11 @@ function classifyFeature(props) {
   if (p.landuse === 'forest' || p.natural === 'wood') return 'Forests';
   if (p.aeroway || p.military === 'airfield') return 'Airoports';
   if (
-    (p.power === 'plant' && (p['plant:source'] === 'nuclear' || /nuclear/i.test(String(p.source || '')))) ||
-    (p.power === 'generator' && p['generator:source'] === 'nuclear') ||
-    p.industrial === 'nuclear'
+    !hydroFlag && (
+      (p.power === 'plant' && (/nuclear/i.test(String(p['plant:source'] || '')) || /nuclear/i.test(String(p.source || '')))) ||
+      (p.power === 'generator' && /nuclear/i.test(String(p['generator:source'] || ''))) ||
+      p.industrial === 'nuclear'
+    )
   ) return 'Nuclear Power Plants';
   if (p.boundary === 'protected_area' || p.protect_class) return 'Emerald Network';
   return null;
@@ -664,6 +672,8 @@ LIMIT 250`;
   const bindings = (data.results && data.results.bindings) || [];
   const features = [];
   for (const b of bindings) {
+    const label = (b.itemLabel && b.itemLabel.value) || '';
+    if (/(^|\s)(гес|hpp)(\s|$)/i.test(label) || /hydro/i.test(label)) continue;
     const wkt = b.coord && b.coord.value;
     const m = wkt && wkt.match(/^Point\(([-0-9.]+)\s+([-0-9.]+)\)$/);
     if (!m) continue;
@@ -676,7 +686,7 @@ LIMIT 250`;
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lon, lat] },
       properties: {
-        name: (b.itemLabel && b.itemLabel.value) || qid || 'Nuclear plant',
+        name: label || qid || 'Nuclear plant',
         wikidata: qid,
         _layer: 'Nuclear Power Plants',
         _type: 'nuclear_power_plant',

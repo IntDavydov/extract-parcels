@@ -49,6 +49,7 @@ const LOCAL_PBF_CANDIDATES = [
   'ukraine-latest.pbf',
 ];
 const LOCAL_WORLDCOVER_TIFF_CANDIDATES = [
+  'terrascope_ukraine/WORLDCOVER/ESA_WORLDCOVER_10M_2021_V200/MAP',
   'extra/ESA_WORLDCOVER_10M_2021_V200/MAP',
   'test-files/ESA_WorldCover_2021_Ukraine.tif',
   'test-files/ESA_WorldCover_Ukraine.tif',
@@ -172,10 +173,7 @@ async function loadLocalWindDataset(onProgress) {
       const tiffPath = resolveLocalWindTiffPath();
       if (!tiffPath) return null;
       const geotiff = require('geotiff');
-      const tiffBuffer = fs.readFileSync(tiffPath);
-      const tiff = await geotiff.fromArrayBuffer(
-        tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
-      );
+      const tiff = await geotiff.fromFile(tiffPath);
       const image = await tiff.getImage();
       const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
       const width = image.getWidth();
@@ -183,7 +181,7 @@ async function loadLocalWindDataset(onProgress) {
       const noDataRaw = image.getGDALNoData && image.getGDALNoData();
       const noData = noDataRaw == null ? null : Number(noDataRaw);
       if (onProgress) onProgress(`  → Local wind GeoTIFF loaded: ${path.basename(tiffPath)} (${width}x${height})`);
-      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData, tiff };
     })().catch((err) => {
       _localWindDatasetPromise = Promise.resolve(null);
       if (onProgress) onProgress(`  ⚠ Local wind GeoTIFF unavailable: ${err.message}`);
@@ -224,17 +222,14 @@ async function loadLocalWorldCoverDatasets(onProgress) {
       const datasets = [];
 
       async function loadTiff(tiffPath) {
-        const tiffBuffer = fs.readFileSync(tiffPath);
-        const tiff = await geotiff.fromArrayBuffer(
-          tiffBuffer.buffer.slice(tiffBuffer.byteOffset, tiffBuffer.byteOffset + tiffBuffer.byteLength)
-        );
+        const tiff = await geotiff.fromFile(tiffPath);
         const image = await tiff.getImage();
         const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
         const width = image.getWidth();
         const height = image.getHeight();
         const noDataRaw = image.getGDALNoData && image.getGDALNoData();
         const noData = noDataRaw == null ? null : Number(noDataRaw);
-        return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData };
+        return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData, tiff };
       }
 
       const stat = fs.statSync(resolvedPath);
