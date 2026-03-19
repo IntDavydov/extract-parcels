@@ -1,12 +1,52 @@
 'use strict';
 
 // ── Helpers ────────────────────────────────────────────────
-function appendLog(msg) {
+const LOG_MAX_LINES = 1500;
+const LOG_FLUSH_CHUNK_SIZE = 200;
+let logLines = [];
+let logFlushScheduled = false;
+let logDropNoticeShown = false;
+
+function flushLog() {
   const el = document.getElementById('main-log');
+  if (!el) {
+    logFlushScheduled = false;
+    return;
+  }
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-  const formatted = msg.replace(/^\[ERR(?:OR)?\]\s*/i, '❌ ');
-  el.textContent += formatted + '\n';
-  if (atBottom) el.scrollTop = el.scrollHeight;
+  if (logLines.length > LOG_FLUSH_CHUNK_SIZE * 2) {
+    // Keep UI responsive under heavy logging load.
+    const dropped = logLines.length - LOG_FLUSH_CHUNK_SIZE;
+    logLines = logLines.slice(-LOG_FLUSH_CHUNK_SIZE);
+    if (!logDropNoticeShown) {
+      logLines.unshift(`⚠ Log flood detected, dropped ${dropped} pending lines to keep UI responsive`);
+      logDropNoticeShown = true;
+    }
+  }
+  const chunk = logLines.splice(0, LOG_FLUSH_CHUNK_SIZE);
+  if (chunk.length) {
+    const currentLines = el.textContent ? el.textContent.split('\n') : [];
+    currentLines.push(...chunk);
+    if (currentLines.length > LOG_MAX_LINES) {
+      currentLines.splice(0, currentLines.length - LOG_MAX_LINES);
+    }
+    el.textContent = currentLines.join('\n');
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+  logFlushScheduled = false;
+  if (logLines.length) scheduleLogFlush();
+}
+
+function scheduleLogFlush() {
+  if (logFlushScheduled) return;
+  logFlushScheduled = true;
+  requestAnimationFrame(flushLog);
+}
+
+function appendLog(msg) {
+  const formatted = String(msg || '').replace(/^\[ERR(?:OR)?\]\s*/i, '❌ ');
+  logLines.push(formatted);
+  scheduleLogFlush();
 }
 
 function sanitizeFilename(name) {
@@ -605,11 +645,12 @@ document.getElementById('btn-offline-download').addEventListener('click', async 
   const progress = document.getElementById('offline-download-progress');
   const geologyUrl = document.getElementById('offline-geology-url').value.trim();
   const forceUpdate = !!document.getElementById('offline-force-update')?.checked;
+  const forceUpdateAws = !!document.getElementById('offline-force-update-aws')?.checked;
   btn.disabled = true;
   progress.style.width = '0%';
   status.textContent = 'starting...';
   appendLog('⬇ Starting offline dataset download...');
-  const result = await window.api.downloadOfflineData({ worldcoverUrl: '', geologyUrl, forceUpdate });
+  const result = await window.api.downloadOfflineData({ worldcoverUrl: '', geologyUrl, forceUpdate, forceUpdateAws });
   if (result && result.success) {
     status.textContent = 'done';
     progress.style.width = '100%';

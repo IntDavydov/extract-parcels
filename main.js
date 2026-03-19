@@ -83,6 +83,14 @@ const DEFAULT_OFFLINE_DATASETS = [
     required: false,
     estimatedBytes: 20 * 1024 * 1024,
   },
+  {
+    key: 'emerald',
+    label: 'Emerald Network (EEA)',
+    filename: 'ukraine-emerald.geojson',
+    url: "https://bio.discomap.eea.europa.eu/arcgis/rest/services/ProtectedSites/EmeraldSites/MapServer/3/query?where=COUNTRY_CODE%3D'UA'&outFields=*&outSR=4326&f=geojson",
+    required: false,
+    estimatedBytes: 115 * 1024 * 1024,
+  }
 ];
 
 function ensureCacheDir() {
@@ -824,7 +832,7 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
 
 ipcMain.on('stop-eland-lookup', () => stopLookup());
 
-ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '', forceUpdate = false } = {}) => {
+ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '', forceUpdate = false, forceUpdateAws = false } = {}) => {
   try {
     ensureCacheDir();
     const datasets = DEFAULT_OFFLINE_DATASETS.map((d) => {
@@ -867,7 +875,21 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
       const item = toDownload[i];
       const targetPath = path.join(OFFLINE_CACHE_DIR, item.filename);
       const itemEstimatedBytes = Math.max(1, Number(item.estimatedBytes || 0));
-      if (!forceUpdate && fs.existsSync(targetPath)) {
+      
+      let isAlreadyInstalled = false;
+      if (item.filename.endsWith('.zip')) {
+        // Since we delete the zip after extracting, check if the expected output directory exists instead
+        const expectedDir = item.key === 'worldcover' 
+          ? path.join(OFFLINE_CACHE_DIR, 'WORLDCOVER') 
+          : targetPath.replace('.zip', '');
+        isAlreadyInstalled = fs.existsSync(expectedDir);
+      } else {
+        isAlreadyInstalled = fs.existsSync(targetPath);
+      }
+
+      const shouldForceUpdate = item.key === 'worldcover' ? forceUpdateAws : forceUpdate;
+
+      if (!shouldForceUpdate && isAlreadyInstalled) {
         completedEstimatedBytes += itemEstimatedBytes;
         const overallPercent = Math.round((completedEstimatedBytes / totalEstimatedBytes) * 100);
         event.sender.send('download-progress', {
@@ -968,11 +990,36 @@ ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geol
 
 ipcMain.handle('generate-research-xlsx', async (event, { oblastName, outputPath }) => {
   try {
-    const onProgress = msg => event.sender.send('log', msg);
+    let pendingLogMsg = null;
+    let lastLogFlush = 0;
+    let flushTimer = null;
+    const FLUSH_MS = 250;
+    const flushLog = () => {
+      if (!pendingLogMsg) return;
+      event.sender.send('log', pendingLogMsg);
+      pendingLogMsg = null;
+      lastLogFlush = Date.now();
+    };
+    const onProgress = (msg) => {
+      pendingLogMsg = msg;
+      const now = Date.now();
+      if (now - lastLogFlush >= FLUSH_MS) {
+        flushLog();
+        return;
+      }
+      if (flushTimer) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        flushLog();
+      }, FLUSH_MS);
+    };
     onProgress('🔍 Checking Chrome availability…');
     const chromePath = await ensurePuppeteerChrome();
     if (chromePath) onProgress(`✅ Chrome: ${chromePath}`);
-    return await generateResearchXlsx(oblastName, outputPath, onProgress, chromePath);
+    const result = await generateResearchXlsx(oblastName, outputPath, onProgress, chromePath);
+    if (flushTimer) clearTimeout(flushTimer);
+    flushLog();
+    return result;
   } catch (err) {
     event.sender.send('log', `❌ Research generation failed: ${err.message}`);
     return { success: false, error: err.message };
