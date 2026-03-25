@@ -360,7 +360,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       continue;
     }
     if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue; // already nested above
-    // Airoports: nest 50km buffer inside the Airoports folder
+    // Airoports: nest 45km buffer inside the Airoports folder
     if (layerName === 'Airoports' && layerMap['Airoports Buffer']) {
       const airportsFolder = layerFolder('Airoports');
       const bufferFolder = layerFolder('Airoports Buffer');

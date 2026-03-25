@@ -1642,14 +1642,14 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       onProgress(`  → Airoports filtered: ${layerMap['Airoports'].length}/${before} kept (active military/major only)`);
     }
 
-    // Airoports Buffer: 50km around all airport geometries
+    // Airoports Buffer: 45km around all airport geometries
     if (layerMap['Airoports']) {
       const airportBufs = layerMap['Airoports']
         .filter(f => f.geometry)
         .map(f => {
           try {
-            const buf = turfBuffer(f, 50, { units: 'kilometers' });
-            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Airoports Buffer', _type: 'buffer_50km' } } : null;
+            const buf = turfBuffer(f, 45, { units: 'kilometers' });
+            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Airoports Buffer', _type: 'buffer_45km' } } : null;
           } catch (_) { return null; }
         }).filter(Boolean);
       if (airportBufs.length) layerMap['Airoports Buffer'] = airportBufs;
