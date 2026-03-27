@@ -216,6 +216,132 @@ const state = {
   fileClosed: false,
 };
 
+function lonLatToTile(lon, lat, z) {
+  const n = Math.pow(2, z);
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const latRad = lat * Math.PI / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { x, y };
+}
+
+async function processTileBuffer(buffer, tileKey, x, y, z) {
+  if (state.processedTiles.has(tileKey)) return;
+  state.processedTiles.add(tileKey);
+  const PbfConstructor = Pbf.default || Pbf;
+  const pbf = new PbfConstructor(buffer);
+  const tile = new VectorTile(pbf);
+
+  let newFragments = 0;
+  let fallbackIdSeq = 0;
+  for (let layerName in tile.layers) {
+    const layer = tile.layers[layerName];
+    for (let i = 0; i < layer.length; i++) {
+      try {
+        const feature = layer.feature(i).toGeoJSON(x, y, z);
+        const props = feature.properties || {};
+        const cadnum = String(
+          props.cadnum ||
+          props.cad_num ||
+          props.cadastral_number ||
+          props.cadastre_number ||
+          ''
+        ).trim();
+        const key = cadnum || `no-cadnum:${tileKey}:${fallbackIdSeq++}`;
+        if (!parcelFragments.has(key)) {
+          parcelFragments.set(key, { properties: feature.properties || {}, fragments: [] });
+        }
+        parcelFragments.get(key).fragments.push(feature);
+        newFragments++;
+      } catch (featureError) {
+        console.warn(`Feature error in ${tileKey}:`, featureError.message);
+      }
+    }
+  }
+
+  if (newFragments > 0) {
+    state.totalFeatures = parcelFragments.size;
+    console.log(`Tile ${tileKey}: +${newFragments} fragments, total parcels: ${parcelFragments.size}`);
+  }
+}
+
+async function fetchKadastrovaTilesDirect(onProgress) {
+  if (ACTIVE_SOURCE_KEY !== "kadastrova_karta") return false;
+  const boundary = await loadBoundary(CONFIG.boundaryFilter);
+  if (!boundary || !boundary.rings.length) return false;
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const ring of boundary.rings) {
+    for (const [lon, lat] of ring) {
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      west = Math.min(west, lon); east = Math.max(east, lon);
+      south = Math.min(south, lat); north = Math.max(north, lat);
+    }
+  }
+  if (!Number.isFinite(west)) return false;
+  const zooms = [16, 15, 14];
+  const endpointTemplates = [
+    `${ACTIVE_SOURCE.baseUrl}/tiles/maps/kadastr/land_polygons/{z}/{x}/{y}.pbf`,
+    `${ACTIVE_SOURCE.baseUrl}/tiles/maps/kadastr/{z}/{x}/{y}.pbf`,
+  ];
+  let anyOk = 0;
+  let anyNonEmpty = 0;
+  let anyParsedLayers = 0;
+
+  for (const z of zooms) {
+    const t1 = lonLatToTile(west, north, z);
+    const t2 = lonLatToTile(east, south, z);
+    const minX = Math.min(t1.x, t2.x), maxX = Math.max(t1.x, t2.x);
+    const minY = Math.min(t1.y, t2.y), maxY = Math.max(t1.y, t2.y);
+    const allTiles = [];
+    for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++) allTiles.push({ x, y });
+    onProgress(`  → Direct tile mode: trying z${z}, ${allTiles.length} tile(s)`);
+
+    const beforeParcels = parcelFragments.size;
+    for (const tpl of endpointTemplates) {
+      let okCount = 0;
+      let nonEmptyCount = 0;
+      let parsedLayersCount = 0;
+      for (const { x, y } of allTiles) {
+        const tileKey = `${z}/${x}/${y}`;
+        const url = tpl.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
+        try {
+          const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (!res.ok) continue;
+          okCount++;
+          const arr = await res.arrayBuffer();
+          if (arr.byteLength > 0) nonEmptyCount++;
+          if (arr.byteLength > 0) {
+            try {
+              const pbf = new (Pbf.default || Pbf)(Buffer.from(arr));
+              const vt = new VectorTile(pbf);
+              if (Object.keys(vt.layers || {}).length > 0) parsedLayersCount++;
+            } catch (_) {}
+          }
+          await processTileBuffer(Buffer.from(arr), tileKey, x, y, z);
+        } catch (_) {
+          // keep going
+        }
+      }
+      anyOk += okCount;
+      anyNonEmpty += nonEmptyCount;
+      anyParsedLayers += parsedLayersCount;
+      onProgress(`    · ${tpl.includes('land_polygons') ? 'land_polygons' : 'kadastr'} endpoint OK tiles: ${okCount}, non-empty: ${nonEmptyCount}, with layers: ${parsedLayersCount}`);
+      if (parcelFragments.size > beforeParcels) break;
+    }
+    if (parcelFragments.size > beforeParcels) {
+      onProgress(`  ✅ Direct mode captured ${parcelFragments.size - beforeParcels} parcel feature(s) at z${z}`);
+      return true;
+    }
+  }
+  if (anyOk > 0 && anyNonEmpty === 0) {
+    onProgress(`  ⚠ kadastrova-karta.com returned ${anyOk} tile responses but all were empty (0 bytes) for this area.`);
+    onProgress(`  ⚠ This usually means no cadastral vector coverage at requested tiles (source-side no-data), not a parser failure.`);
+  } else if (anyNonEmpty > 0 && anyParsedLayers === 0) {
+    onProgress(`  ⚠ Non-empty tiles received (${anyNonEmpty}) but no vector layers decoded.`);
+  }
+  onProgress(`  ⚠ Direct tile mode found no parcel features in z14-z16 range`);
+  return false;
+}
+
 (async () => {
   try {
     const chromePath = getChromePath();
@@ -291,6 +417,10 @@ const state = {
         if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
         console.log("  → Tiles arriving, waiting to settle…");
         await waitForTilesToSettle(CONFIG.proxy ? 8000 : 4000);
+        if (ACTIVE_SOURCE_KEY === "kadastrova_karta" && parcelFragments.size === 0) {
+          console.log("  ⚠ Base tiles loaded but no parcel features captured — switching to direct z14 tile fetch…");
+          await fetchKadastrovaTilesDirect((m) => console.log(m));
+        }
         console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
       }
 
@@ -329,34 +459,7 @@ async function processTileResponse(response, url) {
 
   try {
     const buffer = await response.buffer();
-    const PbfConstructor = Pbf.default || Pbf;
-    const pbf = new PbfConstructor(buffer);
-    const tile = new VectorTile(pbf);
-
-    let newFragments = 0;
-
-    for (let layerName in tile.layers) {
-      const layer = tile.layers[layerName];
-      for (let i = 0; i < layer.length; i++) {
-        try {
-          const feature = layer.feature(i).toGeoJSON(x, y, z);
-          if (!feature.properties?.cadnum) continue;
-          const cadnum = feature.properties.cadnum;
-          if (!parcelFragments.has(cadnum)) {
-            parcelFragments.set(cadnum, { properties: feature.properties, fragments: [] });
-          }
-          parcelFragments.get(cadnum).fragments.push(feature);
-          newFragments++;
-        } catch (featureError) {
-          console.warn(`Feature error in ${tileKey}:`, featureError.message);
-        }
-      }
-    }
-
-    if (newFragments > 0) {
-      state.totalFeatures = parcelFragments.size;
-      console.log(`Tile ${tileKey}: +${newFragments} fragments, total parcels: ${parcelFragments.size}`);
-    }
+    await processTileBuffer(buffer, tileKey, x, y, z);
   } catch (error) {
     state.errorCount++;
     console.error(`Error processing tile ${tileKey}:`, error.message);

@@ -346,12 +346,17 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   });
 
   let tilesProcessed = 0;
+  let parcelsFound = 0;
 
   scrapingProcess.stdout.on('data', (chunk) => {
     chunk.toString().split('\n').filter(Boolean).forEach((line) => {
       event.sender.send('log', line);
       const m = line.match(/Tiles processed:\s*(\d+)/);
       if (m) tilesProcessed = parseInt(m[1]);
+      const p = line.match(/Parcels:\s*(\d+)/);
+      if (p) parcelsFound = parseInt(p[1]);
+      const p2 = line.match(/total parcels:\s*(\d+)/i);
+      if (p2) parcelsFound = Math.max(parcelsFound, parseInt(p2[1]));
     });
   });
 
@@ -364,7 +369,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   return new Promise((resolve) => {
     scrapingProcess.on('close', (code) => {
       scrapingProcess = null;
-      resolve({ code, tiles: tilesProcessed });
+      resolve({ code, tiles: tilesProcessed, parcels: parcelsFound });
     });
   });
 });

@@ -392,6 +392,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog(`━━━ Parcels (${getParcelSourceLabel(source)}): ${label} ━━━`);
     const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
+    let parcelsGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
       if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -404,13 +405,14 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           { headless: true, boundaryFilter: boundaryPath, proxy: useVpn ? '' : (proxyCache || ''), parcelSource: source });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
-        if (tilesGot > 0) break;
+        parcelsGot = res.parcels || 0;
+        if (parcelsGot > 0) break;
         if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
         if (useVpn) break; // no proxy retries in VPN mode
       }
       if (useVpn) break; // no second round in VPN mode
     }
-    return tilesGot;
+    return { tiles: tilesGot, parcels: parcelsGot };
   }
 
   // Helper: run parcel scraper with automatic source failover
@@ -424,10 +426,10 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         appendLog(`🔁 Fallback to ${getParcelSourceLabel(source)}…`);
       }
       const startUrl = makeParcelUrlForBoundary(bf, source);
-      const tiles = await scrapeWithRetries(startUrl, bf.path, source, label);
-      if (tiles > 0) return { tiles, source };
+      const res = await scrapeWithRetries(startUrl, bf.path, source, label);
+      if (res.parcels > 0) return { tiles: res.tiles, parcels: res.parcels, source };
     }
-    return { tiles: 0, source: primary };
+    return { tiles: 0, parcels: 0, source: primary };
   }
 
   // ══════════════════════════════════════════════════════════
@@ -463,7 +465,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     // Run ONE scraper that pans through all cells internally
     const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
-    for (let round = 1; round <= 2 && tilesGot === 0; round++) {
+    let parcelsGot = 0;
+    for (let round = 1; round <= 2 && parcelsGot === 0; round++) {
       if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
         if (!useVpn && !proxyCache) {
@@ -482,17 +485,18 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           });
           appendLog(`Scraper exited (code ${res.code})`);
           tilesGot = res.tiles || 0;
-          if (tilesGot > 0) break;
+          parcelsGot = res.parcels || 0;
+          if (parcelsGot > 0) break;
           if (source === parcelSource) appendLog(`🔁 Fallback to ${getParcelSourceLabel(getFallbackParcelSource(parcelSource))}…`);
         }
-        if (tilesGot > 0) break;
+        if (parcelsGot > 0) break;
         if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
         if (useVpn) break;
       }
       if (useVpn) break;
     }
 
-    if (tilesGot === 0) {
+    if (parcelsGot === 0) {
       appendLog('❌ No parcels found in area.');
       setBusy(false); return;
     }
