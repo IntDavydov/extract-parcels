@@ -300,8 +300,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC: start kadastr scraping
-ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells }) => {
+// IPC: start parcel scraping (kadastr.live / kadastrova-karta.com)
+ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells, parcelSource }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -320,6 +320,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   if (boundaryFilter)  env.BOUNDARY_FILTER = boundaryFilter;
   if (proxy)           env.KADASTR_PROXY = proxy;
   if (gridCells && gridCells.length) env.GRID_CELLS = JSON.stringify(gridCells);
+  if (parcelSource) env.PARCEL_SOURCE = String(parcelSource);
 
   // Ensure Chrome is available (downloads on first run if needed)
   event.sender.send('log', '🔍 Checking Chrome availability...');
@@ -554,8 +555,8 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
   }
 });
 
-// IPC: find working proxy for kadastr.live
-ipcMain.handle('find-proxy', async (event, excludeList = []) => {
+// IPC: find working proxy for selected parcel source
+ipcMain.handle('find-proxy', async (event, { excludeList = [], parcelSource = 'kadastr_live' } = {}) => {
   const https = require('https');
   const http  = require('http');
   const net   = require('net');
@@ -628,9 +629,10 @@ ipcMain.handle('find-proxy', async (event, excludeList = []) => {
     } catch (_) {}
   }
 
+  const targetHost = parcelSource === 'kadastrova_karta' ? 'kadastrova-karta.com' : 'kadastr.live';
   const excluded = new Set((excludeList || []).map(p => p.replace(/^https?:\/\//, '')));
   proxies = [...new Set(proxies)].filter(p => !excluded.has(p)).slice(0, 200);
-  event.sender.send('log', `🔍 Testing ${proxies.length} proxies for kadastr.live…`);
+  event.sender.send('log', `🔍 Testing ${proxies.length} proxies for ${targetHost}…`);
 
   // Test in parallel batches of 20
   const BATCH = 20;
@@ -638,7 +640,7 @@ ipcMain.handle('find-proxy', async (event, excludeList = []) => {
     const batch = proxies.slice(i, i + BATCH);
     const results = await Promise.all(batch.map(async (p) => {
       const [host, port] = p.split(':');
-      const ok = await testHttpProxy(host, parseInt(port), 'kadastr.live', 443, 12000);
+      const ok = await testHttpProxy(host, parseInt(port), targetHost, 443, 12000);
       return ok ? p : null;
     }));
     const found = results.find(r => r !== null);
@@ -649,7 +651,7 @@ ipcMain.handle('find-proxy', async (event, excludeList = []) => {
     event.sender.send('log', `   … tested ${Math.min(i + BATCH, proxies.length)}/${proxies.length}`);
   }
 
-  event.sender.send('log', '⚠ No working proxy found — kadastr.live may be reachable directly, or try manually entering a proxy.');
+  event.sender.send('log', `⚠ No working proxy found — ${targetHost} may be reachable directly, or try manually entering a proxy.`);
   return null;
 });
 

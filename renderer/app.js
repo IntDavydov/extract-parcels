@@ -96,6 +96,50 @@ let userStopped    = false;
 let proxyCache     = null;
 let usedProxies    = new Set();
 
+function getParcelSource() {
+  return document.getElementById('parcel-source')?.value || 'kadastr_live';
+}
+
+function getParcelSourceBaseUrl(source) {
+  const base = source === 'kadastrova_karta' ? 'https://kadastrova-karta.com' : 'https://kadastr.live';
+  return base;
+}
+
+function getParcelSourceLabel(source) {
+  return source === 'kadastrova_karta' ? 'kadastrova-karta.com' : 'kadastr.live';
+}
+
+function getFallbackParcelSource(source) {
+  return source === 'kadastrova_karta' ? 'kadastr_live' : 'kadastrova_karta';
+}
+
+function makeParcelUrlForBbox(bbox, source = getParcelSource()) {
+  const base = getParcelSourceBaseUrl(source);
+  return `${base}/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
+}
+
+function makeParcelUrlForBoundary(boundaryFile, source = getParcelSource()) {
+  const bbox = boundaryFile?.bbox || {};
+  const zoomFromUrl = (() => {
+    const hash = (boundaryFile?.url || '').split('#')[1] || '';
+    const [z] = hash.split('/');
+    const n = Number(z);
+    return Number.isFinite(n) ? n : null;
+  })();
+  const zoom = Number.isFinite(Number(bbox.zoom)) ? Number(bbox.zoom) : (zoomFromUrl ?? 14);
+  const centerLat = Number.isFinite(Number(bbox.centerLat))
+    ? Number(bbox.centerLat)
+    : ((Number(bbox.south) + Number(bbox.north)) / 2);
+  const centerLng = Number.isFinite(Number(bbox.centerLng))
+    ? Number(bbox.centerLng)
+    : ((Number(bbox.west) + Number(bbox.east)) / 2);
+  if (Number.isFinite(centerLat) && Number.isFinite(centerLng)) {
+    return `${getParcelSourceBaseUrl(source)}/#${zoom}/${centerLat.toFixed(5)}/${centerLng.toFixed(5)}`;
+  }
+  const hash = (boundaryFile?.url || '').split('#')[1];
+  return hash ? `${getParcelSourceBaseUrl(source)}/#${hash}` : '';
+}
+
 function renderBoundaryList() {
   const list = document.getElementById('boundary-list');
   const btn  = document.getElementById('btn-clear-boundary');
@@ -134,8 +178,16 @@ document.getElementById('drop-zone').addEventListener('click', async (e) => {
       const name = filePath.split(/[\\/]/).pop();
       const bbox = await window.api.readKmlBbox(filePath);
       if (bbox && !bbox.error) {
-        const url = `https://kadastr.live/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
-        boundaryFiles.push({ path: filePath, url, bbox: { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north }, name });
+        const url = makeParcelUrlForBbox(bbox);
+        boundaryFiles.push({
+          path: filePath,
+          url,
+          bbox: {
+            west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north,
+            centerLat: bbox.centerLat, centerLng: bbox.centerLng, zoom: bbox.zoom,
+          },
+          name,
+        });
         appendLog(`📍 ${name}: zoom=${bbox.zoom}, center=${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}`);
       } else {
         appendLog(`⚠ Could not read bbox from ${name}${bbox?.error ? ': ' + bbox.error : ''}`);
@@ -164,8 +216,16 @@ async function addDroppedFiles(filePaths) {
     const name = filePath.split(/[\\/]/).pop();
     const bbox = await window.api.readKmlBbox(filePath);
     if (bbox && !bbox.error) {
-      const url = `https://kadastr.live/#${bbox.zoom}/${bbox.centerLat.toFixed(5)}/${bbox.centerLng.toFixed(5)}`;
-      boundaryFiles.push({ path: filePath, url, bbox: { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north }, name });
+      const url = makeParcelUrlForBbox(bbox);
+      boundaryFiles.push({
+        path: filePath,
+        url,
+        bbox: {
+          west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north,
+          centerLat: bbox.centerLat, centerLng: bbox.centerLng, zoom: bbox.zoom,
+        },
+        name,
+      });
       appendLog(`📍 ${name}: zoom=${bbox.zoom}, center=${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}`);
     } else {
       appendLog(`⚠ Could not read bbox from ${name}${bbox?.error ? ': ' + bbox.error : ''}`);
@@ -299,6 +359,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (!outputFolder) { appendLog('⚠ Please select an output folder.'); return; }
 
   const rawInput      = document.getElementById('area-name').value.trim();
+  const parcelSource  = getParcelSource();
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
   const areas         = rawInput.split('...').map(s => s.trim()).filter(Boolean);
   const territory     = areas[0] || '';
@@ -327,9 +388,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   setBusy(true);
   userStopped = false;
 
-  // Helper: run kadastr scraper for one boundary file with proxy retry
-  async function scrapeOne(bf, label) {
-    appendLog(`━━━ Kadastr: ${label} ━━━`);
+  async function scrapeWithRetries(startUrl, boundaryPath, source, label) {
+    appendLog(`━━━ Parcels (${getParcelSourceLabel(source)}): ${label} ━━━`);
     const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
@@ -337,11 +397,11 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       for (let attempt = 1; attempt <= 3; attempt++) {
         if (!useVpn && !proxyCache) {
           appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
-          proxyCache = await window.api.findProxy([...usedProxies]);
+          proxyCache = await window.api.findProxy({ excludeList: [...usedProxies], parcelSource: source });
           if (proxyCache) usedProxies.add(proxyCache);
         }
-        const res = await window.api.startScraping(bf.url, outputFolder,
-          { headless: true, boundaryFilter: bf.path, proxy: useVpn ? '' : (proxyCache || '') });
+        const res = await window.api.startScraping(startUrl, outputFolder,
+          { headless: true, boundaryFilter: boundaryPath, proxy: useVpn ? '' : (proxyCache || ''), parcelSource: source });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         if (tilesGot > 0) break;
@@ -351,6 +411,23 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       if (useVpn) break; // no second round in VPN mode
     }
     return tilesGot;
+  }
+
+  // Helper: run parcel scraper with automatic source failover
+  async function scrapeOne(bf, label) {
+    const primary = parcelSource;
+    const secondary = getFallbackParcelSource(primary);
+    const sourceOrder = [primary, secondary];
+    for (let idx = 0; idx < sourceOrder.length; idx++) {
+      const source = sourceOrder[idx];
+      if (idx > 0) {
+        appendLog(`🔁 Fallback to ${getParcelSourceLabel(source)}…`);
+      }
+      const startUrl = makeParcelUrlForBoundary(bf, source);
+      const tiles = await scrapeWithRetries(startUrl, bf.path, source, label);
+      if (tiles > 0) return { tiles, source };
+    }
+    return { tiles: 0, source: primary };
   }
 
   // ══════════════════════════════════════════════════════════
@@ -391,17 +468,23 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       for (let attempt = 1; attempt <= 3; attempt++) {
         if (!useVpn && !proxyCache) {
           appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
-          proxyCache = await window.api.findProxy([...usedProxies]);
+          proxyCache = await window.api.findProxy({ excludeList: [...usedProxies], parcelSource });
           if (proxyCache) usedProxies.add(proxyCache);
         }
-        const res = await window.api.startScraping(cells[0] ? `https://kadastr.live/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
-          headless: true,
-          boundaryFilter: tempBoundaryPath,
-          proxy: useVpn ? '' : (proxyCache || ''),
-          gridCells: cells,
-        });
-        appendLog(`Scraper exited (code ${res.code})`);
-        tilesGot = res.tiles || 0;
+        for (const source of [parcelSource, getFallbackParcelSource(parcelSource)]) {
+          const baseUrl = getParcelSourceBaseUrl(source);
+          const res = await window.api.startScraping(cells[0] ? `${baseUrl}/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
+            headless: true,
+            boundaryFilter: tempBoundaryPath,
+            proxy: useVpn ? '' : (proxyCache || ''),
+            gridCells: cells,
+            parcelSource: source,
+          });
+          appendLog(`Scraper exited (code ${res.code})`);
+          tilesGot = res.tiles || 0;
+          if (tilesGot > 0) break;
+          if (source === parcelSource) appendLog(`🔁 Fallback to ${getParcelSourceLabel(getFallbackParcelSource(parcelSource))}…`);
+        }
         if (tilesGot > 0) break;
         if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
         if (useVpn) break;
@@ -441,8 +524,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
       const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
 
-      const tilesGot = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
-      if (tilesGot === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
+      const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
+      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
 
       // land_plots.kmz is the fixed output of the scraper; rename to temp
       const scraperOut = `${outputFolder}/land_plots.kmz`;
@@ -507,9 +590,9 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   let hasKadastr     = false;
 
   if (bf) {
-    const tilesGot = await scrapeOne(bf, territory || bf.name);
-    if (tilesGot === 0) {
-      appendLog('❌ No tiles after 6 attempts — kadastr.live unreachable. Stopping.');
+    const scrapeRes = await scrapeOne(bf, territory || bf.name);
+    if (scrapeRes.tiles === 0) {
+      appendLog(`❌ No tiles after retries on both sources (${getParcelSourceLabel(parcelSource)} and ${getParcelSourceLabel(getFallbackParcelSource(parcelSource))}). Stopping.`);
       setBusy(false); return;
     }
     hasKadastr = true;

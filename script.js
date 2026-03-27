@@ -127,12 +127,28 @@ function getChromePath() {
   return undefined;
 }
 
+const PARCEL_SOURCES = {
+  kadastr_live: {
+    baseUrl: "https://kadastr.live",
+    tileHostHint: "kadastr",
+  },
+  kadastrova_karta: {
+    baseUrl: "https://kadastrova-karta.com",
+    tileHostHint: "kadastrova-karta.com",
+  },
+};
+
+const ACTIVE_SOURCE_KEY = process.env.PARCEL_SOURCE && PARCEL_SOURCES[process.env.PARCEL_SOURCE]
+  ? process.env.PARCEL_SOURCE
+  : "kadastr_live";
+const ACTIVE_SOURCE = PARCEL_SOURCES[ACTIVE_SOURCE_KEY];
+
 // Configuration
 const CONFIG = {
   kmzPath: process.env.OUTPUT_PATH
     ? path.join(process.env.OUTPUT_PATH, "land_plots.kmz")
     : path.join(process.cwd(), "land_plots.kmz"),
-  startUrl: process.argv[2] || "https://kadastr.live/#13.95/46.64265/31.4905",
+  startUrl: process.argv[2] || `${ACTIVE_SOURCE.baseUrl}/#13.95/46.64265/31.4905`,
   headless: process.env.HEADLESS === "1",
   boundaryFilter: process.env.BOUNDARY_FILTER || null,
   proxy: process.env.KADASTR_PROXY || null,
@@ -228,7 +244,7 @@ const state = {
 
     page.on("response", async (response) => {
       const url = response.url();
-      if (url.includes(".pbf") && url.includes("kadastr")) {
+      if (url.includes(".pbf") && url.includes(ACTIVE_SOURCE.tileHostHint)) {
         await processTileResponse(response, url);
       }
     });
@@ -244,7 +260,7 @@ const state = {
       if (gridCells && gridCells.length > 0) {
         // ── Full-area sweep: one browser session, pan via hash changes ──
         const { lat: lat0, lng: lng0 } = gridCells[0];
-        const firstUrl = `https://kadastr.live/#14/${lat0}/${lng0}`;
+        const firstUrl = `${ACTIVE_SOURCE.baseUrl}/#14/${lat0}/${lng0}`;
         console.log(`🌍 Full-area sweep: ${gridCells.length} cells`);
         if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
         await page.goto(firstUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
