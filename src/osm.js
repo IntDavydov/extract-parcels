@@ -966,13 +966,16 @@ async function fetchNatureReservesFromPZF(bbox, onProgress) {
   }
   totalFiles = jobs.length;
 
-  // Fetch all KMZ files in parallel batches of 8
-  const BATCH = 8;
+  // Fetch KMZ files in bounded batches with per-job timeout, so one bad
+  // endpoint response cannot stall the whole Nature Reserves step.
+  const BATCH = 6;
+  const JOB_TIMEOUT_MS = 20000;
   for (let i = 0; i < jobs.length; i += BATCH) {
     const batch = jobs.slice(i, i + BATCH);
-    const results = await Promise.all(batch.map(async ({ cat, oblId }) => {
+    onProgress(`  → PZF progress: ${loadedFiles}/${totalFiles} files, ${allFeatures.length} features`);
+    const results = await Promise.allSettled(batch.map(async ({ cat, oblId }) => {
       const url = `${PZF_BASE}/${cat.id}/p${cat.id}-${oblId}.kmz`;
-      try {
+      const fetchJob = (async () => {
         const buf = await httpGetBuffer(url, { 'Referer': 'https://pzf.land.kiev.ua/' }, 30000);
         if (!buf || buf.length < 100) return [];
         const zip = await JSZip.loadAsync(buf);
@@ -983,7 +986,6 @@ async function fetchNatureReservesFromPZF(bbox, onProgress) {
         const parsed = kmlNodeToGeometry(doc);
         return parsed
           .filter(({ geometry }) => {
-            // Quick bbox filter: check if centroid or any coordinate is inside bbox
             const g = geometry;
             let testPt;
             if (g.type === 'Point') testPt = g.coordinates;
@@ -1004,15 +1006,19 @@ async function fetchNatureReservesFromPZF(bbox, onProgress) {
               _subtype: cat.name,
             },
           }));
-      } catch (_) {
-        return []; // file doesn't exist for this oblast or network error
-      }
+      })();
+
+      const timeoutJob = new Promise((resolve) => {
+        setTimeout(() => resolve([]), JOB_TIMEOUT_MS);
+      });
+
+      return Promise.race([fetchJob, timeoutJob]);
     }));
     loadedFiles += batch.length;
-    for (const r of results) allFeatures.push(...r);
-    if (i % (BATCH * 4) === 0 && i > 0) {
-      onProgress(`  → ${loadedFiles}/${totalFiles} files fetched, ${allFeatures.length} features so far…`);
+    for (const r of results) {
+      if (r.status === 'fulfilled' && Array.isArray(r.value)) allFeatures.push(...r.value);
     }
+    onProgress(`  → ${loadedFiles}/${totalFiles} files fetched, ${allFeatures.length} features so far…`);
   }
 
   return allFeatures;
