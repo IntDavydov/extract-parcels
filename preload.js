@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   mergeKmz: (paths, outputPath, cleanup = true, areaNames, docName) =>
     ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames, docName }),
 
+  mergeKmzFiles: (sourceDir, outputPath) =>
+    ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
+
   saveDialog: (options) =>
     ipcRenderer.invoke('save-dialog', options),
 

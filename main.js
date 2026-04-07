@@ -666,6 +666,68 @@ ipcMain.handle('copy-icons', (_event, outputFolder) => {
   if (fs.existsSync(iconsDir)) fs.rmSync(iconsDir, { recursive: true, force: true });
 });
 
+ipcMain.handle('merge-kmz-files', async (_event, { sourceDir, outputPath }) => {
+  const fs = require('fs');
+  const path = require('path');
+  const JSZip = require('jszip');
+  
+  try {
+    // Find all KMZ files in source directory
+    const files = fs.readdirSync(sourceDir).filter(f => f.endsWith('.kmz'));
+    
+    if (files.length === 0) {
+      throw new Error('No KMZ files found to merge');
+    }
+    
+    const allPlacemarks = [];
+    
+    // Extract placemarks from each KMZ
+    for (const file of files) {
+      const filePath = path.join(sourceDir, file);
+      const data = fs.readFileSync(filePath);
+      const zip = await JSZip.loadAsync(data);
+      const kmlFile = Object.keys(zip.files).find(name => name.endsWith('.kml'));
+      
+      if (kmlFile) {
+        const kmlText = await zip.file(kmlFile).async('string');
+        
+        // Extract Placemark elements
+        const placemarkMatches = kmlText.matchAll(/<Placemark>[\s\S]*?<\/Placemark>/g);
+        for (const match of placemarkMatches) {
+          allPlacemarks.push(match[0]);
+        }
+      }
+    }
+    
+    if (allPlacemarks.length === 0) {
+      throw new Error('No placemarks found in KMZ files');
+    }
+    
+    // Create merged KML
+    const mergedKml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Merged Cadastral Parcels</name>
+    <Folder>
+      <name>Parcels</name>
+${allPlacemarks.map(pm => '      ' + pm).join('\n')}
+    </Folder>
+  </Document>
+</kml>`;
+    
+    // Create output KMZ
+    const outputZip = new JSZip();
+    outputZip.file('doc.kml', mergedKml);
+    const buffer = await outputZip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(outputPath, buffer);
+    
+    return { success: true, parcels: allPlacemarks.length };
+  } catch (error) {
+    console.error('KMZ merge error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('resolve-output-path', (_event, folder, baseName) => {
   const fs   = require('fs');
   const path = require('path');
