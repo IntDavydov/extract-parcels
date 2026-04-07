@@ -394,97 +394,80 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     userStopped = false;
     
     appendLog(`🔍 Looking up ${cadnums.length} cadastral number(s)...`);
+    appendLog(`   (Testing network connection to kadastrova-karta.com...)\n`);
     
     const allResults = [];
-    const fs = require('fs');
-    const path = require('path');
-    
-    // Create temp directory for individual parcel files
-    const tempDir = path.join(outputFolder, '.cadnum_batch_' + Date.now());
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-    
-    for (let i = 0; i < cadnums.length; i++) {
-      const cadnum = cadnums[i];
-      appendLog(`\n[${i + 1}/${cadnums.length}] Processing: ${cadnum}`);
-      
-      try {
-        const searchUrl = `https://kadastrova-karta.com/search?q=${encodeURIComponent(cadnum)}`;
-        const response = await fetch(searchUrl);
-        const html = await response.text();
-        
-        const latMatch = html.match(/data-lat="([^"]+)"/);
-        const lngMatch = html.match(/data-lng="([^"]+)"/);
-        
-        if (!latMatch || !lngMatch) {
-          appendLog(`  ❌ Not found in registry`);
-          continue;
-        }
-        
-        const lat = parseFloat(latMatch[1]);
-        const lng = parseFloat(lngMatch[1]);
-        
-        appendLog(`  ✅ Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-        
-        // Use zoom 15 for single parcel lookup
-        const startUrl = `https://kadastrova-karta.com/#15/${lat}/${lng}`;
-        const parcelSource = getParcelSource();
-        
-        // Save to temp directory with unique filename
-        const res = await window.api.startScraping(startUrl, tempDir, {
-          headless: true,
-          boundaryFilter: null,
-          parcelSource: parcelSource,
-          cadnumFilter: cadnum
-        });
-        
-        if (res.parcels > 0) {
-          appendLog(`  ✅ Found ${res.parcels} parcel(s)`);
-          allResults.push({ cadnum, parcels: res.parcels, success: true });
-          // Rename the temp file to include cadastral number
-          const tempKmz = path.join(tempDir, 'land_plots.kmz');
-          const namedKmz = path.join(tempDir, `${cadnum.replace(/:/g, '_')}.kmz`);
-          if (fs.existsSync(tempKmz)) {
-            fs.renameSync(tempKmz, namedKmz);
+    let tempDir = null;
+    let keepTempDir = false;
+    try {
+      // Create temp directory for individual parcel files (main process)
+      tempDir = await window.api.cadnumBatchInit(outputFolder);
+
+      for (let i = 0; i < cadnums.length; i++) {
+        const cadnum = cadnums[i];
+        appendLog(`\n[${i + 1}/${cadnums.length}] Processing: ${cadnum}`);
+        appendLog(`  🌐 Searching...`);
+
+        let lat, lng;
+        try {
+          // Search from main process (avoids renderer fetch hang)
+          const result = await window.api.searchCadastralNumber(cadnum);
+          lat = result.lat;
+          lng = result.lng;
+          appendLog(`  ✓ Response: ${result.responseSize} bytes`);
+          appendLog(`  ✅ Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+
+          const startUrl = `https://kadastrova-karta.com/#15/${lat}/${lng}`;
+          const parcelSource = getParcelSource();
+          const res = await window.api.startScraping(startUrl, tempDir, {
+            headless: true,
+            boundaryFilter: null,
+            parcelSource,
+            cadnumFilter: cadnum
+          });
+
+          if (res.parcels > 0) {
+            appendLog(`  ✅ Found ${res.parcels} parcel(s)`);
+            allResults.push({ cadnum, parcels: res.parcels, success: true });
+            await window.api.cadnumBatchFinalizeItem(tempDir, cadnum);
+          } else {
+            appendLog(`  ⚠ No parcel data found`);
+            allResults.push({ cadnum, parcels: 0, success: false });
           }
-        } else {
-          appendLog(`  ⚠ No parcel data found`);
-          allResults.push({ cadnum, parcels: 0, success: false });
+        } catch (err) {
+          appendLog(`  ❌ Error: ${err.message}`);
+          allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
         }
-      } catch (err) {
-        appendLog(`  ❌ Error: ${err.message}`);
-        allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
+
+        if (i < cadnums.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
-    }
-    
-    // Summary
-    const successful = allResults.filter(r => r.success).length;
-    const totalParcels = allResults.reduce((sum, r) => sum + r.parcels, 0);
-    
-    appendLog(`\n━━━ Summary ━━━`);
-    appendLog(`  Processed: ${cadnums.length} cadastral number(s)`);
-    appendLog(`  Successful: ${successful}`);
-    appendLog(`  Total parcels: ${totalParcels}`);
-    
-    if (successful > 0) {
-      // Merge all KMZ files
-      appendLog(`\n📦 Merging ${successful} KMZ file(s)...`);
-      try {
-        const finalKmz = path.join(outputFolder, 'land_plots.kmz');
-        await window.api.mergeKmzFiles(tempDir, finalKmz);
-        appendLog(`✅ Results saved to: ${finalKmz}`);
-        
-        // Clean up temp directory
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch (err) {
-        appendLog(`⚠ Merge error: ${err.message}`);
-        appendLog(`  Individual files available in: ${tempDir}`);
+
+      const successful = allResults.filter(r => r.success).length;
+      const totalParcels = allResults.reduce((sum, r) => sum + r.parcels, 0);
+
+      appendLog(`\n━━━ Summary ━━━`);
+      appendLog(`  Processed: ${cadnums.length} cadastral number(s)`);
+      appendLog(`  Successful: ${successful}`);
+      appendLog(`  Total parcels: ${totalParcels}`);
+
+      if (successful > 0) {
+        appendLog(`\n📦 Merging ${successful} KMZ file(s)...`);
+        try {
+          const finalKmz = `${outputFolder.replace(/[\\\/]+$/, '')}/land_plots.kmz`;
+          await window.api.mergeKmzFiles(tempDir, finalKmz);
+          appendLog(`✅ Results saved to: ${finalKmz}`);
+        } catch (err) {
+          appendLog(`⚠ Merge error: ${err.message}`);
+          appendLog(`  Individual files available in: ${tempDir}`);
+          keepTempDir = true;
+        }
       }
-    } else {
-      // Clean up temp directory if nothing succeeded
-      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+    } finally {
+      if (tempDir && !keepTempDir) await window.api.cadnumBatchCleanup(tempDir);
+      setBusy(false);
     }
-    
-    setBusy(false);
     return;
   }
 

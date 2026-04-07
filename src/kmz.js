@@ -31,9 +31,11 @@ const LAYER_STYLES = {
     width: 2,
   },
   'Roads':              { line: 'ff000000' },
-  'Settlements':        { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
-  'Settlement Pins':    { point: 'ffc9c9ff', icon: 'files/houses.png' },
-  'Settlement Buffers': { poly: 'ccc9c9ff', line: 'ffc9c9ff' },
+  'Settlements':                 { poly: 'ffc9c9ff', line: 'ffc9c9ff' },
+  'Settlement Pins':             { point: 'ffc9c9ff', icon: 'files/houses.png' },
+  'Settlement Buffers (Small)':  { poly: 'aac9c9ff', line: 'ffc9c9ff' }, // 300m - lighter
+  'Settlement Buffers (Medium)': { poly: 'ccc9c9ff', line: 'ffc9c9ff' }, // 500m - medium
+  'Settlement Buffers (Large)':  { poly: 'eec9c9ff', line: 'ffc9c9ff' }, // 700m - darker
   'Water':              { poly: 'ccff6600', line: 'ccff6600' },
   'Forests':            { poly: 'cc7fff00', line: '007fff00', noOutline: true },
   'Emerald Network':    { poly: 'cc7fff00', line: '007fff00', noOutline: true },
@@ -67,7 +69,7 @@ const LAYER_STYLES = {
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Land Parcels'] },
   { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Nature Reserves', 'Nature Reserve Buffer', 'Water', 'Water Buffers'] },
-  { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
+  { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers (Small)', 'Settlement Buffers (Medium)', 'Settlement Buffers (Large)'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order

@@ -19,6 +19,18 @@ contextBridge.exposeInMainWorld('api', {
   mergeKmzFiles: (sourceDir, outputPath) =>
     ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
 
+  searchCadastralNumber: (cadnum) =>
+    ipcRenderer.invoke('search-cadastral-number', cadnum),
+
+  cadnumBatchInit: (outputFolder) =>
+    ipcRenderer.invoke('cadnum-batch-init', outputFolder),
+
+  cadnumBatchFinalizeItem: (tempDir, cadnum) =>
+    ipcRenderer.invoke('cadnum-batch-finalize-item', { tempDir, cadnum }),
+
+  cadnumBatchCleanup: (tempDir) =>
+    ipcRenderer.invoke('cadnum-batch-cleanup', tempDir),
+
   saveDialog: (options) =>
     ipcRenderer.invoke('save-dialog', options),
 

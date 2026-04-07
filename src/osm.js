@@ -309,29 +309,76 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
     },
   }));
 
-  // 5. Create 700m buffers for polygons
-  onProgress('📐 Creating 700m buffer zones for settlements…');
-  const buffers = [];
+  // 5. Create tiered buffers for polygons (300m, 500m, 700m based on area)
+  onProgress('📐 Creating tiered buffer zones for settlements…');
+  const buffersSmall = [], buffersMedium = [], buffersLarge = [];
+  let smallCount = 0, mediumCount = 0, largeCount = 0;
+  let partsCount = 0;
   for (const f of boundaries) {
     if (!f.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
-    try {
-      const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
-      if (buf) {
-        buffers.push({
-          ...buf,
-          properties: {
-            name: f.properties.name,
-            adm4_pcode: f.properties.adm4_pcode,
-            _layer: 'Settlement Buffers',
-            _type: 'buffer_700m',
-          },
-        });
-      }
-    } catch (_) {}
-  }
-  onProgress(`  → ${buffers.length} buffer zones created`);
+    const polygonParts = f.geometry.type === 'Polygon'
+      ? [f]
+      : f.geometry.coordinates.map((coords, idx) => ({
+          ...f,
+          geometry: { type: 'Polygon', coordinates: coords },
+          properties: { ...f.properties, _part_index: idx + 1, _part_total: f.geometry.coordinates.length },
+        }));
 
-  return { boundaries, pins, buffers };
+    for (const part of polygonParts) {
+      partsCount++;
+      try {
+        // Area/tier are now calculated per disconnected polygon part.
+        const areaM2 = featureAreaM2(part);
+        const areaKm2 = areaM2 / 1_000_000;
+
+        let bufferKm, tier, layerName, bufferType;
+        if (areaKm2 < 0.5) {
+          bufferKm = 0.3;
+          tier = 'small';
+          layerName = 'Settlement Buffers (Small)';
+          bufferType = 'buffer_300m';
+          smallCount++;
+        } else if (areaKm2 < 2) {
+          bufferKm = 0.5;
+          tier = 'medium';
+          layerName = 'Settlement Buffers (Medium)';
+          bufferType = 'buffer_500m';
+          mediumCount++;
+        } else {
+          bufferKm = 0.7;
+          tier = 'large';
+          layerName = 'Settlement Buffers (Large)';
+          bufferType = 'buffer_700m';
+          largeCount++;
+        }
+
+        const buf = turfBuffer(part, bufferKm, { units: 'kilometers' });
+        if (buf) {
+          const bufferFeature = {
+            ...buf,
+            properties: {
+              name: f.properties.name,
+              adm4_pcode: f.properties.adm4_pcode,
+              area_km2: areaKm2.toFixed(3),
+              buffer_size: `${bufferKm * 1000}m`,
+              tier,
+              part_index: part.properties?._part_index || 1,
+              part_total: part.properties?._part_total || 1,
+              _layer: layerName,
+              _type: bufferType,
+            },
+          };
+          if (tier === 'small') buffersSmall.push(bufferFeature);
+          else if (tier === 'medium') buffersMedium.push(bufferFeature);
+          else buffersLarge.push(bufferFeature);
+        }
+      } catch (_) {}
+    }
+  }
+  const totalBuffers = buffersSmall.length + buffersMedium.length + buffersLarge.length;
+  onProgress(`  → ${totalBuffers} buffers from ${partsCount} settlement parts: ${smallCount} small (300m), ${mediumCount} medium (500m), ${largeCount} large (700m)`);
+
+  return { boundaries, pins, buffersSmall, buffersMedium, buffersLarge };
 }
 // Simple Levenshtein distance for fuzzy name matching
 function levenshtein(a, b) {
@@ -1696,10 +1743,12 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   if (layers.includes('settlements')) {
     onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
     try {
-      const { boundaries, pins, buffers } = await fetchSettlementsFromHumdata(territory, bbox, onProgress);
-      if (boundaries.length) layerMap['Settlements'] = boundaries;
-      if (pins.length)       layerMap['Settlement Pins'] = pins;
-      if (buffers.length)    layerMap['Settlement Buffers'] = buffers;
+      const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(territory, bbox, onProgress);
+      if (boundaries.length)     layerMap['Settlements'] = boundaries;
+      if (pins.length)           layerMap['Settlement Pins'] = pins;
+      if (buffersSmall.length)   layerMap['Settlement Buffers (Small)'] = buffersSmall;
+      if (buffersMedium.length)  layerMap['Settlement Buffers (Medium)'] = buffersMedium;
+      if (buffersLarge.length)   layerMap['Settlement Buffers (Large)'] = buffersLarge;
     } catch (err) {
       onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
     }
