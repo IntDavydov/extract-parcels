@@ -93,24 +93,21 @@ initLeftTabs();
 let outputFolder   = '';
 let boundaryFiles  = []; // [{path, url, bbox, name}]
 let userStopped    = false;
-let proxyCache     = null;
-let usedProxies    = new Set();
 
 function getParcelSource() {
-  return document.getElementById('parcel-source')?.value || 'kadastr_live';
+  return 'kadastrova_karta';
 }
 
 function getParcelSourceBaseUrl(source) {
-  const base = source === 'kadastrova_karta' ? 'https://kadastrova-karta.com' : 'https://kadastr.live';
-  return base;
+  return 'https://kadastrova-karta.com';
 }
 
 function getParcelSourceLabel(source) {
-  return source === 'kadastrova_karta' ? 'kadastrova-karta.com' : 'kadastr.live';
+  return 'kadastrova-karta.com';
 }
 
 function getFallbackParcelSource(source) {
-  return source === 'kadastrova_karta' ? 'kadastr_live' : 'kadastrova_karta';
+  return 'kadastrova_karta';
 }
 
 function makeParcelUrlForBbox(bbox, source = getParcelSource()) {
@@ -307,6 +304,17 @@ function applyFullParcelsMode(enabled) {
   checkStartReady();
 }
 
+// ── Parcel fetch mode switching ─────────────────────────────
+document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
+  const isCadnum = e.target.value === 'cadnum';
+  document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
+  document.getElementById('field-boundary').style.display = isCadnum ? 'none' : 'block';
+  document.getElementById('area-name').parentElement.style.display = isCadnum ? 'none' : 'block';
+  checkStartReady();
+});
+
+document.getElementById('cadnum-input').addEventListener('input', checkStartReady);
+
 document.getElementById('chk-full-parcels').addEventListener('change', (e) => {
   applyFullParcelsMode(e.target.checked);
 });
@@ -337,16 +345,24 @@ function hasAnything() {
 }
 
 function checkStartReady() {
+  const fetchMode     = document.getElementById('parcel-fetch-mode').value;
   const territory     = document.getElementById('area-name').value.trim();
-  const isMultiKmz   = boundaryFiles.length > 1;
-  const isSingleKmz  = boundaryFiles.length === 1;
+  const cadnum        = document.getElementById('cadnum-input').value.trim();
+  const isMultiKmz    = boundaryFiles.length > 1;
+  const isSingleKmz   = boundaryFiles.length === 1;
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
-  const ready = !!outputFolder && (
-    isMultiKmz  ? true :
-    isSingleKmz ? true :
-    isFullParcels ? !!territory :
-    (!!territory && hasAnything())
-  );
+  
+  let ready = false;
+  if (fetchMode === 'cadnum') {
+    ready = !!outputFolder && !!cadnum;
+  } else {
+    ready = !!outputFolder && (
+      isMultiKmz  ? true :
+      isSingleKmz ? true :
+      isFullParcels ? !!territory :
+      (!!territory && hasAnything())
+    );
+  }
   document.getElementById('btn-start').disabled = !ready;
 }
 
@@ -358,6 +374,66 @@ function setBusy(busy) {
 document.getElementById('btn-start').addEventListener('click', async () => {
   if (!outputFolder) { appendLog('⚠ Please select an output folder.'); return; }
 
+  const fetchMode     = document.getElementById('parcel-fetch-mode').value;
+  
+  // ── Cadastral number mode ──
+  if (fetchMode === 'cadnum') {
+    const cadnum = document.getElementById('cadnum-input').value.trim();
+    if (!cadnum) { appendLog('⚠ Please enter a cadastral number.'); return; }
+    
+    document.getElementById('main-log').textContent = '';
+    setBusy(true);
+    userStopped = false;
+    
+    appendLog(`🔍 Looking up cadastral number: ${cadnum}`);
+    
+    try {
+      const searchUrl = `https://kadastrova-karta.com/search?q=${encodeURIComponent(cadnum)}`;
+      const response = await fetch(searchUrl);
+      const html = await response.text();
+      
+      const latMatch = html.match(/data-lat="([^"]+)"/);
+      const lngMatch = html.match(/data-lng="([^"]+)"/);
+      
+      if (!latMatch || !lngMatch) {
+        appendLog(`❌ Cadastral number ${cadnum} not found.`);
+        setBusy(false);
+        return;
+      }
+      
+      const lat = parseFloat(latMatch[1]);
+      const lng = parseFloat(lngMatch[1]);
+      
+      appendLog(`✅ Found location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+      appendLog(`━━━ Parcels (kadastrova-karta.com): ${cadnum} ━━━`);
+      
+      // Use zoom 15 for single parcel lookup (max is 16, but 15 provides good coverage)
+      const startUrl = `https://kadastrova-karta.com/#15/${lat}/${lng}`;
+      const parcelSource = getParcelSource();
+      
+      const res = await window.api.startScraping(startUrl, outputFolder, {
+        headless: true,
+        boundaryFilter: null,
+        parcelSource: parcelSource,
+        cadnumFilter: cadnum
+      });
+      
+      appendLog(`Scraper exited (code ${res.code})`);
+      
+      if (res.parcels > 0) {
+        appendLog(`✅ Found ${res.parcels} parcel(s) for ${cadnum}`);
+      } else {
+        appendLog(`⚠ No parcel data found for ${cadnum}`);
+      }
+    } catch (err) {
+      appendLog(`❌ Error: ${err.message}`);
+    }
+    
+    setBusy(false);
+    return;
+  }
+
+  // ── Standard boundary mode ──
   const rawInput      = document.getElementById('area-name').value.trim();
   const parcelSource  = getParcelSource();
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
@@ -390,27 +466,18 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
   async function scrapeWithRetries(startUrl, boundaryPath, source, label) {
     appendLog(`━━━ Parcels (${getParcelSourceLabel(source)}): ${label} ━━━`);
-    const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
     let parcelsGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
-      if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
-        if (!useVpn && !proxyCache) {
-          appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
-          proxyCache = await window.api.findProxy({ excludeList: [...usedProxies], parcelSource: source });
-          if (proxyCache) usedProxies.add(proxyCache);
-        }
         const res = await window.api.startScraping(startUrl, outputFolder,
-          { headless: true, boundaryFilter: boundaryPath, proxy: useVpn ? '' : (proxyCache || ''), parcelSource: source });
+          { headless: true, boundaryFilter: boundaryPath, parcelSource: source });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         parcelsGot = res.parcels || 0;
         if (parcelsGot > 0) break;
-        if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
-        if (useVpn) break; // no proxy retries in VPN mode
+        if (attempt < 3) appendLog(`⚠ No parcels yet — retrying (${attempt + 1}/3)…`);
       }
-      if (useVpn) break; // no second round in VPN mode
     }
     return { tiles: tilesGot, parcels: parcelsGot };
   }
@@ -418,13 +485,9 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // Helper: run parcel scraper with automatic source failover
   async function scrapeOne(bf, label) {
     const primary = parcelSource;
-    const secondary = getFallbackParcelSource(primary);
-    const sourceOrder = [primary, secondary];
+    const sourceOrder = [primary];
     for (let idx = 0; idx < sourceOrder.length; idx++) {
       const source = sourceOrder[idx];
-      if (idx > 0) {
-        appendLog(`🔁 Fallback to ${getParcelSourceLabel(source)}…`);
-      }
       const startUrl = makeParcelUrlForBoundary(bf, source);
       const res = await scrapeWithRetries(startUrl, bf.path, source, label);
       if (res.parcels > 0) return { tiles: res.tiles, parcels: res.parcels, source };
@@ -463,37 +526,24 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog(`🔲 Grid: ${cells.length} cells — launching single scraper session…`);
 
     // Run ONE scraper that pans through all cells internally
-    const useVpn = document.getElementById('chk-use-vpn').checked;
     let tilesGot = 0;
     let parcelsGot = 0;
     for (let round = 1; round <= 2 && parcelsGot === 0; round++) {
-      if (round === 2) { appendLog('🔄 Refetching proxy list…'); proxyCache = null; }
       for (let attempt = 1; attempt <= 3; attempt++) {
-        if (!useVpn && !proxyCache) {
-          appendLog(`🔎 Searching proxy (round ${round}, attempt ${attempt}/3)…`);
-          proxyCache = await window.api.findProxy({ excludeList: [...usedProxies], parcelSource });
-          if (proxyCache) usedProxies.add(proxyCache);
-        }
-        for (const source of [parcelSource, getFallbackParcelSource(parcelSource)]) {
-          const baseUrl = getParcelSourceBaseUrl(source);
-          const res = await window.api.startScraping(cells[0] ? `${baseUrl}/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
-            headless: true,
-            boundaryFilter: tempBoundaryPath,
-            proxy: useVpn ? '' : (proxyCache || ''),
-            gridCells: cells,
-            parcelSource: source,
-          });
-          appendLog(`Scraper exited (code ${res.code})`);
-          tilesGot = res.tiles || 0;
-          parcelsGot = res.parcels || 0;
-          if (parcelsGot > 0) break;
-          if (source === parcelSource) appendLog(`🔁 Fallback to ${getParcelSourceLabel(getFallbackParcelSource(parcelSource))}…`);
-        }
+        const source = parcelSource;
+        const baseUrl = getParcelSourceBaseUrl(source);
+        const res = await window.api.startScraping(cells[0] ? `${baseUrl}/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
+          headless: true,
+          boundaryFilter: tempBoundaryPath,
+          gridCells: cells,
+          parcelSource: source,
+        });
+        appendLog(`Scraper exited (code ${res.code})`);
+        tilesGot = res.tiles || 0;
+        parcelsGot = res.parcels || 0;
         if (parcelsGot > 0) break;
-        if (!useVpn && attempt < 3) { appendLog(`⚠ No tiles — trying next proxy…`); proxyCache = null; }
-        if (useVpn) break;
+        if (attempt < 3) appendLog(`⚠ No parcels yet — retrying (${attempt + 1}/3)…`);
       }
-      if (useVpn) break;
     }
 
     if (parcelsGot === 0) {
@@ -596,7 +646,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (bf) {
     const scrapeRes = await scrapeOne(bf, territory || bf.name);
     if (scrapeRes.tiles === 0) {
-      appendLog(`❌ No tiles after retries on both sources (${getParcelSourceLabel(parcelSource)} and ${getParcelSourceLabel(getFallbackParcelSource(parcelSource))}). Stopping.`);
+      appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}. Stopping.`);
       setBusy(false); return;
     }
     hasKadastr = true;

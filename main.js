@@ -300,8 +300,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC: start parcel scraping (kadastr.live / kadastrova-karta.com)
-ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, proxy, gridCells, parcelSource }) => {
+// IPC: start parcel scraping (kadastrova-karta.com)
+ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, cadnumFilter, gridCells, parcelSource }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -318,7 +318,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   if (outputPath) env.OUTPUT_PATH = outputPath;
   if (headless)        env.HEADLESS = '1';
   if (boundaryFilter)  env.BOUNDARY_FILTER = boundaryFilter;
-  if (proxy)           env.KADASTR_PROXY = proxy;
+  if (cadnumFilter)    env.CADNUM_FILTER = cadnumFilter;
   if (gridCells && gridCells.length) env.GRID_CELLS = JSON.stringify(gridCells);
   if (parcelSource) env.PARCEL_SOURCE = String(parcelSource);
 
@@ -558,106 +558,6 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
-
-// IPC: find working proxy for selected parcel source
-ipcMain.handle('find-proxy', async (event, { excludeList = [], parcelSource = 'kadastr_live' } = {}) => {
-  const https = require('https');
-  const http  = require('http');
-  const net   = require('net');
-
-  function fetchText(url) {
-    return new Promise((resolve, reject) => {
-      const mod = url.startsWith('https') ? https : http;
-      mod.get(url, { timeout: 8000 }, (res) => {
-        let data = '';
-        res.on('data', c => data += c);
-        res.on('end', () => resolve(data));
-      }).on('error', reject).on('timeout', function() { this.destroy(); reject(new Error('timeout')); });
-    });
-  }
-
-  function testHttpProxy(proxyHost, proxyPort, targetHost, targetPort, timeoutMs) {
-    return new Promise((resolve) => {
-      const tls = require('tls');
-      let done = false;
-      const finish = (val) => { if (!done) { done = true; clearTimeout(timer); resolve(val); } };
-
-      const socket = net.connect(proxyPort, proxyHost);
-      const timer = setTimeout(() => { socket.destroy(); finish(false); }, timeoutMs);
-
-      socket.on('connect', () => {
-        socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
-        socket.once('data', (data) => {
-          if (!data.toString().includes('200')) { finish(false); socket.destroy(); return; }
-          // Send a real HTTP GET request and verify we get a valid response body
-          const tlsSocket = tls.connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
-            tlsSocket.write(
-              `GET / HTTP/1.1\r\nHost: ${targetHost}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n`
-            );
-            let response = '';
-            tlsSocket.on('data', (chunk) => {
-              response += chunk.toString('binary', 0, Math.min(chunk.length, 512));
-              // Accept any real HTTP response (2xx, 3xx, 4xx — means server actually replied)
-              if (/^HTTP\/1\.[01] [2-5]\d\d/.test(response)) {
-                tlsSocket.destroy();
-                finish(true);
-              }
-            });
-            tlsSocket.on('end', () => {
-              finish(/^HTTP\/1\.[01] [2-5]\d\d/.test(response));
-            });
-            tlsSocket.on('error', () => finish(false));
-          });
-          tlsSocket.on('error', () => finish(false));
-        });
-      });
-      socket.on('error', () => finish(false));
-    });
-  }
-
-  const sources = [
-    'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=3000&country=all&anonymity=all',
-    'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-    'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
-  ];
-
-  let proxies = [];
-  for (const src of sources) {
-    try {
-      const text = await fetchText(src);
-      const lines = text.trim().split('\n')
-        .map(l => l.trim())
-        .filter(l => /^\d+\.\d+\.\d+\.\d+:\d+$/.test(l));
-      proxies = proxies.concat(lines);
-      if (proxies.length >= 200) break;
-    } catch (_) {}
-  }
-
-  const targetHost = parcelSource === 'kadastrova_karta' ? 'kadastrova-karta.com' : 'kadastr.live';
-  const excluded = new Set((excludeList || []).map(p => p.replace(/^https?:\/\//, '')));
-  proxies = [...new Set(proxies)].filter(p => !excluded.has(p)).slice(0, 200);
-  event.sender.send('log', `🔍 Testing ${proxies.length} proxies for ${targetHost}…`);
-
-  // Test in parallel batches of 20
-  const BATCH = 20;
-  for (let i = 0; i < proxies.length; i += BATCH) {
-    const batch = proxies.slice(i, i + BATCH);
-    const results = await Promise.all(batch.map(async (p) => {
-      const [host, port] = p.split(':');
-      const ok = await testHttpProxy(host, parseInt(port), targetHost, 443, 12000);
-      return ok ? p : null;
-    }));
-    const found = results.find(r => r !== null);
-    if (found) {
-      event.sender.send('log', `✅ Working proxy found: ${found}`);
-      return `http://${found}`;
-    }
-    event.sender.send('log', `   … tested ${Math.min(i + BATCH, proxies.length)}/${proxies.length}`);
-  }
-
-  event.sender.send('log', `⚠ No working proxy found — ${targetHost} may be reachable directly, or try manually entering a proxy.`);
-  return null;
 });
 
 // IPC: save dialog

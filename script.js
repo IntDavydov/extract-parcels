@@ -128,10 +128,6 @@ function getChromePath() {
 }
 
 const PARCEL_SOURCES = {
-  kadastr_live: {
-    baseUrl: "https://kadastr.live",
-    tileHostHint: "kadastr",
-  },
   kadastrova_karta: {
     baseUrl: "https://kadastrova-karta.com",
     tileHostHint: "kadastrova-karta.com",
@@ -140,7 +136,7 @@ const PARCEL_SOURCES = {
 
 const ACTIVE_SOURCE_KEY = process.env.PARCEL_SOURCE && PARCEL_SOURCES[process.env.PARCEL_SOURCE]
   ? process.env.PARCEL_SOURCE
-  : "kadastr_live";
+  : "kadastrova_karta";
 const ACTIVE_SOURCE = PARCEL_SOURCES[ACTIVE_SOURCE_KEY];
 
 // Configuration
@@ -151,7 +147,7 @@ const CONFIG = {
   startUrl: process.argv[2] || `${ACTIVE_SOURCE.baseUrl}/#13.95/46.64265/31.4905`,
   headless: process.env.HEADLESS === "1",
   boundaryFilter: process.env.BOUNDARY_FILTER || null,
-  proxy: process.env.KADASTR_PROXY || null,
+  cadnumFilter: process.env.CADNUM_FILTER || null,
   maxRetries: 3,
   statsInterval: 5000,
 };
@@ -267,15 +263,33 @@ async function processTileBuffer(buffer, tileKey, x, y, z) {
 async function fetchKadastrovaTilesDirect(onProgress) {
   if (ACTIVE_SOURCE_KEY !== "kadastrova_karta") return false;
   const boundary = await loadBoundary(CONFIG.boundaryFilter);
-  if (!boundary || !boundary.rings.length) return false;
+  
   let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
-  for (const ring of boundary.rings) {
-    for (const [lon, lat] of ring) {
-      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
-      west = Math.min(west, lon); east = Math.max(east, lon);
-      south = Math.min(south, lat); north = Math.max(north, lat);
+  
+  if (boundary && boundary.rings.length) {
+    // Use boundary if provided
+    for (const ring of boundary.rings) {
+      for (const [lon, lat] of ring) {
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+        west = Math.min(west, lon); east = Math.max(east, lon);
+        south = Math.min(south, lat); north = Math.max(north, lat);
+      }
+    }
+  } else if (CONFIG.cadnumFilter && CONFIG.startUrl.includes('#')) {
+    // No boundary but cadnum filter: derive bbox from URL coordinates
+    const hashPart = CONFIG.startUrl.split('#')[1];
+    const match = hashPart.match(/(\d+(?:\.\d+)?)\/([\d.-]+)\/([\d.-]+)/);
+    if (match) {
+      const lat = parseFloat(match[2]);
+      const lng = parseFloat(match[3]);
+      // Create ~1km bounding box around the point for single parcel lookup
+      const delta = 0.005; // ~0.5km at mid-latitudes
+      west = lng - delta; east = lng + delta;
+      south = lat - delta; north = lat + delta;
+      onProgress(`  → Cadnum mode: using ${delta*2*100}km bbox around ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
     }
   }
+  
   if (!Number.isFinite(west)) return false;
   const zooms = [16, 15, 14];
   const endpointTemplates = [
@@ -356,7 +370,6 @@ async function fetchKadastrovaTilesDirect(onProgress) {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         ...(isHeadless ? [] : ["--start-maximized"]),
-        ...(CONFIG.proxy ? [`--proxy-server=${CONFIG.proxy}`] : []),
       ],
     });
 
@@ -388,7 +401,6 @@ async function fetchKadastrovaTilesDirect(onProgress) {
         const { lat: lat0, lng: lng0 } = gridCells[0];
         const firstUrl = `${ACTIVE_SOURCE.baseUrl}/#14/${lat0}/${lng0}`;
         console.log(`🌍 Full-area sweep: ${gridCells.length} cells`);
-        if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
         await page.goto(firstUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
         console.log(`  [1/${gridCells.length}] Waiting for first tile…`);
         await waitForFirstTile(30000);
@@ -410,13 +422,12 @@ async function fetchKadastrovaTilesDirect(onProgress) {
       } else {
         // ── Single-URL headless mode ──
         console.log(`🤖 Headless mode — loading ${startUrl}`);
-        if (CONFIG.proxy) console.log(`🔒 Using proxy: ${CONFIG.proxy}`);
         await page.goto(startUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
         console.log("  → Page loaded, waiting for tiles to start…");
         await waitForFirstTile(30000);
         if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
         console.log("  → Tiles arriving, waiting to settle…");
-        await waitForTilesToSettle(CONFIG.proxy ? 8000 : 4000);
+        await waitForTilesToSettle(4000);
         if (ACTIVE_SOURCE_KEY === "kadastrova_karta" && parcelFragments.size === 0) {
           console.log("  ⚠ Base tiles loaded but no parcel features captured — switching to direct z14 tile fetch…");
           await fetchKadastrovaTilesDirect((m) => console.log(m));
@@ -516,6 +527,22 @@ function setupGracefulShutdown(browser) {
         const before = features.length;
         features = features.filter(f => featureInBoundary(f, boundary.rings));
         console.log(`🔍 Boundary filter: ${features.length} of ${before} parcels kept`);
+      }
+
+      // Apply cadastral number filter if provided
+      if (CONFIG.cadnumFilter) {
+        const before = features.length;
+        features = features.filter(f => {
+          const cadnum = String(
+            f.properties?.cadnum ||
+            f.properties?.cad_num ||
+            f.properties?.cadastral_number ||
+            f.properties?.cadastre_number ||
+            ''
+          ).trim();
+          return cadnum === CONFIG.cadnumFilter;
+        });
+        console.log(`🔍 Cadnum filter (${CONFIG.cadnumFilter}): ${features.length} of ${before} parcels kept`);
       }
 
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
