@@ -33,6 +33,66 @@ function featureAreaM2(f) {
   return 0;
 }
 
+function pointInRing(point, ring) {
+  const [x, y] = point;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const crosses = ((yi > y) !== (yj > y)) &&
+      (x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInPolygon(point, coords) {
+  if (!coords || !coords.length || !pointInRing(point, coords[0])) return false;
+  for (let i = 1; i < coords.length; i++) if (pointInRing(point, coords[i])) return false;
+  return true;
+}
+
+function pointInGeometry(point, geom) {
+  if (!point || !geom) return false;
+  if (geom.type === 'Polygon') return pointInPolygon(point, geom.coordinates);
+  if (geom.type === 'MultiPolygon') return geom.coordinates.some((poly) => pointInPolygon(point, poly));
+  return false;
+}
+
+function featureProbePoint(f) {
+  const g = f && f.geometry;
+  if (!g) return null;
+  if (g.type === 'Point') return g.coordinates;
+  if (g.type === 'Polygon') return g.coordinates?.[0]?.[0] || null;
+  if (g.type === 'MultiPolygon') return g.coordinates?.[0]?.[0]?.[0] || null;
+  return null;
+}
+
+function featureCentroid(f) {
+  const g = f && f.geometry;
+  if (!g) return null;
+  if (g.type === 'Point') return g.coordinates;
+  
+  // For Polygon/MultiPolygon, compute centroid from all exterior ring coordinates
+  let allCoords = [];
+  if (g.type === 'Polygon') {
+    allCoords = g.coordinates[0] || [];
+  } else if (g.type === 'MultiPolygon') {
+    for (const poly of g.coordinates) {
+      allCoords = allCoords.concat(poly[0] || []);
+    }
+  }
+  
+  if (allCoords.length === 0) return null;
+  
+  let sumLon = 0, sumLat = 0;
+  for (const [lon, lat] of allCoords) {
+    sumLon += lon;
+    sumLat += lat;
+  }
+  return [sumLon / allCoords.length, sumLat / allCoords.length];
+}
+
 // Returns true if the polygon is at least minWidthM wide at its narrowest point
 function isWideEnough(f, minWidthM) {
   try {
@@ -41,6 +101,76 @@ function isWideEnough(f, minWidthM) {
   } catch (_) {
     return false; // thin/degenerate polygons that fail turf are excluded
   }
+}
+
+function buildTieredSettlementBuffers(boundaries) {
+  const buffersSmall = [], buffersMedium = [], buffersLarge = [];
+  let smallCount = 0, mediumCount = 0, largeCount = 0, partsCount = 0;
+  for (const f of boundaries) {
+    if (!f.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
+    const polygonParts = f.geometry.type === 'Polygon'
+      ? [f]
+      : f.geometry.coordinates.map((coords, idx) => ({
+          ...f,
+          geometry: { type: 'Polygon', coordinates: coords },
+          properties: { ...f.properties, _part_index: idx + 1, _part_total: f.geometry.coordinates.length },
+        }));
+
+    for (const part of polygonParts) {
+      partsCount++;
+      try {
+        const areaM2 = featureAreaM2(part);
+        const areaKm2 = areaM2 / 1_000_000;
+
+        let bufferKm, tier, layerName, bufferType;
+        if (areaKm2 < 0.5) {
+          bufferKm = 0.3;
+          tier = 'small';
+          layerName = 'Settlement Buffers (Small)';
+          bufferType = 'buffer_300m';
+          smallCount++;
+        } else if (areaKm2 < 2) {
+          bufferKm = 0.5;
+          tier = 'medium';
+          layerName = 'Settlement Buffers (Medium)';
+          bufferType = 'buffer_500m';
+          mediumCount++;
+        } else {
+          bufferKm = 0.7;
+          tier = 'large';
+          layerName = 'Settlement Buffers (Large)';
+          bufferType = 'buffer_700m';
+          largeCount++;
+        }
+
+        const buf = turfBuffer(part, bufferKm, { units: 'kilometers' });
+        if (!buf) continue;
+        const bufferFeature = {
+          ...buf,
+          properties: {
+            name: f.properties.name,
+            adm4_pcode: f.properties.adm4_pcode,
+            area_km2: areaKm2.toFixed(3),
+            buffer_size: `${bufferKm * 1000}m`,
+            tier,
+            part_index: part.properties?._part_index || 1,
+            part_total: part.properties?._part_total || 1,
+            _layer: layerName,
+            _type: bufferType,
+          },
+        };
+        if (tier === 'small') buffersSmall.push(bufferFeature);
+        else if (tier === 'medium') buffersMedium.push(bufferFeature);
+        else buffersLarge.push(bufferFeature);
+      } catch (_) {}
+    }
+  }
+  return {
+    buffersSmall,
+    buffersMedium,
+    buffersLarge,
+    stats: { smallCount, mediumCount, largeCount, partsCount, totalBuffers: buffersSmall.length + buffersMedium.length + buffersLarge.length },
+  };
 }
 
 const HUMDATA_ZIP_URL  = 'https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/681beb86-391b-4a08-8140-ca52e80fcdce/download/ukr_admin_boundaries.geojson.zip';
@@ -276,17 +406,46 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   onProgress('📐 Extracting settlement boundaries from admin4…');
   const admin4Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin4.geojson');
   const admin4 = JSON.parse(admin4Raw.toString('utf8'));
-  const settlementPolygons = admin4.features.filter(f => f.properties.adm3_pcode === matchedPcode);
-  onProgress(`  → ${settlementPolygons.length} settlement polygons`);
+  const rawSettlementPolygons = admin4.features.filter(f => f.properties.adm3_pcode === matchedPcode);
+  const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
+  let settlementPolygons = rawSettlementPolygons.filter((f) => {
+    const fb = featureBbox(f);
+    const fbArr = [fb.south, fb.west, fb.north, fb.east];
+    return bboxesIntersect(fbArr, bboxArr);
+  });
+  const afterBboxFilter = settlementPolygons.length;
+  if (matchedFeature && matchedFeature.geometry && (matchedFeature.geometry.type === 'Polygon' || matchedFeature.geometry.type === 'MultiPolygon')) {
+    const beforeCentroidFilter = settlementPolygons.length;
+    settlementPolygons = settlementPolygons.filter((f) => {
+      const centroid = featureCentroid(f);
+      return centroid && pointInGeometry(centroid, matchedFeature.geometry);
+    });
+    const afterCentroidFilter = settlementPolygons.length;
+    onProgress(`  → Bbox filter: ${rawSettlementPolygons.length} → ${afterBboxFilter}, Centroid filter: ${beforeCentroidFilter} → ${afterCentroidFilter}`);
+  } else {
+    onProgress(`  → ${settlementPolygons.length}/${rawSettlementPolygons.length} settlement polygons intersect selected area`);
+  }
 
   // 3. Filter adminpoints by adm3_pcode and admin_level=4 → settlement pins
   onProgress('📍 Extracting settlement pins from adminpoints…');
   const pointsRaw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_adminpoints.geojson');
   const pointsData = JSON.parse(pointsRaw.toString('utf8'));
-  const settlementPins = pointsData.features.filter(f =>
+  const rawSettlementPins = pointsData.features.filter(f =>
     f.properties.adm3_pcode === matchedPcode && f.properties.admin_level === 4
   );
-  onProgress(`  → ${settlementPins.length} settlement pins`);
+  let settlementPins = rawSettlementPins.filter((f) => {
+    const c = f?.geometry?.coordinates;
+    if (!c || c.length < 2) return false;
+    const [lon, lat] = c;
+    return lon >= bbox.west && lon <= bbox.east && lat >= bbox.south && lat <= bbox.north;
+  });
+  if (matchedFeature && matchedFeature.geometry && (matchedFeature.geometry.type === 'Polygon' || matchedFeature.geometry.type === 'MultiPolygon')) {
+    settlementPins = settlementPins.filter((f) => {
+      const point = f?.geometry?.coordinates;
+      return point && pointInGeometry(point, matchedFeature.geometry);
+    });
+  }
+  onProgress(`  → ${settlementPins.length}/${rawSettlementPins.length} settlement pins inside selected area`);
 
   // 4. Tag features
   const boundaries = settlementPolygons.map(f => ({
@@ -296,6 +455,7 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
       name: f.properties.adm4_name1 || f.properties.adm4_name,
       _layer: 'Settlements',
       _type: 'settlement',
+      _source: 'humdata',
     },
   }));
 
@@ -311,72 +471,8 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
 
   // 5. Create tiered buffers for polygons (300m, 500m, 700m based on area)
   onProgress('📐 Creating tiered buffer zones for settlements…');
-  const buffersSmall = [], buffersMedium = [], buffersLarge = [];
-  let smallCount = 0, mediumCount = 0, largeCount = 0;
-  let partsCount = 0;
-  for (const f of boundaries) {
-    if (!f.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
-    const polygonParts = f.geometry.type === 'Polygon'
-      ? [f]
-      : f.geometry.coordinates.map((coords, idx) => ({
-          ...f,
-          geometry: { type: 'Polygon', coordinates: coords },
-          properties: { ...f.properties, _part_index: idx + 1, _part_total: f.geometry.coordinates.length },
-        }));
-
-    for (const part of polygonParts) {
-      partsCount++;
-      try {
-        // Area/tier are now calculated per disconnected polygon part.
-        const areaM2 = featureAreaM2(part);
-        const areaKm2 = areaM2 / 1_000_000;
-
-        let bufferKm, tier, layerName, bufferType;
-        if (areaKm2 < 0.5) {
-          bufferKm = 0.3;
-          tier = 'small';
-          layerName = 'Settlement Buffers (Small)';
-          bufferType = 'buffer_300m';
-          smallCount++;
-        } else if (areaKm2 < 2) {
-          bufferKm = 0.5;
-          tier = 'medium';
-          layerName = 'Settlement Buffers (Medium)';
-          bufferType = 'buffer_500m';
-          mediumCount++;
-        } else {
-          bufferKm = 0.7;
-          tier = 'large';
-          layerName = 'Settlement Buffers (Large)';
-          bufferType = 'buffer_700m';
-          largeCount++;
-        }
-
-        const buf = turfBuffer(part, bufferKm, { units: 'kilometers' });
-        if (buf) {
-          const bufferFeature = {
-            ...buf,
-            properties: {
-              name: f.properties.name,
-              adm4_pcode: f.properties.adm4_pcode,
-              area_km2: areaKm2.toFixed(3),
-              buffer_size: `${bufferKm * 1000}m`,
-              tier,
-              part_index: part.properties?._part_index || 1,
-              part_total: part.properties?._part_total || 1,
-              _layer: layerName,
-              _type: bufferType,
-            },
-          };
-          if (tier === 'small') buffersSmall.push(bufferFeature);
-          else if (tier === 'medium') buffersMedium.push(bufferFeature);
-          else buffersLarge.push(bufferFeature);
-        }
-      } catch (_) {}
-    }
-  }
-  const totalBuffers = buffersSmall.length + buffersMedium.length + buffersLarge.length;
-  onProgress(`  → ${totalBuffers} buffers from ${partsCount} settlement parts: ${smallCount} small (300m), ${mediumCount} medium (500m), ${largeCount} large (700m)`);
+  const { buffersSmall, buffersMedium, buffersLarge, stats } = buildTieredSettlementBuffers(boundaries);
+  onProgress(`  → ${stats.totalBuffers} buffers from ${stats.partsCount} settlement parts: ${stats.smallCount} small (300m), ${stats.mediumCount} medium (500m), ${stats.largeCount} large (700m)`);
 
   return { boundaries, pins, buffersSmall, buffersMedium, buffersLarge };
 }
@@ -1485,6 +1581,7 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
 
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {
   const layerMap = {};
+  const osmSettlementPolygons = [];
 
   // 1. Resolve bbox + boundary polygon
   const bbox = await getBbox(territory, onProgress, fallbackBbox);
@@ -1556,10 +1653,45 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     const geojson = osmtogeojson(osmData);
     onProgress(`  → ${geojson.features.length} features`);
 
-    // 4. Split into layers — skip settlements and emerald (fetched from better sources)
+    // 4. Split into layers — keep OSM settlement polygons as optional precision source.
+    const boundaryGeom = bbox.boundaryGeojson && (bbox.boundaryGeojson.type === 'Polygon' || bbox.boundaryGeojson.type === 'MultiPolygon')
+      ? bbox.boundaryGeojson
+      : null;
+    let osmSettlementCandidates = 0;
+    let osmSettlementBboxFiltered = 0;
+    let osmSettlementCentroidFiltered = 0;
     for (const f of geojson.features) {
       const layerName = classifyFeature(f.properties);
-      if (!layerName || layerName === 'Emerald Network' || layerName === 'Settlements') continue;
+      if (!layerName || layerName === 'Emerald Network') continue;
+      if (layerName === 'Settlements') {
+        if (f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon')) {
+          osmSettlementCandidates++;
+          const fb = featureBbox(f);
+          const fbArr = [fb.south, fb.west, fb.north, fb.east];
+          const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
+          if (bboxesIntersect(fbArr, bboxArr)) {
+            osmSettlementBboxFiltered++;
+            if (boundaryGeom) {
+              const centroid = featureCentroid(f);
+              if (!centroid || !pointInGeometry(centroid, boundaryGeom)) {
+                continue;
+              }
+              osmSettlementCentroidFiltered++;
+            }
+            osmSettlementPolygons.push({
+              ...f,
+              properties: {
+                ...f.properties,
+                name: (f.properties && (f.properties.name || f.properties['name:uk'] || f.properties.official_name)) || 'Settlement',
+                _layer: 'Settlements',
+                _type: 'settlement',
+                _source: 'osm',
+              },
+            });
+          }
+        }
+        continue;
+      }
       if (!layerMap[layerName]) layerMap[layerName] = [];
       f.properties._layer = layerName;
       f.properties._type  = layerName.toLowerCase();
@@ -1709,6 +1841,9 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
 
     onProgress(`  → Buffer zones: ${layerMap['Water Buffers'] ? layerMap['Water Buffers'].length : 0} water, ${layerMap['Forest Buffers'] ? layerMap['Forest Buffers'].length : 0} forest, ${layerMap['Road Buffers'] ? layerMap['Road Buffers'].length : 0} road, ${layerMap['Power Line Buffers'] ? layerMap['Power Line Buffers'].length : 0} power line, ${layerMap['Airoports Buffer'] ? layerMap['Airoports Buffer'].length : 0} airport`);
+    if (osmSettlementCandidates > 0) {
+      onProgress(`  → OSM settlements filter: ${osmSettlementCandidates} candidates → ${osmSettlementBboxFiltered} after bbox → ${boundaryGeom ? osmSettlementCentroidFiltered : osmSettlementBboxFiltered} after centroid → ${osmSettlementPolygons.length} final`);
+    }
   } // end osmLayers block
 
   // 3. Nuclear power plants: OSM (90s cap) -> Wikidata fallback
@@ -1750,11 +1885,93 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
     try {
       const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(territory, bbox, onProgress);
-      if (boundaries.length)     layerMap['Settlements'] = boundaries;
-      if (pins.length)           layerMap['Settlement Pins'] = pins;
-      if (buffersSmall.length)   layerMap['Settlement Buffers (Small)'] = buffersSmall;
-      if (buffersMedium.length)  layerMap['Settlement Buffers (Medium)'] = buffersMedium;
-      if (buffersLarge.length)   layerMap['Settlement Buffers (Large)'] = buffersLarge;
+      let settlementBoundaries = boundaries;
+      let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
+
+      // Merge OSM and HUMDATA: prefer OSM geometry for matched settlements, keep unmatched HUMDATA
+      if (osmSettlementPolygons.length > 0) {
+        onProgress(`  → OSM settlement polygons found: ${osmSettlementPolygons.length}. Merging with HUMDATA...`);
+        
+        // Match OSM to HUMDATA by name proximity and location
+        const usedHumdataIndices = new Set();
+        const mergedBoundaries = [];
+        
+        for (const osmSett of osmSettlementPolygons) {
+          const osmName = (osmSett.properties.name || '').toLowerCase().trim();
+          const osmCentroid = featureCentroid(osmSett);
+          
+          // Try to find matching HUMDATA settlement (within 5km and similar name)
+          let bestMatch = null;
+          let bestScore = 0;
+          
+          for (let i = 0; i < boundaries.length; i++) {
+            if (usedHumdataIndices.has(i)) continue;
+            
+            const humdataSett = boundaries[i];
+            const humdataName = (humdataSett.properties.name || '').toLowerCase().trim();
+            const humdataCentroid = featureCentroid(humdataSett);
+            
+            // Simple distance check (rough)
+            if (osmCentroid && humdataCentroid) {
+              const dx = osmCentroid[0] - humdataCentroid[0];
+              const dy = osmCentroid[1] - humdataCentroid[1];
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              
+              // Within ~5km (rough degrees)
+              if (dist < 0.05) {
+                // Name similarity (simple substring check)
+                const nameMatch = osmName.includes(humdataName) || humdataName.includes(osmName) || osmName === humdataName;
+                const score = nameMatch ? (1 - dist * 10) : (0.3 - dist * 10);
+                
+                if (score > bestScore && score > 0.1) {
+                  bestScore = score;
+                  bestMatch = i;
+                }
+              }
+            }
+          }
+          
+          if (bestMatch !== null) {
+            usedHumdataIndices.add(bestMatch);
+            // Use OSM geometry, keep HUMDATA properties for consistency
+            mergedBoundaries.push({
+              ...osmSett,
+              properties: {
+                ...boundaries[bestMatch].properties,
+                _layer: 'Settlements',
+                _type: 'settlement',
+                _source: 'osm_preferred',
+              },
+            });
+          } else {
+            // OSM settlement without HUMDATA match
+            mergedBoundaries.push(osmSett);
+          }
+        }
+        
+        // Add remaining HUMDATA settlements that weren't matched
+        for (let i = 0; i < boundaries.length; i++) {
+          if (!usedHumdataIndices.has(i)) {
+            mergedBoundaries.push(boundaries[i]);
+          }
+        }
+        
+        settlementBoundaries = mergedBoundaries;
+        onProgress(`  → Merged: ${osmSettlementPolygons.length} OSM + ${boundaries.length - usedHumdataIndices.size} unmatched HUMDATA = ${mergedBoundaries.length} total`);
+        
+        // Rebuild buffers from merged boundaries
+        const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries);
+        small = mergedBuffers.buffersSmall;
+        medium = mergedBuffers.buffersMedium;
+        large = mergedBuffers.buffersLarge;
+        onProgress(`  → Merged settlement buffers: ${mergedBuffers.stats.totalBuffers} from ${mergedBuffers.stats.partsCount} parts`);
+      }
+
+      if (settlementBoundaries.length) layerMap['Settlements'] = settlementBoundaries;
+      if (pins.length)                 layerMap['Settlement Pins'] = pins;
+      if (small.length)                layerMap['Settlement Buffers (Small)'] = small;
+      if (medium.length)               layerMap['Settlement Buffers (Medium)'] = medium;
+      if (large.length)                layerMap['Settlement Buffers (Large)'] = large;
     } catch (err) {
       onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
     }
