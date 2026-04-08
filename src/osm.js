@@ -1819,11 +1819,13 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
   // 1. Resolve bbox + boundary polygon
   let customBoundaryGeom = null;
+  let customBoundaryName = null;
   let bbox;
   if (customBoundaryPath) {
     onProgress(`🧭 Loading custom boundary: ${customBoundaryPath}`);
     const customBoundary = await loadBoundaryGeometryFromFile(customBoundaryPath);
     customBoundaryGeom = customBoundary.geometry;
+    customBoundaryName = customBoundary.name || null;
     bbox = {
       south: customBoundary.bbox.south,
       west: customBoundary.bbox.west,
@@ -1838,7 +1840,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   }
 
   // Always add the territory boundary as a layer — as lines only so it never blocks clicks
-  if (bbox.boundaryGeojson) {
+  if (bbox.boundaryGeojson && !customBoundaryPath) {
     onProgress(`🗺 Adding territory boundary: ${bbox.displayName}`);
     const g = bbox.boundaryGeojson;
     // Convert polygon rings → MultiLineString so Google Earth renders outline only (no fill intercepts clicks)
@@ -1864,36 +1866,56 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     onProgress('📡 Sending query to Overpass API…');
 
     let rawResponse;
+    let osmData = null;
+    let lastOverpassError = '';
     const overpassEndpoints = [
       'https://overpass.kumi.systems/api/interpreter',
       'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
       'https://overpass-api.de/api/interpreter',
     ];
+    const maxRetryRounds = 5;
     const startedAt = Date.now();
-    const totalTimeoutMs = 55000;
-    for (const endpoint of overpassEndpoints) {
-      const elapsed = Date.now() - startedAt;
-      const remaining = totalTimeoutMs - elapsed;
-      if (remaining <= 0) {
-        onProgress(`  ⚠ Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s), stopping mirror retries`);
-        break;
+    const totalTimeoutMs = 120000;
+    for (let round = 1; round <= maxRetryRounds && !osmData; round++) {
+      for (const endpoint of overpassEndpoints) {
+        const elapsed = Date.now() - startedAt;
+        const remaining = totalTimeoutMs - elapsed;
+        if (remaining <= 0) {
+          lastOverpassError = `Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s)`;
+          onProgress(`  ⚠ ${lastOverpassError}, stopping retries`);
+          break;
+        }
+        const reqTimeoutMs = Math.max(8000, Math.min(22000, remaining));
+        try {
+          rawResponse = await httpPost(endpoint, `data=${encodeURIComponent(query)}`, {}, reqTimeoutMs);
+          const trimmed = rawResponse.trimStart();
+          if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+            const preview = rawResponse.slice(0, 180).replace(/\n/g, ' ');
+            lastOverpassError = `non-JSON response: ${preview}`;
+            onProgress(`  ⚠ ${endpoint} returned non-JSON (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
+            continue;
+          }
+          try {
+            osmData = JSON.parse(rawResponse);
+            break;
+          } catch (parseErr) {
+            lastOverpassError = `JSON parse error: ${parseErr.message}`;
+            onProgress(`  ⚠ ${endpoint} returned invalid JSON (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
+          }
+        } catch (e) {
+          lastOverpassError = e.message;
+          onProgress(`  ⚠ ${endpoint} failed (${e.message}) (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
+        }
       }
-      const reqTimeoutMs = Math.max(8000, Math.min(22000, remaining));
-      try {
-        rawResponse = await httpPost(endpoint, `data=${encodeURIComponent(query)}`, {}, reqTimeoutMs);
-        if (rawResponse.trimStart().startsWith('{') || rawResponse.trimStart().startsWith('[')) break;
-        onProgress(`  ⚠ ${endpoint} returned non-JSON, trying next mirror…`);
-      } catch (e) {
-        onProgress(`  ⚠ ${endpoint} failed (${e.message}), trying next mirror…`);
+      if (!osmData && round < maxRetryRounds) {
+        const waitMs = round * 1500;
+        onProgress(`  ↻ Overpass retry round ${round + 1}/${maxRetryRounds} in ${Math.round(waitMs / 1000)}s…`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     }
 
-    if (!rawResponse) throw new Error('Overpass mirrors did not return data within timeout');
-    let osmData;
-    try { osmData = JSON.parse(rawResponse); }
-    catch (_) {
-      const preview = rawResponse.slice(0, 300).replace(/\n/g, ' ');
-      throw new Error(`Overpass returned non-JSON: ${preview}`);
+    if (!osmData) {
+      throw new Error(`Overpass failed after ${maxRetryRounds} retry rounds: ${lastOverpassError || 'no valid JSON response'}`);
     }
 
     if (osmData.remark) onProgress(`ℹ Overpass remark: ${osmData.remark}`);
@@ -2141,6 +2163,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
         onProgress,
         customBoundaryGeom
       );
+      let settlementPins = pins;
       let settlementBoundaries = boundaries;
       let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
 
@@ -2235,8 +2258,26 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
         onProgress(`  → Merged settlement buffers: ${mergedBuffers.stats.totalBuffers} from ${mergedBuffers.stats.partsCount} parts`);
       }
 
+      if (customBoundaryGeom) {
+        const center = featureCentroid({ type: 'Feature', geometry: customBoundaryGeom, properties: {} });
+        if (center) {
+          const customPinName = customBoundaryName || territory || 'Custom settlement area';
+          settlementPins = [{
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: center },
+            properties: {
+              name: customPinName,
+              _layer: 'Settlements',
+              _type: 'settlement_pin',
+              _source: 'custom_boundary_center',
+            },
+          }];
+          onProgress(`  → Custom center pin: ${customPinName}`);
+        }
+      }
+
       if (settlementBoundaries.length) layerMap['Settlements'] = settlementBoundaries;
-      if (pins.length)                 layerMap['Settlement Pins'] = pins;
+      if (settlementPins.length)       layerMap['Settlement Pins'] = settlementPins;
       if (small.length)                layerMap['Settlement Buffers (Small)'] = small;
       if (medium.length)               layerMap['Settlement Buffers (Medium)'] = medium;
       if (large.length)                layerMap['Settlement Buffers (Large)'] = large;

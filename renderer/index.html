@@ -18,6 +18,15 @@
         <button class="left-tab-btn" id="tab-btn-pre-research" data-tab-target="tab-panel-pre-research" role="tab" aria-selected="false">📊 Pre Research</button>
       </div>
 
+      <div class="field global-fetch-mode">
+        <label for="parcel-fetch-mode">Fetch mode</label>
+        <select id="parcel-fetch-mode">
+          <option value="boundary" selected>Area boundary (KMZ/KML)</option>
+          <option value="custom">Custom settlement boundary (KMZ)</option>
+          <option value="cadnum">Cadastr number</option>
+        </select>
+      </div>
+
       <div class="left-tab-panel active" id="tab-panel-parcels" role="tabpanel">
         <div class="field">
           <label for="area-name">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate multiple with <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">...</code></span></label>
@@ -26,15 +35,6 @@
 
         <!-- chk-full-parcels checkbox hidden but logic preserved in app.js -->
         <input type="checkbox" id="chk-full-parcels" style="display:none;" />
-
-        <div class="field">
-          <label for="parcel-fetch-mode">Fetch mode</label>
-          <select id="parcel-fetch-mode">
-            <option value="boundary" selected>Area boundary (KMZ/KML)</option>
-            <option value="custom">Custom settlement boundary (KMZ)</option>
-            <option value="cadnum">Single cadastral number</option>
-          </select>
-        </div>
 
         <div class="field" id="field-cadnum" style="display:none;">
           <label for="cadnum-input">Cadastral number(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate with space, comma, or newline</span></label>
@@ -58,7 +58,7 @@
           </div>
         </div>
 
-        <div class="field">
+        <div class="field" id="field-osm-layers">
           <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
           <div class="checkbox-grid">
             <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>

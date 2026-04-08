@@ -313,6 +313,7 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
   document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
   document.getElementById('field-boundary').style.display = (isCadnum || isCustom) ? 'none' : 'block';
   document.getElementById('area-name').parentElement.style.display = isCustom ? 'none' : (isCadnum ? 'none' : 'block');
+  document.getElementById('field-osm-layers').style.display = mode === 'boundary' ? 'block' : 'none';
   
   // Show boundary file picker for custom mode
   if (isCustom) {
@@ -320,6 +321,8 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
     boundaryField.style.display = 'block';
     const label = boundaryField.querySelector('label');
     label.innerHTML = 'Custom settlement boundary KMZ <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(single polygon defining settlement area filter)</span>';
+    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
+    document.getElementById('wind-settings').style.display = 'none';
   } else if (!isCadnum) {
     const boundaryField = document.getElementById('field-boundary');
     const label = boundaryField.querySelector('label');

@@ -89,7 +89,8 @@ label {
 }
 
 input[type="text"],
-textarea {
+textarea,
+select {
   width: 100%;
   background: #0f3460;
   border: 1px solid #2a4a7f;
@@ -102,7 +103,8 @@ textarea {
 }
 
 input[type="text"]:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: #e94560;
 }
 
@@ -180,6 +182,16 @@ textarea {
 
 .left-tab-panel.active {
   display: block;
+}
+
+.global-fetch-mode {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #16213e;
+  padding: 2px 0 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #2a4a7f;
 }
 
 .tab-section + .tab-section {
