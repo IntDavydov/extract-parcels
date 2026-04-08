@@ -11,6 +11,8 @@ const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
 const osmtogeojson = require('osmtogeojson');
 const turfBuffer   = require('@turf/buffer').default || require('@turf/buffer');
+const toGeoJSON = require('@mapbox/togeojson');
+const { DOMParser } = require('@xmldom/xmldom');
 
 // Approximate polygon area in m² using the Shoelace formula with geodetic scaling
 function polygonAreaM2(ring) {
@@ -174,8 +176,10 @@ function buildTieredSettlementBuffers(boundaries) {
 }
 
 const HUMDATA_ZIP_URL  = 'https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/681beb86-391b-4a08-8140-ca52e80fcdce/download/ukr_admin_boundaries.geojson.zip';
+const HOTOSM_SETTLEMENTS_URL = 'https://s3.dualstack.us-east-1.amazonaws.com/production-raw-data-api/ISO3/UKR/populated_places/polygons/hotosm_ukr_populated_places_polygons_geojson.zip';
 const HUMDATA_CACHE_DIR = path.join(os.homedir(), '.land-management-cache');
 const HUMDATA_CACHE_ZIP = path.join(HUMDATA_CACHE_DIR, 'ukr_admin_boundaries.geojson.zip');
+const HOTOSM_CACHE_ZIP = path.join(HUMDATA_CACHE_DIR, 'hotosm_ukr_populated_places.zip');
 
 // ── HTTP helper ────────────────────────────────────────────
 function httpGet(url, headers = {}, timeoutMs = 120000) {
@@ -308,12 +312,58 @@ function extractFileFromZip(zipPath, fileName) {
 }
 
 async function ensureHumdataZip(onProgress) {
+  const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  let needsDownload = false;
+  
   if (!fs.existsSync(HUMDATA_CACHE_ZIP)) {
-    onProgress('📥 Downloading Ukraine admin boundaries from HUMDATA (81MB, one-time)…');
+    needsDownload = true;
+  } else {
+    // Check cache age
+    const stats = fs.statSync(HUMDATA_CACHE_ZIP);
+    const ageMs = Date.now() - stats.mtimeMs;
+    if (ageMs > CACHE_MAX_AGE_MS) {
+      const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+      onProgress(`⏰ HUMDATA cache is ${ageDays} days old (max 7), re-downloading…`);
+      needsDownload = true;
+      fs.unlinkSync(HUMDATA_CACHE_ZIP); // Delete old cache
+    } else {
+      const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+      onProgress(`📦 Using cached HUMDATA boundaries (${ageDays} day(s) old): ${HUMDATA_CACHE_ZIP}`);
+    }
+  }
+  
+  if (needsDownload) {
+    onProgress('📥 Downloading Ukraine admin boundaries from HUMDATA (81MB)…');
     await downloadFile(HUMDATA_ZIP_URL, HUMDATA_CACHE_ZIP, onProgress);
     onProgress('✅ Download complete, cached to: ' + HUMDATA_CACHE_ZIP);
+  }
+}
+
+async function ensureHotosmSettlementsZip(onProgress) {
+  const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  let needsDownload = false;
+  
+  if (!fs.existsSync(HOTOSM_CACHE_ZIP)) {
+    needsDownload = true;
   } else {
-    onProgress('📦 Using cached HUMDATA boundaries: ' + HUMDATA_CACHE_ZIP);
+    // Check cache age
+    const stats = fs.statSync(HOTOSM_CACHE_ZIP);
+    const ageMs = Date.now() - stats.mtimeMs;
+    if (ageMs > CACHE_MAX_AGE_MS) {
+      const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+      onProgress(`⏰ HOTOSM cache is ${ageDays} days old (max 7), re-downloading…`);
+      needsDownload = true;
+      fs.unlinkSync(HOTOSM_CACHE_ZIP); // Delete old cache
+    } else {
+      const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+      onProgress(`📦 Using cached HOTOSM settlements (${ageDays} day(s) old): ${HOTOSM_CACHE_ZIP}`);
+    }
+  }
+  
+  if (needsDownload) {
+    onProgress('📥 Downloading HOTOSM Ukraine populated places from HUMDATA (~50MB)…');
+    await downloadFile(HOTOSM_SETTLEMENTS_URL, HOTOSM_CACHE_ZIP, onProgress);
+    onProgress('✅ HOTOSM settlements cached to: ' + HOTOSM_CACHE_ZIP);
   }
 }
 
@@ -402,12 +452,52 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
 
   if (!matchedPcode) throw new Error('Could not match territory to a hromada in HUMDATA');
 
-  // 2. Filter admin4 polygons by adm3_pcode → settlement boundaries
-  onProgress('📐 Extracting settlement boundaries from admin4…');
+  // Prepare bbox array for filtering
+  const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
+
+  //  2a. Fetch HOTOSM populated places (more accurate settlement boundaries from OSM)
+  onProgress('🏘 Fetching HOTOSM populated places (OSM-derived settlement boundaries)…');
+  await ensureHotosmSettlementsZip(onProgress);
+  
+  let hotosmSettlements = [];
+  try {
+    const geojsonRaw = extractFileFromZip(HOTOSM_CACHE_ZIP, 'hotosm_ukr_populated_places_polygons_geojson.geojson');
+    const hotosmGeoJSON = JSON.parse(geojsonRaw.toString('utf8'));
+    
+    // Filter by bbox and hromada boundary
+    for (const f of hotosmGeoJSON.features) {
+      if (!f.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
+      
+      const fb = featureBbox(f);
+      const fbArr = [fb.south, fb.west, fb.north, fb.east];
+      if (!bboxesIntersect(fbArr, bboxArr)) continue;
+      
+      if (matchedFeature && matchedFeature.geometry) {
+        const centroid = featureCentroid(f);
+        if (!centroid || !pointInGeometry(centroid, matchedFeature.geometry)) continue;
+      }
+      
+      hotosmSettlements.push({
+        ...f,
+        properties: {
+          ...f.properties,
+          name: f.properties.name || 'Settlement',
+          _layer: 'Settlements',
+          _type: 'settlement',
+          _source: 'hotosm',
+        },
+      });
+    }
+    onProgress(`  → ${hotosmSettlements.length} HOTOSM settlement polygons found in area`);
+  } catch (err) {
+    onProgress(`  ⚠ HOTOSM extraction failed: ${err.message}, continuing with admin4 only`);
+  }
+
+  // 2b. Filter admin4 polygons by adm3_pcode → settlement boundaries (administrative)
+  onProgress('📐 Extracting settlement boundaries from admin4 (administrative)…');
   const admin4Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin4.geojson');
   const admin4 = JSON.parse(admin4Raw.toString('utf8'));
   const rawSettlementPolygons = admin4.features.filter(f => f.properties.adm3_pcode === matchedPcode);
-  const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
   let settlementPolygons = rawSettlementPolygons.filter((f) => {
     const fb = featureBbox(f);
     const fbArr = [fb.south, fb.west, fb.north, fb.east];
@@ -447,17 +537,82 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   }
   onProgress(`  → ${settlementPins.length}/${rawSettlementPins.length} settlement pins inside selected area`);
 
-  // 4. Tag features
-  const boundaries = settlementPolygons.map(f => ({
-    ...f,
-    properties: {
-      ...f.properties,
-      name: f.properties.adm4_name1 || f.properties.adm4_name,
-      _layer: 'Settlements',
-      _type: 'settlement',
-      _source: 'humdata',
-    },
-  }));
+  // 4. Merge HOTOSM and admin4: prefer HOTOSM (OSM-derived precise) over admin4 (administrative)
+  onProgress('🔀 Merging HOTOSM and admin4 settlement boundaries…');
+  const mergedBoundaries = [];
+  const usedAdmin4Indices = new Set();
+  
+  // First, try to match HOTOSM settlements to admin4 by name and location
+  for (const hotosmSett of hotosmSettlements) {
+    const hotosmName = (hotosmSett.properties.name || '').toLowerCase().trim();
+    const hotosmCentroid = featureCentroid(hotosmSett);
+    
+    let bestMatch = null;
+    let bestScore = 0;
+    
+    for (let i = 0; i < settlementPolygons.length; i++) {
+      if (usedAdmin4Indices.has(i)) continue;
+      
+      const admin4Sett = settlementPolygons[i];
+      const admin4Name = (admin4Sett.properties.adm4_name1 || admin4Sett.properties.adm4_name || '').toLowerCase().trim();
+      const admin4Centroid = featureCentroid(admin4Sett);
+      
+      if (hotosmCentroid && admin4Centroid) {
+        const dx = hotosmCentroid[0] - admin4Centroid[0];
+        const dy = hotosmCentroid[1] - admin4Centroid[1];
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        // Within ~3km
+        if (dist < 0.03) {
+          const nameMatch = hotosmName.includes(admin4Name) || admin4Name.includes(hotosmName) || hotosmName === admin4Name;
+          const score = nameMatch ? (1 - dist * 20) : (0.2 - dist * 20);
+          
+          if (score > bestScore && score > 0.1) {
+            bestScore = score;
+            bestMatch = i;
+          }
+        }
+      }
+    }
+    
+    if (bestMatch !== null) {
+      usedAdmin4Indices.add(bestMatch);
+      // Use HOTOSM geometry (more precise), keep admin4 properties for consistency
+      mergedBoundaries.push({
+        ...hotosmSett,
+        properties: {
+          ...settlementPolygons[bestMatch].properties,
+          name: settlementPolygons[bestMatch].properties.adm4_name1 || settlementPolygons[bestMatch].properties.adm4_name,
+          _layer: 'Settlements',
+          _type: 'settlement',
+          _source: 'hotosm_preferred',
+        },
+      });
+    } else {
+      // HOTOSM settlement without admin4 match
+      mergedBoundaries.push(hotosmSett);
+    }
+  }
+  
+  // Add remaining admin4 settlements that weren't matched by HOTOSM
+  for (let i = 0; i < settlementPolygons.length; i++) {
+    if (!usedAdmin4Indices.has(i)) {
+      mergedBoundaries.push({
+        ...settlementPolygons[i],
+        properties: {
+          ...settlementPolygons[i].properties,
+          name: settlementPolygons[i].properties.adm4_name1 || settlementPolygons[i].properties.adm4_name,
+          _layer: 'Settlements',
+          _type: 'settlement',
+          _source: 'admin4',
+        },
+      });
+    }
+  }
+  
+  onProgress(`  → Merged: ${hotosmSettlements.length} HOTOSM + ${settlementPolygons.length - usedAdmin4Indices.size} admin4-only = ${mergedBoundaries.length} total`);
+  
+  const boundaries = mergedBoundaries;
 
   const pins = settlementPins.map(f => ({
     ...f,
@@ -1888,39 +2043,50 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       let settlementBoundaries = boundaries;
       let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
 
-      // Merge OSM and HUMDATA: prefer OSM geometry for matched settlements, keep unmatched HUMDATA
+      // Merge OSM Overpass with HUMDATA (which already contains HOTOSM-preferred data)
+      // Priority: HOTOSM > OSM Overpass > admin4
       if (osmSettlementPolygons.length > 0) {
-        onProgress(`  → OSM settlement polygons found: ${osmSettlementPolygons.length}. Merging with HUMDATA...`);
+        onProgress(`  → OSM settlement polygons found: ${osmSettlementPolygons.length}. Merging with HOTOSM/admin4...`);
         
-        // Match OSM to HUMDATA by name proximity and location
-        const usedHumdataIndices = new Set();
+        // Match OSM to existing boundaries by name proximity and location
+        const usedBoundaryIndices = new Set();
         const mergedBoundaries = [];
         
+        // First pass: keep all HOTOSM settlements (highest priority - never replace)
+        for (let i = 0; i < boundaries.length; i++) {
+          const boundary = boundaries[i];
+          if (boundary.properties._source === 'hotosm_preferred' || boundary.properties._source === 'hotosm') {
+            mergedBoundaries.push(boundary);
+            usedBoundaryIndices.add(i);
+          }
+        }
+        
+        // Second pass: merge OSM Overpass with remaining (non-HOTOSM) boundaries
         for (const osmSett of osmSettlementPolygons) {
           const osmName = (osmSett.properties.name || '').toLowerCase().trim();
           const osmCentroid = featureCentroid(osmSett);
           
-          // Try to find matching HUMDATA settlement (within 5km and similar name)
+          // Try to find matching boundary (within 5km and similar name)
           let bestMatch = null;
           let bestScore = 0;
           
           for (let i = 0; i < boundaries.length; i++) {
-            if (usedHumdataIndices.has(i)) continue;
+            if (usedBoundaryIndices.has(i)) continue; // Skip HOTOSM and already matched
             
-            const humdataSett = boundaries[i];
-            const humdataName = (humdataSett.properties.name || '').toLowerCase().trim();
-            const humdataCentroid = featureCentroid(humdataSett);
+            const boundary = boundaries[i];
+            const boundaryName = (boundary.properties.name || '').toLowerCase().trim();
+            const boundaryCentroid = featureCentroid(boundary);
             
             // Simple distance check (rough)
-            if (osmCentroid && humdataCentroid) {
-              const dx = osmCentroid[0] - humdataCentroid[0];
-              const dy = osmCentroid[1] - humdataCentroid[1];
+            if (osmCentroid && boundaryCentroid) {
+              const dx = osmCentroid[0] - boundaryCentroid[0];
+              const dy = osmCentroid[1] - boundaryCentroid[1];
               const dist = Math.sqrt(dx * dx + dy * dy);
               
               // Within ~5km (rough degrees)
               if (dist < 0.05) {
                 // Name similarity (simple substring check)
-                const nameMatch = osmName.includes(humdataName) || humdataName.includes(osmName) || osmName === humdataName;
+                const nameMatch = osmName.includes(boundaryName) || boundaryName.includes(osmName) || osmName === boundaryName;
                 const score = nameMatch ? (1 - dist * 10) : (0.3 - dist * 10);
                 
                 if (score > bestScore && score > 0.1) {
@@ -1932,32 +2098,33 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
           }
           
           if (bestMatch !== null) {
-            usedHumdataIndices.add(bestMatch);
-            // Use OSM geometry, keep HUMDATA properties for consistency
+            usedBoundaryIndices.add(bestMatch);
+            // Use OSM Overpass geometry, keep properties for consistency
             mergedBoundaries.push({
               ...osmSett,
               properties: {
                 ...boundaries[bestMatch].properties,
                 _layer: 'Settlements',
                 _type: 'settlement',
-                _source: 'osm_preferred',
+                _source: 'osm_overpass_preferred',
               },
             });
           } else {
-            // OSM settlement without HUMDATA match
+            // OSM settlement without match - add it
             mergedBoundaries.push(osmSett);
           }
         }
         
-        // Add remaining HUMDATA settlements that weren't matched
+        // Add remaining boundaries (admin4-only) that weren't matched
         for (let i = 0; i < boundaries.length; i++) {
-          if (!usedHumdataIndices.has(i)) {
+          if (!usedBoundaryIndices.has(i)) {
             mergedBoundaries.push(boundaries[i]);
           }
         }
         
+        const hotosmCount = boundaries.filter(b => b.properties._source === 'hotosm_preferred' || b.properties._source === 'hotosm').length;
         settlementBoundaries = mergedBoundaries;
-        onProgress(`  → Merged: ${osmSettlementPolygons.length} OSM + ${boundaries.length - usedHumdataIndices.size} unmatched HUMDATA = ${mergedBoundaries.length} total`);
+        onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBoundaries.length} total`);
         
         // Rebuild buffers from merged boundaries
         const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries);
