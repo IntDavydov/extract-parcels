@@ -11,6 +11,7 @@ const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
 const osmtogeojson = require('osmtogeojson');
 const turfBuffer   = require('@turf/buffer').default || require('@turf/buffer');
+const turfIntersect = require('@turf/intersect').default || require('@turf/intersect');
 const toGeoJSON = require('@mapbox/togeojson');
 const { DOMParser } = require('@xmldom/xmldom');
 
@@ -59,6 +60,30 @@ function pointInGeometry(point, geom) {
   if (geom.type === 'Polygon') return pointInPolygon(point, geom.coordinates);
   if (geom.type === 'MultiPolygon') return geom.coordinates.some((poly) => pointInPolygon(point, poly));
   return false;
+}
+
+function featureInsideGeometry(feature, geom) {
+  if (!feature || !feature.geometry || !geom) return false;
+  if (feature.geometry.type === 'Point') return pointInGeometry(feature.geometry.coordinates, geom);
+  const centroid = featureCentroid(feature);
+  return !!(centroid && pointInGeometry(centroid, geom));
+}
+
+function clipPolygonFeatureToGeometry(feature, geom) {
+  if (!feature || !feature.geometry || !geom) return null;
+  if (feature.geometry.type !== 'Polygon' && feature.geometry.type !== 'MultiPolygon') return null;
+  const boundaryFeature = { type: 'Feature', properties: {}, geometry: geom };
+  let clipped = null;
+  try {
+    clipped = turfIntersect({
+      type: 'FeatureCollection',
+      features: [feature, boundaryFeature],
+    });
+  } catch (_) {
+    try { clipped = turfIntersect(feature, boundaryFeature); } catch (_) { clipped = null; }
+  }
+  if (!clipped || !clipped.geometry) return null;
+  return { ...feature, geometry: clipped.geometry };
 }
 
 function featureProbePoint(f) {
@@ -368,15 +393,10 @@ async function ensureHotosmSettlementsZip(onProgress) {
 }
 
 // ── HUMDATA: fetch settlements for territory ──────────────
-async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
+async function fetchSettlementsFromHumdata(territory, bbox, onProgress, areaGeometry = null) {
   await ensureHumdataZip(onProgress);
 
-  // 1. Find matching adm3_pcode by territory name
-  onProgress('🔍 Matching territory to hromada pcode…');
-  const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
-  const admin3 = JSON.parse(admin3Raw.toString('utf8'));
-
-  const searchName = normalizeTerritoryName(territory);
+  const usingCustomBoundary = !!areaGeometry;
   let matchedPcode = null;
   let matchedFeature = null;
 
@@ -400,57 +420,68 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
     return lon >= bbox.west && lon <= bbox.east && lat >= bbox.south && lat <= bbox.north;
   }
 
-  for (const f of admin3.features) {
-    const p = f.properties;
-    const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(normalizeTerritoryName);
-    // Require the core name token to match AND centroid to be inside the Nominatim bbox
-    const nameHit = names.some(n => {
-      const core = n.trim();
-      return core === searchName || core.includes(searchName) || searchName.includes(core);
-    });
-    if (nameHit && inBbox(featureCentroid(f))) {
-      matchedPcode = p.adm3_pcode;
-      matchedFeature = f;
-      onProgress(`  ✅ Matched hromada: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
-      break;
-    }
-  }
+  if (usingCustomBoundary) {
+    matchedFeature = { type: 'Feature', geometry: areaGeometry, properties: { adm3_name: 'Custom boundary' } };
+    onProgress('🔍 Using custom KMZ boundary filter for settlements…');
+  } else {
+    // 1. Find matching adm3_pcode by territory name
+    onProgress('🔍 Matching territory to hromada pcode…');
+    const admin3Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin3.geojson');
+    const admin3 = JSON.parse(admin3Raw.toString('utf8'));
+    const searchName = normalizeTerritoryName(territory);
 
-  // fallback: bbox intersection if name not matched
-  if (!matchedPcode) {
-    onProgress('  ⚠ No exact name match — using bbox intersection');
     for (const f of admin3.features) {
-      if (!f.geometry) continue;
       const p = f.properties;
-      // Compute centroid from geometry coordinates
-      const coords = f.geometry.type === 'Polygon'
-        ? f.geometry.coordinates[0]
-        : f.geometry.coordinates[0][0]; // MultiPolygon
-      let sumLon = 0, sumLat = 0, count = 0;
-      for (const [lon, lat] of coords) { sumLon += lon; sumLat += lat; count++; }
-      const cl = sumLon / count, clat = sumLat / count;
-      if (cl >= bbox.west && cl <= bbox.east && clat >= bbox.south && clat <= bbox.north) {
+      const names = [p.adm3_name, p.adm3_name1, p.adm3_name2, p.adm3_name3].filter(Boolean).map(normalizeTerritoryName);
+      // Require the core name token to match AND centroid to be inside the Nominatim bbox
+      const nameHit = names.some(n => {
+        const core = n.trim();
+        return core === searchName || core.includes(searchName) || searchName.includes(core);
+      });
+      if (nameHit && inBbox(featureCentroid(f))) {
         matchedPcode = p.adm3_pcode;
         matchedFeature = f;
-        onProgress(`  → Using: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
+        onProgress(`  ✅ Matched hromada: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
         break;
       }
     }
-  }
 
-  if (!matchedPcode) {
-    const fuzzy = fuzzyMatchHumdata(territory, admin3.features);
-    if (fuzzy) {
-      const fb = featureBbox(fuzzy.f);
-      if (bboxesIntersect(fb, bbox) || fuzzy.dist <= 3) {
-        matchedPcode = fuzzy.f.properties.adm3_pcode;
-        matchedFeature = fuzzy.f;
-        onProgress(`  → Fuzzy fallback: ${fuzzy.name} (pcode: ${matchedPcode})`);
+    // fallback: bbox intersection if name not matched
+    if (!matchedPcode) {
+      onProgress('  ⚠ No exact name match — using bbox intersection');
+      for (const f of admin3.features) {
+        if (!f.geometry) continue;
+        const p = f.properties;
+        // Compute centroid from geometry coordinates
+        const coords = f.geometry.type === 'Polygon'
+          ? f.geometry.coordinates[0]
+          : f.geometry.coordinates[0][0]; // MultiPolygon
+        let sumLon = 0, sumLat = 0, count = 0;
+        for (const [lon, lat] of coords) { sumLon += lon; sumLat += lat; count++; }
+        const cl = sumLon / count, clat = sumLat / count;
+        if (cl >= bbox.west && cl <= bbox.east && clat >= bbox.south && clat <= bbox.north) {
+          matchedPcode = p.adm3_pcode;
+          matchedFeature = f;
+          onProgress(`  → Using: ${p.adm3_name1 || p.adm3_name} (pcode: ${matchedPcode})`);
+          break;
+        }
       }
     }
-  }
 
-  if (!matchedPcode) throw new Error('Could not match territory to a hromada in HUMDATA');
+    if (!matchedPcode) {
+      const fuzzy = fuzzyMatchHumdata(territory, admin3.features);
+      if (fuzzy) {
+        const fb = featureBbox(fuzzy.f);
+        if (bboxesIntersect(fb, bbox) || fuzzy.dist <= 3) {
+          matchedPcode = fuzzy.f.properties.adm3_pcode;
+          matchedFeature = fuzzy.f;
+          onProgress(`  → Fuzzy fallback: ${fuzzy.name} (pcode: ${matchedPcode})`);
+        }
+      }
+    }
+
+    if (!matchedPcode) throw new Error('Could not match territory to a hromada in HUMDATA');
+  }
 
   // Prepare bbox array for filtering
   const bboxArr = [bbox.south, bbox.west, bbox.north, bbox.east];
@@ -497,7 +528,9 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   onProgress('📐 Extracting settlement boundaries from admin4 (administrative)…');
   const admin4Raw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_admin4.geojson');
   const admin4 = JSON.parse(admin4Raw.toString('utf8'));
-  const rawSettlementPolygons = admin4.features.filter(f => f.properties.adm3_pcode === matchedPcode);
+  const rawSettlementPolygons = usingCustomBoundary
+    ? admin4.features.filter((f) => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
+    : admin4.features.filter((f) => f.properties.adm3_pcode === matchedPcode);
   let settlementPolygons = rawSettlementPolygons.filter((f) => {
     const fb = featureBbox(f);
     const fbArr = [fb.south, fb.west, fb.north, fb.east];
@@ -521,7 +554,7 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   const pointsRaw = extractFileFromZip(HUMDATA_CACHE_ZIP, 'ukr_adminpoints.geojson');
   const pointsData = JSON.parse(pointsRaw.toString('utf8'));
   const rawSettlementPins = pointsData.features.filter(f =>
-    f.properties.adm3_pcode === matchedPcode && f.properties.admin_level === 4
+    f.properties.admin_level === 4 && (usingCustomBoundary || f.properties.adm3_pcode === matchedPcode)
   );
   let settlementPins = rawSettlementPins.filter((f) => {
     const c = f?.geometry?.coordinates;
@@ -612,7 +645,16 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress) {
   
   onProgress(`  → Merged: ${hotosmSettlements.length} HOTOSM + ${settlementPolygons.length - usedAdmin4Indices.size} admin4-only = ${mergedBoundaries.length} total`);
   
-  const boundaries = mergedBoundaries;
+  let boundaries = mergedBoundaries;
+  if (usingCustomBoundary && areaGeometry) {
+    const beforeBoundaries = boundaries.length;
+    const beforePins = settlementPins.length;
+    boundaries = boundaries
+      .map((f) => clipPolygonFeatureToGeometry(f, areaGeometry))
+      .filter(Boolean);
+    settlementPins = settlementPins.filter((f) => featureInsideGeometry(f, areaGeometry));
+    onProgress(`  → Custom boundary clip: settlements ${beforeBoundaries} → ${boundaries.length}, pins ${beforePins} → ${settlementPins.length}`);
+  }
 
   const pins = settlementPins.map(f => ({
     ...f,
@@ -1192,6 +1234,43 @@ function kmlNodeToGeometry(doc) {
   return features;
 }
 
+async function loadBoundaryGeometryFromFile(filePath) {
+  const JSZip = require('jszip');
+  let kmlText;
+  if (String(filePath).toLowerCase().endsWith('.kmz')) {
+    const zip = await JSZip.loadAsync(fs.readFileSync(filePath));
+    const kmlName = Object.keys(zip.files).find((f) => f.toLowerCase().endsWith('.kml'));
+    if (!kmlName) throw new Error('No .kml inside KMZ boundary file');
+    kmlText = await zip.files[kmlName].async('string');
+  } else {
+    kmlText = fs.readFileSync(filePath, 'utf8');
+  }
+
+  const doc = new DOMParser().parseFromString(kmlText, 'text/xml');
+  const parsed = kmlNodeToGeometry(doc).filter((f) =>
+    f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon')
+  );
+  if (!parsed.length) throw new Error('Boundary KMZ/KML has no polygon geometry');
+
+  // Use the largest polygon as the custom area filter.
+  let selected = parsed[0];
+  let maxArea = featureAreaM2({ type: 'Feature', geometry: selected.geometry, properties: {} });
+  for (let i = 1; i < parsed.length; i++) {
+    const area = featureAreaM2({ type: 'Feature', geometry: parsed[i].geometry, properties: {} });
+    if (area > maxArea) {
+      maxArea = area;
+      selected = parsed[i];
+    }
+  }
+
+  const bbox = featureBbox({ type: 'Feature', geometry: selected.geometry, properties: {} });
+  return {
+    geometry: selected.geometry,
+    name: selected.name || path.basename(filePath, path.extname(filePath)),
+    bbox,
+  };
+}
+
 async function fetchNatureReservesFromPZF(bbox, onProgress) {
   const JSZip = require('jszip');
   const { DOMParser } = require('@xmldom/xmldom');
@@ -1734,12 +1813,29 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   };
 }
 
-async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox) {
+async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox, customBoundaryPath = null) {
   const layerMap = {};
   const osmSettlementPolygons = [];
 
   // 1. Resolve bbox + boundary polygon
-  const bbox = await getBbox(territory, onProgress, fallbackBbox);
+  let customBoundaryGeom = null;
+  let bbox;
+  if (customBoundaryPath) {
+    onProgress(`🧭 Loading custom boundary: ${customBoundaryPath}`);
+    const customBoundary = await loadBoundaryGeometryFromFile(customBoundaryPath);
+    customBoundaryGeom = customBoundary.geometry;
+    bbox = {
+      south: customBoundary.bbox.south,
+      west: customBoundary.bbox.west,
+      north: customBoundary.bbox.north,
+      east: customBoundary.bbox.east,
+      boundaryGeojson: customBoundaryGeom,
+      displayName: territory || customBoundary.name || 'Custom boundary',
+    };
+    onProgress(`📐 Custom boundary bbox: ${bbox.south.toFixed(4)},${bbox.west.toFixed(4)} → ${bbox.north.toFixed(4)},${bbox.east.toFixed(4)}`);
+  } else {
+    bbox = await getBbox(territory, onProgress, fallbackBbox);
+  }
 
   // Always add the territory boundary as a layer — as lines only so it never blocks clicks
   if (bbox.boundaryGeojson) {
@@ -2039,7 +2135,12 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   if (layers.includes('settlements')) {
     onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
     try {
-      const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(territory, bbox, onProgress);
+      const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(
+        territory,
+        bbox,
+        onProgress,
+        customBoundaryGeom
+      );
       let settlementBoundaries = boundaries;
       let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
 
