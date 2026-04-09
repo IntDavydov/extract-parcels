@@ -115,8 +115,14 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
 
         const data = await extractFields(page);
         const filled = Object.values(data).filter(Boolean).length;
-        if (filled === 0) onProgress(`  ⚠ No data found for ${cadnum}`);
-        results.push({ cadnum, ...data });
+        const noDataMessage = `⚠ No data found for ${cadnum}`;
+        if (filled === 0) onProgress(`  ${noDataMessage}`);
+        results.push({
+          cadnum,
+          [FIELDS[0]]: cadnum,
+          ...data,
+          error: filled === 0 ? noDataMessage : '',
+        });
 
         // After seeing results, navigate back to the blank form for the next query
         await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -124,7 +130,11 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
 
       } catch (err) {
         onProgress(`  ⚠ Error for ${cadnum}: ${err.message}`);
-        results.push({ cadnum, error: err.message });
+        results.push({
+          cadnum,
+          [FIELDS[0]]: cadnum,
+          error: err.message,
+        });
       }
 
       // Polite delay between requests
