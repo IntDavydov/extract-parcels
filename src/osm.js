@@ -130,7 +130,8 @@ function isWideEnough(f, minWidthM) {
   }
 }
 
-function buildTieredSettlementBuffers(boundaries) {
+function buildTieredSettlementBuffers(boundaries, options = {}) {
+  const force700m = !!options.force700m;
   const buffersSmall = [], buffersMedium = [], buffersLarge = [];
   let smallCount = 0, mediumCount = 0, largeCount = 0, partsCount = 0;
   for (const f of boundaries) {
@@ -149,23 +150,25 @@ function buildTieredSettlementBuffers(boundaries) {
         const areaM2 = featureAreaM2(part);
         const areaKm2 = areaM2 / 1_000_000;
 
-        let bufferKm, tier, layerName, bufferType;
-        if (areaKm2 < 0.5) {
+        let bufferKm, tier, bufferType;
+        if (force700m) {
+          bufferKm = 0.7;
+          tier = 'large';
+          bufferType = 'buffer_700m';
+          largeCount++;
+        } else if (areaKm2 < 0.5) {
           bufferKm = 0.3;
           tier = 'small';
-          layerName = 'Settlement Buffers (Small)';
           bufferType = 'buffer_300m';
           smallCount++;
         } else if (areaKm2 < 2) {
           bufferKm = 0.5;
           tier = 'medium';
-          layerName = 'Settlement Buffers (Medium)';
           bufferType = 'buffer_500m';
           mediumCount++;
         } else {
           bufferKm = 0.7;
           tier = 'large';
-          layerName = 'Settlement Buffers (Large)';
           bufferType = 'buffer_700m';
           largeCount++;
         }
@@ -182,7 +185,7 @@ function buildTieredSettlementBuffers(boundaries) {
             tier,
             part_index: part.properties?._part_index || 1,
             part_total: part.properties?._part_total || 1,
-            _layer: layerName,
+            _layer: 'Settlement Buffers',
             _type: bufferType,
           },
         };
@@ -668,8 +671,10 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress, areaGeom
 
   // 5. Create tiered buffers for polygons (300m, 500m, 700m based on area)
   onProgress('📐 Creating tiered buffer zones for settlements…');
-  const { buffersSmall, buffersMedium, buffersLarge, stats } = buildTieredSettlementBuffers(boundaries);
-  onProgress(`  → ${stats.totalBuffers} buffers from ${stats.partsCount} settlement parts: ${stats.smallCount} small (300m), ${stats.mediumCount} medium (500m), ${stats.largeCount} large (700m)`);
+  const { buffersSmall, buffersMedium, buffersLarge, stats } = buildTieredSettlementBuffers(boundaries, {
+    force700m: true,
+  });
+  onProgress(`  → ${stats.totalBuffers} buffers from ${stats.partsCount} settlement parts: forced 700m`);
 
   return { boundaries, pins, buffersSmall, buffersMedium, buffersLarge };
 }
@@ -1819,13 +1824,11 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
   // 1. Resolve bbox + boundary polygon
   let customBoundaryGeom = null;
-  let customBoundaryName = null;
   let bbox;
   if (customBoundaryPath) {
     onProgress(`🧭 Loading custom boundary: ${customBoundaryPath}`);
     const customBoundary = await loadBoundaryGeometryFromFile(customBoundaryPath);
     customBoundaryGeom = customBoundary.geometry;
-    customBoundaryName = customBoundary.name || null;
     bbox = {
       south: customBoundary.bbox.south,
       west: customBoundary.bbox.west,
@@ -2251,36 +2254,19 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
         onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBoundaries.length} total`);
         
         // Rebuild buffers from merged boundaries
-        const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries);
+        const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries, {
+          force700m: true,
+        });
         small = mergedBuffers.buffersSmall;
         medium = mergedBuffers.buffersMedium;
         large = mergedBuffers.buffersLarge;
         onProgress(`  → Merged settlement buffers: ${mergedBuffers.stats.totalBuffers} from ${mergedBuffers.stats.partsCount} parts`);
       }
 
-      if (customBoundaryGeom) {
-        const center = featureCentroid({ type: 'Feature', geometry: customBoundaryGeom, properties: {} });
-        if (center) {
-          const customPinName = customBoundaryName || territory || 'Custom settlement area';
-          settlementPins = [{
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: center },
-            properties: {
-              name: customPinName,
-              _layer: 'Settlements',
-              _type: 'settlement_pin',
-              _source: 'custom_boundary_center',
-            },
-          }];
-          onProgress(`  → Custom center pin: ${customPinName}`);
-        }
-      }
-
       if (settlementBoundaries.length) layerMap['Settlements'] = settlementBoundaries;
-      if (settlementPins.length)       layerMap['Settlement Pins'] = settlementPins;
-      if (small.length)                layerMap['Settlement Buffers (Small)'] = small;
-      if (medium.length)               layerMap['Settlement Buffers (Medium)'] = medium;
-      if (large.length)                layerMap['Settlement Buffers (Large)'] = large;
+      if (!customBoundaryGeom && settlementPins.length) layerMap['Settlement Pins'] = settlementPins;
+      const settlementBuffers = [...small, ...medium, ...large];
+      if (settlementBuffers.length)    layerMap['Settlement Buffers'] = settlementBuffers;
     } catch (err) {
       onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
     }
