@@ -48,6 +48,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   margin-bottom: 0;
+  padding: 0 24px 24px;
 }
 
 .main-layout .log-col {

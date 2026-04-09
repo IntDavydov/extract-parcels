@@ -23,6 +23,7 @@
         <select id="parcel-fetch-mode">
           <option value="boundary" selected>Area boundary (KMZ/KML)</option>
           <option value="custom">Custom settlement boundary (KMZ)</option>
+          <option value="kadastr">Kadastr parcel scraping (KMZ/KML)</option>
           <option value="cadnum">Cadastr number</option>
         </select>
       </div>
@@ -42,7 +43,7 @@
         </div>
 
         <div class="field" id="field-boundary">
-          <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping; select multiple for batch)</span></label>
+          <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span></label>
           <div id="drop-zone" style="border:2px dashed #2a4a7f;border-radius:6px;padding:16px 12px;margin-top:4px;cursor:pointer;transition:border-color 0.15s,background 0.15s;text-align:center;min-height:72px;display:flex;flex-direction:column;justify-content:center;">
             <div id="drop-hint" style="color:#666;font-size:12px;">📎 Click to attach or drop KMZ/KML files here</div>
             <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>

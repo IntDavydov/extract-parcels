@@ -74,6 +74,11 @@ window.api.onDownloadProgress((data) => {
 function initLeftTabs() {
   const tabButtons = [...document.querySelectorAll('.left-tab-btn')];
   const tabPanels = [...document.querySelectorAll('.left-tab-panel')];
+  const fetchModeField = document.querySelector('.global-fetch-mode');
+  function syncFetchModeVisibility(activePanelId) {
+    if (!fetchModeField) return;
+    fetchModeField.style.display = activePanelId === 'tab-panel-parcels' ? 'block' : 'none';
+  }
   tabButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const targetId = btn.dataset.tabTarget;
@@ -83,8 +88,11 @@ function initLeftTabs() {
         b.setAttribute('aria-selected', isActive ? 'true' : 'false');
       });
       tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === targetId));
+      syncFetchModeVisibility(targetId);
     });
   });
+  const initiallyActive = tabPanels.find((p) => p.classList.contains('active'));
+  syncFetchModeVisibility(initiallyActive ? initiallyActive.id : 'tab-panel-parcels');
 }
 
 initLeftTabs();
@@ -160,7 +168,7 @@ function renderBoundaryList() {
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = isMultiKmz; });
   document.getElementById('btn-select-all').disabled = isMultiKmz;
   document.getElementById('btn-clear-all').disabled  = isMultiKmz;
-  if (isMultiKmz) {
+  if (isKadastrMode && isMultiKmz) {
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
     document.getElementById('wind-settings').style.display = 'none';
   }
@@ -309,13 +317,14 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
   const mode = e.target.value;
   const isCadnum = mode === 'cadnum';
   const isCustom = mode === 'custom';
+  const isKadastr = mode === 'kadastr';
   
   document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
-  document.getElementById('field-boundary').style.display = (isCadnum || isCustom) ? 'none' : 'block';
-  document.getElementById('area-name').parentElement.style.display = isCustom ? 'none' : (isCadnum ? 'none' : 'block');
+  document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr) ? 'none' : 'block';
+  document.getElementById('area-name').parentElement.style.display = (isCustom || isCadnum || isKadastr) ? 'none' : 'block';
   document.getElementById('field-osm-layers').style.display = mode === 'boundary' ? 'block' : 'none';
   
-  // Show boundary file picker for custom mode
+  // Show boundary file picker for custom/kadastr modes
   if (isCustom) {
     const boundaryField = document.getElementById('field-boundary');
     boundaryField.style.display = 'block';
@@ -323,10 +332,17 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
     label.innerHTML = 'Custom settlement boundary KMZ <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(single polygon defining settlement area filter)</span>';
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
     document.getElementById('wind-settings').style.display = 'none';
+  } else if (isKadastr) {
+    const boundaryField = document.getElementById('field-boundary');
+    boundaryField.style.display = 'block';
+    const label = boundaryField.querySelector('label');
+    label.innerHTML = 'Boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(parcel scraping; single or multiple files)</span>';
+    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
+    document.getElementById('wind-settings').style.display = 'none';
   } else if (!isCadnum) {
     const boundaryField = document.getElementById('field-boundary');
     const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — enables Kadastr parcel scraping; select multiple for batch)</span>';
+    label.innerHTML = 'Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span>';
   }
   
   checkStartReady();
@@ -374,6 +390,8 @@ function checkStartReady() {
   let ready = false;
   if (fetchMode === 'cadnum') {
     ready = !!outputFolder && !!cadnum;
+  } else if (fetchMode === 'kadastr') {
+    ready = !!outputFolder && (isSingleKmz || isMultiKmz);
   } else if (fetchMode === 'custom') {
     ready = !!outputFolder && isSingleKmz;
   } else {
@@ -507,7 +525,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     userStopped = false;
     appendLog('🧭 Custom settlement boundary mode');
     appendLog(`📎 Boundary: ${bf.name}`);
-    appendLog('🏘 Fetching settlements + tiered buffers clipped to your KMZ boundary…');
+    appendLog('🏘 Fetching settlements + 700m buffers clipped to your KMZ boundary…');
 
     try {
       const osmResult = await window.api.fetchOSM({
@@ -533,6 +551,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   }
 
   // ── Standard boundary mode ──
+  const isKadastrMode = fetchMode === 'kadastr';
   const rawInput      = document.getElementById('area-name').value.trim();
   const parcelSource  = getParcelSource();
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
@@ -543,16 +562,19 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const layers        = [...document.querySelectorAll('input[name="layer"]:checked')].map(cb => cb.value);
 
   // ── Validate ──
-  if (isFullParcels) {
+  if (isKadastrMode) {
+    if (!boundaryFiles.length) { appendLog('⚠ Please attach at least one boundary KMZ/KML file.'); return; }
+  } else if (isFullParcels) {
     if (!territory) { appendLog('⚠ Please enter an area name.'); return; }
   } else if (isMultiKmz) {
-    // Multi-KMZ mode: no other requirements
+    if (!layers.length) { appendLog('⚠ Please select at least one OSM layer.'); return; }
   } else if (!boundaryFiles.length) {
     if (!territory) { appendLog('⚠ Please enter an area name.'); return; }
     if (!layers.length) { appendLog('⚠ Please select at least one layer.'); return; }
   } else {
     if (boundaryFiles[0].url === '' ) { appendLog('⚠ Boundary file could not be parsed.'); return; }
-    if (layers.length > 0 && !territory) { appendLog('⚠ Please enter an area name for OSM layers.'); return; }
+    if (!layers.length) { appendLog('⚠ Please select at least one OSM layer.'); return; }
+    if (!territory) { appendLog('⚠ Please enter an area name for OSM layers.'); return; }
   }
 
   const windOptions = layers.includes('wind') ? {
@@ -592,6 +614,65 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       if (res.parcels > 0) return { tiles: res.tiles, parcels: res.parcels, source };
     }
     return { tiles: 0, parcels: 0, source: primary };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // KADASTR MODE — boundary KMZ/KML parcel scraping only
+  // ══════════════════════════════════════════════════════════
+  if (isKadastrMode && isMultiKmz) {
+    const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
+    const kmzPaths = [], folderNames = [];
+
+    for (let i = 0; i < boundaryFiles.length; i++) {
+      const bf = boundaryFiles[i];
+      const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
+      const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
+
+      const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
+      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
+
+      const scraperOut = `${outputFolder}/land_plots.kmz`;
+      const fsRename = await window.api.mergeKmz([scraperOut], tempPath, true);
+      if (!fsRename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); continue; }
+
+      kmzPaths.push(tempPath);
+      folderNames.push(folderName);
+    }
+
+    if (!kmzPaths.length) { appendLog('❌ All files failed.'); setBusy(false); return; }
+
+    appendLog('\n📦 Merging into kadastr.kmz…');
+    const mergeResult = await window.api.mergeKmz(kmzPaths, finalOutput, true, folderNames);
+    if (mergeResult.success) {
+      appendLog(`\n✅ Done → ${finalOutput}`);
+      window.api.copyIcons(outputFolder);
+      window.api.showInFolder(finalOutput);
+    } else {
+      appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
+    }
+    setBusy(false);
+    return;
+  }
+
+  if (isKadastrMode && boundaryFiles.length === 1) {
+    const bf = boundaryFiles[0];
+    const scrapeRes = await scrapeOne(bf, bf.name);
+    if (scrapeRes.tiles === 0) {
+      appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}.`);
+      setBusy(false); return;
+    }
+    const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
+    const scraperOut = `${outputFolder}/land_plots.kmz`;
+    const mergeResult = await window.api.mergeKmz([scraperOut], finalOutput, true);
+    if (mergeResult.success) {
+      appendLog(`\n✅ Done → ${finalOutput}`);
+      window.api.copyIcons(outputFolder);
+      window.api.showInFolder(finalOutput);
+    } else {
+      appendLog(`[ERROR] Save failed: ${mergeResult.error}`);
+    }
+    setBusy(false);
+    return;
   }
 
   // ══════════════════════════════════════════════════════════
@@ -739,7 +820,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
   const kadastrTemp  = outputFolder + '/land_plots.kmz';
   const osmTemp      = outputFolder + '/_osm_temp.kmz';
-  const bf           = boundaryFiles[0] || null;
+  const boundaryBbox = boundaryFiles[0] || null;
+  const bf           = null;
   let hasKadastr     = false;
 
   if (bf) {
@@ -756,7 +838,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog(`\n━━━ Phase 2: OSM layers [${layers.join(', ')}] ━━━`);
     const osmResult = await window.api.fetchOSM({
       territory, layers, outputPath: osmTemp, format: 'kmz',
-      windOptions, fallbackBbox: bf?.bbox || null,
+      windOptions, fallbackBbox: boundaryBbox?.bbox || null,
     });
     if (!osmResult.success) {
       appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);

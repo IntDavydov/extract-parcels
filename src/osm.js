@@ -131,7 +131,7 @@ function isWideEnough(f, minWidthM) {
 }
 
 function buildTieredSettlementBuffers(boundaries, options = {}) {
-  const force700m = !!options.force700m;
+  const force700m = options.force700m !== false;
   const buffersSmall = [], buffersMedium = [], buffersLarge = [];
   let smallCount = 0, mediumCount = 0, largeCount = 0, partsCount = 0;
   for (const f of boundaries) {
@@ -669,8 +669,8 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress, areaGeom
     },
   }));
 
-  // 5. Create tiered buffers for polygons (300m, 500m, 700m based on area)
-  onProgress('📐 Creating tiered buffer zones for settlements…');
+  // 5. Create settlement buffers (default 700m)
+  onProgress('📐 Creating settlement buffer zones…');
   const { buffersSmall, buffersMedium, buffersLarge, stats } = buildTieredSettlementBuffers(boundaries, {
     force700m: true,
   });
