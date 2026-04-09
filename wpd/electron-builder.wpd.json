@@ -1,0 +1,44 @@
+{
+  "appId": "com.land-management.wpd",
+  "productName": "Land Management WPD",
+  "artifactName": "Land-Management-WPD-${version}-Setup.${ext}",
+  "directories": {
+    "output": "dist-wpd"
+  },
+  "files": [
+    "**/*",
+    "!dist/**",
+    "!dist-wpd/**",
+    "!docs/**",
+    "!test-files/**",
+    "!extra/**",
+    "!*.bat",
+    "!build-win.sh",
+    "!build-win.bat",
+    "!run.bat"
+  ],
+  "extraMetadata": {
+    "main": "wpd/main.js"
+  },
+  "win": {
+    "target": "nsis",
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  },
+  "asarUnpack": [
+    "script.js",
+    "src/**",
+    "wpd/**",
+    "houses.png",
+    "windmill.png",
+    "icons/**",
+    "node_modules/**"
+  ]
+}
