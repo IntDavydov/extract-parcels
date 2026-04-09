@@ -84,6 +84,67 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
     const cadnums = readCadnums(csvPath);
     onProgress(`📋 ${cadnums.length} cadastral numbers to look up`);
 
+    const ensureLookupPage = async () => {
+      const hasInput = await page.$('#cadastr_find_by_cadnum_cadNum');
+      if (hasInput) return;
+      await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 30000 });
+    };
+
+    const typeCadnum = async (digits, delayMs) => {
+      await page.evaluate(() => {
+        const el = document.getElementById('cadastr_find_by_cadnum_cadNum');
+        if (!el) throw new Error('Cadnum input not found');
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await page.click('#cadastr_find_by_cadnum_cadNum', { clickCount: 3 });
+      await page.type('#cadastr_find_by_cadnum_cadNum', digits, { delay: delayMs });
+      await page.evaluate(() => {
+        const el = document.getElementById('cadastr_find_by_cadnum_cadNum');
+        if (el) {
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }
+      });
+      const appliedDigits = await page.$eval('#cadastr_find_by_cadnum_cadNum', (el) =>
+        String(el.value || '').replace(/\D/g, '')
+      );
+      return appliedDigits === digits;
+    };
+
+    const submitLookup = async (digits) => {
+      await ensureLookupPage();
+
+      let typed = await typeCadnum(digits, 45);
+      if (!typed) typed = await typeCadnum(digits, 65);
+      if (!typed) throw new Error('Cadnum input was not filled correctly');
+
+      await page.evaluate(() => {
+        const form = document.querySelector('form');
+        if (!form) throw new Error('Lookup form not found');
+        const submit = form.querySelector('button[type="submit"], input[type="submit"]');
+        if (submit) submit.click();
+        else if (typeof form.requestSubmit === 'function') form.requestSubmit();
+        else form.submit();
+      });
+
+      const navWait = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 })
+        .then(() => 'navigation')
+        .catch(() => null);
+      const domWait = page.waitForFunction(() => document.querySelectorAll('tr td').length >= 6, { timeout: 45000 })
+        .then(() => 'dom')
+        .catch(() => null);
+      const firstSignal = await Promise.race([navWait, domWait]);
+      if (!firstSignal) {
+        const [navRes, domRes] = await Promise.all([navWait, domWait]);
+        if (!navRes && !domRes) throw new Error('Lookup response timeout (45s)');
+      }
+
+      await new Promise(r => setTimeout(r, 250));
+      return extractFields(page);
+    };
+
     const results = [];
     for (let i = 0; i < cadnums.length; i++) {
       if (_stopped) { onProgress('⛔ Stopped by user.'); break; }
@@ -91,31 +152,19 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
       onProgress(`[${i + 1}/${cadnums.length}] ${cadnum}`);
 
       try {
-        // Fill input: type only digits — the inputmask inserts colons automatically
         const digits = cadnum.replace(/\D/g, '');
-        await page.evaluate(() => {
-          const el = document.getElementById('cadastr_find_by_cadnum_cadNum');
-          el.value = '';
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        });
-        await page.click('#cadastr_find_by_cadnum_cadNum', { clickCount: 3 });
-        await page.type('#cadastr_find_by_cadnum_cadNum', digits, { delay: 20 });
-
-        // Submit and wait for the page to reload with results
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-          page.evaluate(() => {
-            const form = document.querySelector('form');
-            if (form) form.submit();
-          }),
-        ]);
-
-        // Small wait for DOM to settle
-        await new Promise(r => setTimeout(r, 800));
-
-        const data = await extractFields(page);
-        const filled = Object.values(data).filter(Boolean).length;
+        let data = await submitLookup(digits);
+        let filled = Object.values(data).filter(Boolean).length;
         const noDataMessage = `⚠ No data found for ${cadnum}`;
+
+        if (filled === 0) {
+          onProgress('  ↻ Empty result, retrying once…');
+          await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 30000 });
+          data = await submitLookup(digits);
+          filled = Object.values(data).filter(Boolean).length;
+        }
+
         if (filled === 0) onProgress(`  ${noDataMessage}`);
         results.push({
           cadnum,
@@ -124,9 +173,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
           error: filled === 0 ? noDataMessage : '',
         });
 
-        // After seeing results, navigate back to the blank form for the next query
-        await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 10000 });
+        // Keep current page; next iteration ensures input exists and only reloads if needed.
 
       } catch (err) {
         onProgress(`  ⚠ Error for ${cadnum}: ${err.message}`);
@@ -135,10 +182,13 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
           [FIELDS[0]]: cadnum,
           error: err.message,
         });
+        try {
+          await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 30000 });
+        } catch (_) {}
       }
 
-      // Polite delay between requests
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 200));
     }
 
     await browser.close();
