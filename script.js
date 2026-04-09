@@ -7,7 +7,8 @@ const Pbf = require("pbf");
 const turfUnion = require("@turf/union");
 const turfBuffer = require("@turf/buffer");
 
-const SNAP_BUFFER_KM = 0.000005; // ~5mm — closes tile-boundary gaps without distorting shapes
+const SNAP_BUFFER_KM = 0.000005; // first-pass seam snap (~5mm)
+const SNAP_BUFFER_STEPS_KM = [SNAP_BUFFER_KM, 0.0002, 0.001, 0.002]; // up to 2m for stubborn tile seams
 
 function exportCadnumsToExcel(features, xlsxPath) {
   const fs = require('fs');
@@ -480,9 +481,67 @@ async function processTileResponse(response, url) {
 function mergeFeatures() {
   const unionFn = turfUnion.default || turfUnion;
   const bufferFn = turfBuffer.default || turfBuffer;
+  const toPolygonCoords = (feature) => {
+    const g = feature?.geometry;
+    if (!g) return [];
+    if (g.type === 'Polygon') return [g.coordinates];
+    if (g.type === 'MultiPolygon') return g.coordinates;
+    return [];
+  };
+  const combineFragments = (fragments, properties) => {
+    const coords = [];
+    for (const f of fragments) coords.push(...toPolygonCoords(f));
+    if (!coords.length) return null;
+    return {
+      type: 'Feature',
+      geometry: coords.length === 1
+        ? { type: 'Polygon', coordinates: coords[0] }
+        : { type: 'MultiPolygon', coordinates: coords },
+      properties,
+    };
+  };
+  const cleanFeature = (feature) => {
+    try { return bufferFn(feature, 0, { units: 'kilometers' }) || feature; }
+    catch (_) { return feature; }
+  };
+  const unionCollection = (features) => {
+    if (!features.length) return null;
+    if (features.length === 1) return features[0];
+    try {
+      return unionFn({ type: 'FeatureCollection', features });
+    } catch (_) {
+      return null;
+    }
+  };
+  const dissolvePairwise = (features) => {
+    if (!features.length) return null;
+    let acc = features[0];
+    for (let i = 1; i < features.length; i++) {
+      const next = features[i];
+      const merged = unionCollection([acc, next]);
+      if (!merged || !merged.geometry) return null;
+      acc = merged;
+    }
+    return acc;
+  };
+  const dissolveWithSnap = (fragments, snapKm, properties) => {
+    const expanded = fragments.map((f) => {
+      try { return bufferFn(cleanFeature(f), snapKm, { units: 'kilometers' }); }
+      catch (_) { return cleanFeature(f); }
+    }).filter(Boolean);
+    if (!expanded.length) return null;
+    const unioned = unionCollection(expanded) || dissolvePairwise(expanded);
+    if (!unioned || !unioned.geometry) return null;
+    let shrunk = unioned;
+    try { shrunk = bufferFn(unioned, -snapKm, { units: 'kilometers' }) || unioned; } catch (_) {}
+    if (!shrunk || !shrunk.geometry) return null;
+    return { ...shrunk, properties };
+  };
   const results = [];
   let merged = 0;
   let single = 0;
+  let fallbackCombined = 0;
+  let snappedMerges = 0;
 
   for (const [cadnum, { properties, fragments }] of parcelFragments) {
     try {
@@ -491,15 +550,19 @@ function mergeFeatures() {
         finalFeature = fragments[0];
         single++;
       } else {
-        const buffered = fragments.map(f => {
-          try { return bufferFn(f, SNAP_BUFFER_KM, { units: "kilometers" }); }
-          catch (_) { return f; }
-        });
-        const fc = { type: "FeatureCollection", features: buffered.filter(Boolean) };
-        let unioned;
-        try { unioned = unionFn(fc); } catch (_) { unioned = buffered[0]; }
-        try { unioned = bufferFn(unioned, -SNAP_BUFFER_KM, { units: "kilometers" }) || unioned; } catch (_) {}
-        finalFeature = { ...unioned, properties };
+        let unioned = null;
+        for (const snapKm of SNAP_BUFFER_STEPS_KM) {
+          unioned = dissolveWithSnap(fragments, snapKm, properties);
+          if (unioned && unioned.geometry) {
+            if (snapKm > SNAP_BUFFER_KM) snappedMerges++;
+            break;
+          }
+        }
+        if (!unioned || !unioned.geometry) {
+          unioned = combineFragments(fragments, properties);
+          fallbackCombined++;
+        }
+        finalFeature = unioned;
         merged++;
       }
       results.push(finalFeature);
@@ -508,7 +571,7 @@ function mergeFeatures() {
     }
   }
 
-  console.log(`Merged: ${merged} parcels from multiple fragments, ${single} single-tile parcels`);
+  console.log(`Merged: ${merged} parcels from multiple fragments, ${single} single-tile parcels, ${snappedMerges} hard-snap merges, ${fallbackCombined} fallback-combined`);
   return results;
 }
 
