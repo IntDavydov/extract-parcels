@@ -5,17 +5,7 @@ const ExcelJS   = require('exceljs');
 const fs        = require('fs');
 
 const ELAND_URL = 'https://e.land.gov.ua/back/cadaster/';
-
-const FIELDS = [
-  'Кадастровий номер земельної ділянки',
-  'Цільове призначення',
-  'Категорія земель',
-  'Площа земельної ділянки',
-  'Місце розташування',
-  'Прізвище, ім\'я та по батькові фізичної особи',
-  'Вид речового права',
-  'Найменування юридичної особи',
-];
+const CADNUM_FIELD = 'Кадастровий номер земельної ділянки';
 
 function readCadnums(csvPath) {
   const text = fs.readFileSync(csvPath, 'utf8').replace(/^\uFEFF/, '');
@@ -25,33 +15,52 @@ function readCadnums(csvPath) {
     .filter(Boolean);
 }
 
-// Extract field values — page is a 2-column table: <td>label</td><td>value</td>
+// Extract section-aware fields dynamically from e.land table:
+// section separator rows (<td colspan="2" class="td-header">...) create section context;
+// repeated section names are indexed (#2, #3, ...).
 async function extractFields(page) {
-  return page.evaluate((fieldList) => {
-    const result = {};
-    const rows = document.querySelectorAll('tr');
-    // Build a map: normalised label text → value text
-    const labelMap = {};
+  const parsed = await page.evaluate(() => {
+    const out = {};
+    const rows = document.querySelectorAll('div.box-body.table-responsive.no-padding tr');
+    const sectionCounts = {};
+    let sectionTitle = 'Без секції';
+    let sectionOrdinal = 1;
+    let cadnumValue = '';
+
+    const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const sectionName = () => sectionOrdinal > 1 ? `${sectionTitle} #${sectionOrdinal}` : sectionTitle;
+
     for (const row of rows) {
-      const cells = row.querySelectorAll('td');
-      if (cells.length >= 2) {
-        const label = cells[0].innerText.replace(/\s+/g, ' ').trim();
-        const value = cells[1].innerText.replace(/\s+/g, ' ').trim();
-        if (label) labelMap[label] = value;
+      const cells = row.querySelectorAll('td,th');
+      if (!cells.length) continue;
+
+      const first = cells[0];
+      const firstText = clean(first.innerText);
+      const colspan = Number(first.getAttribute('colspan') || '0');
+      const isHeader = first.classList.contains('td-header') || cells.length === 1 || colspan >= 2;
+      if (isHeader && firstText) {
+        sectionTitle = firstText;
+        sectionCounts[sectionTitle] = (sectionCounts[sectionTitle] || 0) + 1;
+        sectionOrdinal = sectionCounts[sectionTitle];
+        continue;
       }
+
+      if (cells.length < 2) continue;
+      const label = clean(cells[0].innerText);
+      const value = clean(cells[1].innerText);
+      if (!label) continue;
+
+      const key = `[${sectionName()}] ${label}`;
+      out[key] = value;
+      if (!cadnumValue && label.toLowerCase().includes('кадастровий номер')) cadnumValue = value;
     }
-    for (const field of fieldList) {
-      // Try exact match first, then partial match (first 25 chars)
-      if (labelMap[field] !== undefined) {
-        result[field] = labelMap[field];
-      } else {
-        const partial = field.slice(0, 25);
-        const found = Object.keys(labelMap).find(k => k.includes(partial));
-        result[field] = found ? labelMap[found] : '';
-      }
-    }
-    return result;
-  }, FIELDS);  // pass FIELDS (module-level constant) into browser context
+
+    return { fields: out, cadnumValue };
+  });
+
+  const result = { ...parsed.fields };
+  if (parsed.cadnumValue) result[CADNUM_FIELD] = parsed.cadnumValue;
+  return result;
 }
 
 let _stopped = false;
@@ -145,6 +154,18 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
       return extractFields(page);
     };
 
+    const discoveredFields = [CADNUM_FIELD];
+    const discoveredSet = new Set(discoveredFields);
+    const rememberFields = (obj) => {
+      for (const key of Object.keys(obj || {})) {
+        if (key === 'cadnum' || key === 'error') continue;
+        if (!discoveredSet.has(key)) {
+          discoveredSet.add(key);
+          discoveredFields.push(key);
+        }
+      }
+    };
+
     const results = [];
     for (let i = 0; i < cadnums.length; i++) {
       if (_stopped) { onProgress('⛔ Stopped by user.'); break; }
@@ -154,7 +175,9 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
       try {
         const digits = cadnum.replace(/\D/g, '');
         let data = await submitLookup(digits);
-        let filled = Object.values(data).filter(Boolean).length;
+        let filled = Object.entries(data)
+          .filter(([k, v]) => k !== 'Кадастровий номер земельної ділянки' && !!v)
+          .length;
         const noDataMessage = `⚠ No data found for ${cadnum}`;
 
         if (filled === 0) {
@@ -162,16 +185,20 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
           await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
           await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 30000 });
           data = await submitLookup(digits);
-          filled = Object.values(data).filter(Boolean).length;
+          filled = Object.entries(data)
+            .filter(([k, v]) => k !== 'Кадастровий номер земельної ділянки' && !!v)
+            .length;
         }
 
         if (filled === 0) onProgress(`  ${noDataMessage}`);
-        results.push({
+        const rowData = {
           cadnum,
-          [FIELDS[0]]: cadnum,
+          [CADNUM_FIELD]: cadnum,
           ...data,
           error: filled === 0 ? noDataMessage : '',
-        });
+        };
+        rememberFields(rowData);
+        results.push(rowData);
 
         // Keep current page; next iteration ensures input exists and only reloads if needed.
 
@@ -179,7 +206,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
         onProgress(`  ⚠ Error for ${cadnum}: ${err.message}`);
         results.push({
           cadnum,
-          [FIELDS[0]]: cadnum,
+          [CADNUM_FIELD]: cadnum,
           error: err.message,
         });
         try {
@@ -198,7 +225,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
     const workbook = new ExcelJS.Workbook();
     const sheet    = workbook.addWorksheet('e.land дані');
 
-    const headers = ['#', ...FIELDS, 'Помилка'];
+    const headers = ['#', ...discoveredFields, 'Помилка'];
     sheet.addRow(headers);
     sheet.getRow(1).font    = { bold: true };
     sheet.getRow(1).fill    = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
@@ -207,7 +234,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
     results.forEach((row, idx) => {
       sheet.addRow([
         idx + 1,
-        ...FIELDS.map(f => row[f] || ''),
+        ...discoveredFields.map(f => row[f] || ''),
         row.error || '',
       ]);
     });
