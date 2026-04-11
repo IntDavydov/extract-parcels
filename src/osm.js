@@ -2246,118 +2246,152 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
   // 4. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
   if (layers.includes('settlements')) {
-    onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
-    try {
-      const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(
-        territory,
-        bbox,
-        onProgress,
-        customBoundaryGeom
-      );
-      let settlementPins = pins;
-      let settlementBoundaries = boundaries;
-      let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
-
-      // Merge OSM Overpass with HUMDATA (which already contains HOTOSM-preferred data)
-      // Priority: HOTOSM > OSM Overpass > admin4
-      if (osmSettlementPolygons.length > 0) {
-        onProgress(`  → OSM settlement polygons found: ${osmSettlementPolygons.length}. Merging with HOTOSM/admin4...`);
-        
-        // Match OSM to existing boundaries by name proximity and location
-        const usedBoundaryIndices = new Set();
-        const mergedBoundaries = [];
-        
-        // First pass: keep all HOTOSM settlements (highest priority - never replace)
-        for (let i = 0; i < boundaries.length; i++) {
-          const boundary = boundaries[i];
-          if (boundary.properties._source === 'hotosm_preferred' || boundary.properties._source === 'hotosm') {
-            mergedBoundaries.push(boundary);
-            usedBoundaryIndices.add(i);
-          }
+    if (customBoundaryGeom) {
+      onProgress('🏘 Using provided custom boundary as settlement area…');
+      const customSettlement = {
+        type: 'Feature',
+        geometry: customBoundaryGeom,
+        properties: {
+          name: bbox.displayName || territory || 'Custom settlement area',
+          _layer: 'Settlements',
+          _type: 'settlement',
+          _source: 'custom_boundary',
+        },
+      };
+      layerMap['Settlements'] = [customSettlement];
+      try {
+        const customBuffer = turfBuffer(customSettlement, 0.7, { units: 'kilometers' });
+        if (customBuffer && customBuffer.geometry) {
+          customBuffer.properties = {
+            name: customSettlement.properties.name,
+            buffer_size: '700m',
+            tier: 'large',
+            _layer: 'Settlement Buffers',
+            _type: 'buffer_700m',
+            _source: 'custom_boundary',
+          };
+          layerMap['Settlement Buffers'] = [customBuffer];
+          onProgress('  → Created 1 custom settlement area + 1 buffer (700m)');
         }
-        
-        // Second pass: merge OSM Overpass with remaining (non-HOTOSM) boundaries
-        for (const osmSett of osmSettlementPolygons) {
-          const osmName = (osmSett.properties.name || '').toLowerCase().trim();
-          const osmCentroid = featureCentroid(osmSett);
+      } catch (err) {
+        onProgress(`  ⚠ Could not build custom settlement buffer: ${err.message}`);
+      }
+      // Custom mode intentionally has no settlement pins.
+      // Skip external settlement fetch/merge and continue with other requested layers.
+    } else {
+      onProgress('🏘 Fetching settlements from HUMDATA (official Ukraine admin data)…');
+      try {
+        const { boundaries, pins, buffersSmall, buffersMedium, buffersLarge } = await fetchSettlementsFromHumdata(
+          territory,
+          bbox,
+          onProgress,
+          customBoundaryGeom
+        );
+        let settlementPins = pins;
+        let settlementBoundaries = boundaries;
+        let small = buffersSmall, medium = buffersMedium, large = buffersLarge;
+
+        // Merge OSM Overpass with HUMDATA (which already contains HOTOSM-preferred data)
+        // Priority: HOTOSM > OSM Overpass > admin4
+        if (osmSettlementPolygons.length > 0) {
+          onProgress(`  → OSM settlement polygons found: ${osmSettlementPolygons.length}. Merging with HOTOSM/admin4...`);
           
-          // Try to find matching boundary (within 5km and similar name)
-          let bestMatch = null;
-          let bestScore = 0;
+          // Match OSM to existing boundaries by name proximity and location
+          const usedBoundaryIndices = new Set();
+          const mergedBoundaries = [];
           
+          // First pass: keep all HOTOSM settlements (highest priority - never replace)
           for (let i = 0; i < boundaries.length; i++) {
-            if (usedBoundaryIndices.has(i)) continue; // Skip HOTOSM and already matched
-            
             const boundary = boundaries[i];
-            const boundaryName = (boundary.properties.name || '').toLowerCase().trim();
-            const boundaryCentroid = featureCentroid(boundary);
-            
-            // Simple distance check (rough)
-            if (osmCentroid && boundaryCentroid) {
-              const dx = osmCentroid[0] - boundaryCentroid[0];
-              const dy = osmCentroid[1] - boundaryCentroid[1];
-              const dist = Math.sqrt(dx * dx + dy * dy);
-              
-              // Within ~5km (rough degrees)
-              if (dist < 0.05) {
-                // Name similarity (simple substring check)
-                const nameMatch = osmName.includes(boundaryName) || boundaryName.includes(osmName) || osmName === boundaryName;
-                const score = nameMatch ? (1 - dist * 10) : (0.3 - dist * 10);
-                
-                if (score > bestScore && score > 0.1) {
-                  bestScore = score;
-                  bestMatch = i;
-                }
-              }
+            if (boundary.properties._source === 'hotosm_preferred' || boundary.properties._source === 'hotosm') {
+              mergedBoundaries.push(boundary);
+              usedBoundaryIndices.add(i);
             }
           }
           
-          if (bestMatch !== null) {
-            usedBoundaryIndices.add(bestMatch);
-            // Use OSM Overpass geometry, keep properties for consistency
-            mergedBoundaries.push({
-              ...osmSett,
-              properties: {
-                ...boundaries[bestMatch].properties,
-                _layer: 'Settlements',
-                _type: 'settlement',
-                _source: 'osm_overpass_preferred',
-              },
-            });
-          } else {
-            // OSM settlement without match - add it
-            mergedBoundaries.push(osmSett);
+          // Second pass: merge OSM Overpass with remaining (non-HOTOSM) boundaries
+          for (const osmSett of osmSettlementPolygons) {
+            const osmName = (osmSett.properties.name || '').toLowerCase().trim();
+            const osmCentroid = featureCentroid(osmSett);
+            
+            // Try to find matching boundary (within 5km and similar name)
+            let bestMatch = null;
+            let bestScore = 0;
+            
+            for (let i = 0; i < boundaries.length; i++) {
+              if (usedBoundaryIndices.has(i)) continue; // Skip HOTOSM and already matched
+              
+              const boundary = boundaries[i];
+              const boundaryName = (boundary.properties.name || '').toLowerCase().trim();
+              const boundaryCentroid = featureCentroid(boundary);
+              
+              // Simple distance check (rough)
+              if (osmCentroid && boundaryCentroid) {
+                const dx = osmCentroid[0] - boundaryCentroid[0];
+                const dy = osmCentroid[1] - boundaryCentroid[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // Within ~5km (rough degrees)
+                if (dist < 0.05) {
+                  // Name similarity (simple substring check)
+                  const nameMatch = osmName.includes(boundaryName) || boundaryName.includes(osmName) || osmName === boundaryName;
+                  const score = nameMatch ? (1 - dist * 10) : (0.3 - dist * 10);
+                  
+                  if (score > bestScore && score > 0.1) {
+                    bestScore = score;
+                    bestMatch = i;
+                  }
+                }
+              }
+            }
+            
+            if (bestMatch !== null) {
+              usedBoundaryIndices.add(bestMatch);
+              // Use OSM Overpass geometry, keep properties for consistency
+              mergedBoundaries.push({
+                ...osmSett,
+                properties: {
+                  ...boundaries[bestMatch].properties,
+                  _layer: 'Settlements',
+                  _type: 'settlement',
+                  _source: 'osm_overpass_preferred',
+                },
+              });
+            } else {
+              // OSM settlement without match - add it
+              mergedBoundaries.push(osmSett);
+            }
           }
-        }
-        
-        // Add remaining boundaries (admin4-only) that weren't matched
-        for (let i = 0; i < boundaries.length; i++) {
-          if (!usedBoundaryIndices.has(i)) {
-            mergedBoundaries.push(boundaries[i]);
+          
+          // Add remaining boundaries (admin4-only) that weren't matched
+          for (let i = 0; i < boundaries.length; i++) {
+            if (!usedBoundaryIndices.has(i)) {
+              mergedBoundaries.push(boundaries[i]);
+            }
           }
+          
+          const hotosmCount = boundaries.filter(b => b.properties._source === 'hotosm_preferred' || b.properties._source === 'hotosm').length;
+          const mergedBeforeDedupe = mergedBoundaries.length;
+          settlementBoundaries = dedupeAndNameSettlements(mergedBoundaries);
+          onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBeforeDedupe} total (${settlementBoundaries.length} after dedupe)`);
+          
+          // Rebuild buffers from merged boundaries
+          const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries, {
+            force700m: true,
+          });
+          small = mergedBuffers.buffersSmall;
+          medium = mergedBuffers.buffersMedium;
+          large = mergedBuffers.buffersLarge;
+          onProgress(`  → Merged settlement buffers: ${mergedBuffers.stats.totalBuffers} from ${mergedBuffers.stats.partsCount} parts`);
         }
-        
-        const hotosmCount = boundaries.filter(b => b.properties._source === 'hotosm_preferred' || b.properties._source === 'hotosm').length;
-        const mergedBeforeDedupe = mergedBoundaries.length;
-        settlementBoundaries = dedupeAndNameSettlements(mergedBoundaries);
-        onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBeforeDedupe} total (${settlementBoundaries.length} after dedupe)`);
-        
-        // Rebuild buffers from merged boundaries
-        const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries, {
-          force700m: true,
-        });
-        small = mergedBuffers.buffersSmall;
-        medium = mergedBuffers.buffersMedium;
-        large = mergedBuffers.buffersLarge;
-        onProgress(`  → Merged settlement buffers: ${mergedBuffers.stats.totalBuffers} from ${mergedBuffers.stats.partsCount} parts`);
-      }
 
-      if (settlementBoundaries.length) layerMap['Settlements'] = settlementBoundaries;
-      if (!customBoundaryGeom && settlementPins.length) layerMap['Settlement Pins'] = settlementPins;
-      const settlementBuffers = [...small, ...medium, ...large];
-      if (settlementBuffers.length)    layerMap['Settlement Buffers'] = settlementBuffers;
-    } catch (err) {
-      onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
+        if (settlementBoundaries.length) layerMap['Settlements'] = settlementBoundaries;
+        if (!customBoundaryGeom && settlementPins.length) layerMap['Settlement Pins'] = settlementPins;
+        const settlementBuffers = [...small, ...medium, ...large];
+        if (settlementBuffers.length)    layerMap['Settlement Buffers'] = settlementBuffers;
+      } catch (err) {
+        onProgress(`  ⚠ HUMDATA fetch failed: ${err.message}`);
+      }
     }
   }
 
