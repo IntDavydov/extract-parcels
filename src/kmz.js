@@ -67,7 +67,7 @@ const LAYER_STYLES = {
 const LAYER_GROUPS = [
   { folder: 'Parcels',     layers: ['Land Parcels'] },
   { folder: 'Nature',      layers: ['Forests', 'Forest Buffers', 'Emerald Network', 'Emerald Buffer', 'Nature Reserves', 'Nature Reserve Buffer', 'Water', 'Water Buffers'] },
-  { folder: 'Settlements', layers: ['Settlements', 'Settlement Pins', 'Settlement Buffers'] },
+  { folder: 'Settlements', layers: ['Settlement Buffers', 'Settlements', 'Settlement Pins'] },
   { folder: 'Energy',      layers: ['Power Lines', 'Power Line Buffers', 'Substations', 'Towers'] },
 ];
 // Layers not in any group render at root level in this order

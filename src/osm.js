@@ -2248,19 +2248,27 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   if (layers.includes('settlements')) {
     if (customBoundaryGeom) {
       onProgress('🏘 Using provided custom boundary as settlement area…');
-      const customSettlement = {
+      const customSettlementArea = {
         type: 'Feature',
         geometry: customBoundaryGeom,
         properties: {
           name: bbox.displayName || territory || 'Custom settlement area',
           _layer: 'Settlements',
-          _type: 'settlement',
+          _type: 'settlement_area',
           _source: 'custom_boundary',
+        },
+      };
+      const customSettlement = {
+        ...customSettlementArea,
+        properties: {
+          ...customSettlementArea.properties,
+          _layer: 'Settlements',
+          _type: 'settlement',
         },
       };
       layerMap['Settlements'] = [customSettlement];
       try {
-        const customBuffer = turfBuffer(customSettlement, 0.7, { units: 'kilometers' });
+        const customBuffer = turfBuffer(customSettlementArea, 0.7, { units: 'kilometers' });
         if (customBuffer && customBuffer.geometry) {
           customBuffer.properties = {
             name: customSettlement.properties.name,
