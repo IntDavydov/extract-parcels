@@ -866,6 +866,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 let preTabOutputFolder = '';
 let elandCsvPath = '';
 let elandBusy    = false;
+let elandOutputFormat = 'xlsx';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
 
@@ -898,6 +899,10 @@ document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async 
   }
 });
 
+document.getElementById('eland-output-format').addEventListener('change', (e) => {
+  elandOutputFormat = String(e.target.value || 'xlsx');
+});
+
 document.getElementById('btn-eland-start').addEventListener('click', async () => {
   if (!elandCsvPath || !preTabOutputFolder || elandBusy) return;
   elandBusy = true;
@@ -906,8 +911,9 @@ document.getElementById('btn-eland-start').addEventListener('click', async () =>
 
   const csvName = elandCsvPath.split(/[\\/]/).pop() || 'cadnums.csv';
   const baseName = csvName.replace(/\.csv$/i, '') || 'cadnums';
-  const outputXlsx = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + '_eland.xlsx';
-  const result = await window.api.startElandLookup(elandCsvPath, outputXlsx);
+  const extension = elandOutputFormat === 'docx' ? 'docx' : 'xlsx';
+  const outputPath = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + `_eland.${extension}`;
+  const result = await window.api.startElandLookup(elandCsvPath, outputPath, { format: elandOutputFormat });
   if (result && result.success) window.api.showInFolder(result.outputPath);
 
   elandBusy = false;
