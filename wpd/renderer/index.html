@@ -49,10 +49,18 @@
           </div>
 
           <div class="field">
-            <label>Output XLSX <span style="color:#e05;">*required</span></label>
+            <label>Output format</label>
+            <select id="eland-output-format">
+              <option value="xlsx" selected>Excel (.xlsx)</option>
+              <option value="docx">Word (.docx)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label id="output-file-label">Output XLSX <span style="color:#e05;">*required</span></label>
             <div class="row">
-              <button class="btn btn-secondary btn-sm" id="btn-pick-xlsx">💾 Choose XLSX</button>
-              <span class="path-display" id="xlsx-display">not selected</span>
+              <button class="btn btn-secondary btn-sm" id="btn-pick-output-file">💾 Choose output file</button>
+              <span class="path-display" id="output-file-display">not selected</span>
             </div>
           </div>
 

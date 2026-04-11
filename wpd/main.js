@@ -369,13 +369,14 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
   }
 });
 
-ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputXlsx }) => {
+ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, outputXlsx, format }) => {
   try {
     const onProgress = (msg) => event.sender.send('log', msg);
     onProgress('🔍 Checking Chrome availability...');
     const chromePath = await ensurePuppeteerChrome();
     if (chromePath) onProgress(`✅ Chrome: ${chromePath}`);
-    return await lookupEland(csvPath, outputXlsx, onProgress, chromePath);
+    const targetPath = outputPath || outputXlsx;
+    return await lookupEland(csvPath, targetPath, onProgress, chromePath, { format });
   } catch (err) {
     event.sender.send('log', `❌ e.land lookup failed: ${err.message}`);
     return { success: false, error: err.message };

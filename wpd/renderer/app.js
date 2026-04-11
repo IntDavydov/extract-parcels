@@ -7,7 +7,8 @@ let logFlushScheduled = false;
 let outputFolder = '';
 let boundaryFiles = [];
 let csvPath = '';
-let outputXlsx = '';
+let elandOutputPath = '';
+let elandOutputFormat = 'xlsx';
 let userStopped = false;
 
 function flushLog() {
@@ -44,7 +45,7 @@ function setBusy(busy) {
 }
 
 function setElandBusy(busy) {
-  document.getElementById('btn-eland-start').disabled = busy || !(csvPath && outputXlsx);
+  document.getElementById('btn-eland-start').disabled = busy || !(csvPath && elandOutputPath);
   document.getElementById('btn-eland-stop').style.display = busy ? '' : 'none';
 }
 
@@ -53,7 +54,7 @@ function checkReady() {
     document.getElementById('btn-start').disabled = !(outputFolder && boundaryFiles.length);
   }
   if (document.getElementById('btn-eland-stop').style.display === 'none') {
-    document.getElementById('btn-eland-start').disabled = !(csvPath && outputXlsx);
+    document.getElementById('btn-eland-start').disabled = !(csvPath && elandOutputPath);
   }
 }
 
@@ -280,25 +281,42 @@ document.getElementById('btn-pick-csv').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-pick-xlsx').addEventListener('click', async () => {
+function syncElandOutputControls() {
+  const isDocx = elandOutputFormat === 'docx';
+  document.getElementById('output-file-label').innerHTML = isDocx
+    ? 'Output DOCX <span style="color:#e05;">*required</span>'
+    : 'Output XLSX <span style="color:#e05;">*required</span>';
+}
+
+document.getElementById('eland-output-format').addEventListener('change', (e) => {
+  elandOutputFormat = String(e.target.value || 'xlsx');
+  elandOutputPath = '';
+  document.getElementById('output-file-display').textContent = 'not selected';
+  syncElandOutputControls();
+  checkReady();
+});
+
+document.getElementById('btn-pick-output-file').addEventListener('click', async () => {
+  const ext = elandOutputFormat === 'docx' ? 'docx' : 'xlsx';
+  const kind = elandOutputFormat === 'docx' ? 'Word' : 'Excel';
   const result = await window.api.saveDialog({
     title: 'Save e.land lookup result',
-    defaultPath: outputXlsx || 'eland_lookup.xlsx',
-    filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+    defaultPath: elandOutputPath || `eland_lookup.${ext}`,
+    filters: [{ name: kind, extensions: [ext] }],
   });
   if (!result.canceled && result.filePath) {
-    outputXlsx = result.filePath;
-    document.getElementById('xlsx-display').textContent = outputXlsx.split(/[\\/]/).pop();
+    elandOutputPath = result.filePath;
+    document.getElementById('output-file-display').textContent = elandOutputPath.split(/[\\/]/).pop();
     checkReady();
   }
 });
 
 document.getElementById('btn-eland-start').addEventListener('click', async () => {
-  if (!csvPath || !outputXlsx) return;
+  if (!csvPath || !elandOutputPath) return;
   setElandBusy(true);
   appendLog(`📋 e.land lookup: ${csvPath.split(/[\\/]/).pop()}`);
   try {
-    const result = await window.api.startElandLookup(csvPath, outputXlsx);
+    const result = await window.api.startElandLookup(csvPath, elandOutputPath, { format: elandOutputFormat });
     if (result.success) {
       appendLog(`✅ Done → ${result.outputPath}`);
       window.api.showInFolder(result.outputPath);
@@ -314,3 +332,5 @@ document.getElementById('btn-eland-stop').addEventListener('click', () => {
   window.api.stopElandLookup();
   appendLog('⛔ e.land stop requested');
 });
+
+syncElandOutputControls();

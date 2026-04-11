@@ -16,7 +16,8 @@ contextBridge.exposeInMainWorld('api', {
   resolveOutputPath: (folder, baseName) => ipcRenderer.invoke('resolve-output-path', folder, baseName),
   showInFolder: (filePath) => ipcRenderer.invoke('show-in-folder', filePath),
   copyIcons: (outputFolder) => ipcRenderer.invoke('copy-icons', outputFolder),
-  startElandLookup: (csvPath, outputXlsx) => ipcRenderer.invoke('start-eland-lookup', { csvPath, outputXlsx }),
+  startElandLookup: (csvPath, outputPath, options = {}) =>
+    ipcRenderer.invoke('start-eland-lookup', { csvPath, outputPath, ...options }),
   stopElandLookup: () => ipcRenderer.send('stop-eland-lookup'),
   onLog: (callback) => ipcRenderer.on('log', (_event, msg) => callback(msg)),
 });

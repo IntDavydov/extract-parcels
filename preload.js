@@ -61,8 +61,8 @@ contextBridge.exposeInMainWorld('api', {
   openCsvDialog: () =>
     ipcRenderer.invoke('open-csv-dialog'),
 
-  startElandLookup: (csvPath, outputXlsx) =>
-    ipcRenderer.invoke('start-eland-lookup', { csvPath, outputXlsx }),
+  startElandLookup: (csvPath, outputPath, options = {}) =>
+    ipcRenderer.invoke('start-eland-lookup', { csvPath, outputPath, ...options }),
 
   stopElandLookup: () =>
     ipcRenderer.send('stop-eland-lookup'),

@@ -3,9 +3,23 @@
 const puppeteer = require('puppeteer');
 const ExcelJS   = require('exceljs');
 const fs        = require('fs');
+const {
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  AlignmentType,
+  TextRun,
+  BorderStyle,
+} = require('docx');
 
 const ELAND_URL = 'https://e.land.gov.ua/back/cadaster/';
 const CADNUM_FIELD = 'Кадастровий номер земельної ділянки';
+const TABLE_ROWS_SELECTOR = 'div.box-body.table-responsive.no-padding table tbody tr';
+const DOCX_HEADER_FILL = '3C8DBC';
 
 function readCadnums(csvPath) {
   const text = fs.readFileSync(csvPath, 'utf8').replace(/^\uFEFF/, '');
@@ -15,19 +29,102 @@ function readCadnums(csvPath) {
     .filter(Boolean);
 }
 
+function normalizeLabel(s) {
+  return String(s || '')
+    .replace(/\u00A0/g, ' ')
+    .replace(/[’`]/g, '\'')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function canonicalSectionTitle(raw) {
+  const text = normalizeLabel(raw);
+  const m = text.match(/^(.*?)(?:\s+#(\d+))?$/);
+  const baseText = m ? normalizeLabel(m[1]) : text;
+  const ordinal = m && m[2] ? Number(m[2]) : 1;
+  const low = baseText.toLowerCase();
+  let canonicalBase = baseText || 'Без секції';
+  if (low.includes('відомості про земельну ділянку')) canonicalBase = 'Відомості про земельну ділянку';
+  else if (low.includes('відомості про суб\'єктів права власності')) canonicalBase = 'Відомості про суб\'єктів права власності на земельну ділянку';
+  else if (low.includes('відомості про суб\'єкта речового права')) canonicalBase = 'Відомості про суб\'єкта речового права на земельну ділянку';
+  return ordinal > 1 ? `${canonicalBase} #${ordinal}` : canonicalBase;
+}
+
+function canonicalFieldLabel(raw) {
+  const text = normalizeLabel(raw);
+  const low = text.toLowerCase();
+  if (low.includes('кадастровий номер')) return 'Кадастровий номер земельної ділянки';
+  if (low.includes('цільове призначення')) return 'Цільове призначення';
+  if (low.includes('категорія земель')) return 'Категорія земель';
+  if (low.includes('площа земельної ділянки')) return 'Площа земельної ділянки';
+  if (low.includes('місце розташування')) return 'Місце розташування';
+  if (low.includes('вид речового права')) return 'Вид речового права';
+  if (low.includes('прізвище') && low.includes('по батькові')) return 'Прізвище, ім\'я та по батькові фізичної особи';
+  if (low.includes('найменування юридичної особи')) return 'Найменування юридичної особи';
+  if (low.includes('код єдрпоу')) return 'Код ЄДРПОУ юридичної особи';
+  if (low.includes('дата державної реєстрації права') || low.includes('дата державної реєстрації речового права')) {
+    return 'Дата державної реєстрації права (в державному реєстрі прав)';
+  }
+  if (low.includes('номер запису про право') || low.includes('номер запису про речове право')) {
+    return 'Номер запису про право (в державному реєстрі прав)';
+  }
+  if (
+    low.includes('орган, що здійснив державну реєстрацію права') ||
+    low.includes('орган що здійснив державну реєстрацію права') ||
+    low.includes('орган, що здійснив державну реєстрацію речового права') ||
+    low.includes('орган що здійснив державну реєстрацію речового права')
+  ) {
+    return 'Орган, що здійснив державну реєстрацію права (в державному реєстрі прав)';
+  }
+  if (low.includes('площа, на яку поширюється право суборенди') || low.includes('площа на яку поширюється право суборенди')) {
+    return 'Площа, на яку поширюється право суборенди';
+  }
+  return text;
+}
+
 // Extract section-aware fields dynamically from e.land table:
 // section separator rows (<td colspan="2" class="td-header">...) create section context;
 // repeated section names are indexed (#2, #3, ...).
 async function extractFields(page) {
   const parsed = await page.evaluate(() => {
     const out = {};
-    const rows = document.querySelectorAll('div.box-body.table-responsive.no-padding tr');
+    const sectionsOut = [];
+    const rows = document.querySelectorAll('div.box-body.table-responsive.no-padding table tbody tr');
     const sectionCounts = {};
     let sectionTitle = 'Без секції';
     let sectionOrdinal = 1;
     let cadnumValue = '';
-
-    const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const clean = (s) => String(s || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    const canonicalSection = (s) => {
+      const text = clean(s);
+      const low = text.toLowerCase();
+      if (low.includes('відомості про земельну ділянку')) return 'Відомості про земельну ділянку';
+      if (low.includes('відомості про суб\'єктів права власності')) return 'Відомості про суб\'єктів права власності на земельну ділянку';
+      if (low.includes('відомості про суб\'єкта речового права')) return 'Відомості про суб\'єкта речового права на земельну ділянку';
+      return text || 'Без секції';
+    };
+    const canonicalLabel = (s) => {
+      const text = clean(s);
+      const low = text.toLowerCase();
+      if (low.includes('кадастровий номер')) return 'Кадастровий номер земельної ділянки';
+      if (low.includes('цільове призначення')) return 'Цільове призначення';
+      if (low.includes('категорія земель')) return 'Категорія земель';
+      if (low.includes('площа земельної ділянки')) return 'Площа земельної ділянки';
+      if (low.includes('місце розташування')) return 'Місце розташування';
+      if (low.includes('вид речового права')) return 'Вид речового права';
+      if (low.includes('прізвище') && low.includes('по батькові')) return 'Прізвище, ім\'я та по батькові фізичної особи';
+      if (low.includes('найменування юридичної особи')) return 'Найменування юридичної особи';
+      if (low.includes('код єдрпоу')) return 'Код ЄДРПОУ юридичної особи';
+      if (low.includes('дата державної реєстрації права')) return 'Дата державної реєстрації права (в державному реєстрі прав)';
+      if (low.includes('номер запису про право')) return 'Номер запису про право (в державному реєстрі прав)';
+      if (low.includes('орган, що здійснив державну реєстрацію права') || low.includes('орган що здійснив державну реєстрацію права')) {
+        return 'Орган, що здійснив державну реєстрацію права (в державному реєстрі прав)';
+      }
+      if (low.includes('площа, на яку поширюється право суборенди') || low.includes('площа на яку поширюється право суборенди')) {
+        return 'Площа, на яку поширюється право суборенди';
+      }
+      return text;
+    };
     const sectionName = () => sectionOrdinal > 1 ? `${sectionTitle} #${sectionOrdinal}` : sectionTitle;
 
     for (const row of rows) {
@@ -39,33 +136,229 @@ async function extractFields(page) {
       const colspan = Number(first.getAttribute('colspan') || '0');
       const isHeader = first.classList.contains('td-header') || cells.length === 1 || colspan >= 2;
       if (isHeader && firstText) {
-        sectionTitle = firstText;
+        sectionTitle = canonicalSection(firstText);
         sectionCounts[sectionTitle] = (sectionCounts[sectionTitle] || 0) + 1;
         sectionOrdinal = sectionCounts[sectionTitle];
+        const sName = sectionName();
+        if (!sectionsOut.some((s) => s.title === sName)) sectionsOut.push({ title: sName, rows: [] });
         continue;
       }
 
       if (cells.length < 2) continue;
-      const label = clean(cells[0].innerText);
+      const label = canonicalLabel(cells[0].innerText);
       const value = clean(cells[1].innerText);
       if (!label) continue;
 
       const key = `[${sectionName()}] ${label}`;
-      out[key] = value;
+      if (!(key in out)) out[key] = value;
+      else if (!out[key] && value) out[key] = value;
+      else if (value && out[key] !== value) {
+        let idx = 2;
+        let altKey = `${key} (${idx})`;
+        while (altKey in out) {
+          idx += 1;
+          altKey = `${key} (${idx})`;
+        }
+        out[altKey] = value;
+      }
+      const sName = sectionName();
+      const sectionRef = sectionsOut.find((s) => s.title === sName);
+      if (sectionRef) sectionRef.rows.push({ label, value });
       if (!cadnumValue && label.toLowerCase().includes('кадастровий номер')) cadnumValue = value;
     }
 
-    return { fields: out, cadnumValue };
+    return { fields: out, cadnumValue, sections: sectionsOut };
   });
 
-  const result = { ...parsed.fields };
-  if (parsed.cadnumValue) result[CADNUM_FIELD] = parsed.cadnumValue;
-  return result;
+  const result = {};
+  for (const [k, v] of Object.entries(parsed.fields)) {
+    const sectionMatch = String(k).match(/^\[(.*?)\]\s+(.+)$/);
+    if (!sectionMatch) {
+      result[canonicalFieldLabel(k)] = v;
+      continue;
+    }
+    const section = canonicalSectionTitle(sectionMatch[1]);
+    const label = canonicalFieldLabel(sectionMatch[2]);
+    const key = `[${section}] ${label}`;
+    if (!(key in result)) result[key] = v;
+    else if (!result[key] && v) result[key] = v;
+  }
+  if (parsed.cadnumValue) result[CADNUM_FIELD] = normalizeLabel(parsed.cadnumValue);
+  return { fields: result, sections: parsed.sections || [] };
+}
+
+function detectOutputFormat(outputPath, requestedFormat = null) {
+  const fmt = String(requestedFormat || '').trim().toLowerCase();
+  if (fmt === 'docx' || fmt === 'xlsx') return fmt;
+  return String(outputPath || '').toLowerCase().endsWith('.docx') ? 'docx' : 'xlsx';
+}
+
+function buildElandDocxRows(entry) {
+  const rows = [];
+  for (const section of (entry.sections || [])) {
+    rows.push(
+      new TableRow({
+        children: [
+          new TableCell({
+            columnSpan: 2,
+            shading: { fill: DOCX_HEADER_FILL, color: 'FFFFFF' },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: section.title, bold: true, color: 'FFFFFF' })],
+              }),
+            ],
+          }),
+        ],
+      })
+    );
+    for (const item of (section.rows || [])) {
+      rows.push(
+        new TableRow({
+          children: [
+            new TableCell({
+              width: { size: 50, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({ children: [new TextRun({ text: item.label || '' })] })],
+            }),
+            new TableCell({
+              width: { size: 50, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({ children: [new TextRun({ text: item.value || '' })] })],
+            }),
+          ],
+        })
+      );
+    }
+  }
+  return rows;
+}
+
+async function writeDocxReport(results, outputPath, onProgress) {
+  const children = [];
+  results.forEach((entry, idx) => {
+    if (idx > 0) children.push(new Paragraph({ pageBreakBefore: true }));
+    children.push(new Paragraph({ children: [new TextRun({ text: `${idx + 1}. ${entry.cadnum || ''}`, bold: true })] }));
+    if (entry.error) children.push(new Paragraph({ children: [new TextRun({ text: entry.error })] }));
+    const tableRows = buildElandDocxRows(entry);
+    if (tableRows.length) {
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: tableRows,
+          borders: {
+            top: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+            bottom: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+            left: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+            right: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+            insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: 'D9D9D9' },
+            insideVertical: { style: BorderStyle.SINGLE, size: 1, color: 'D9D9D9' },
+          },
+        })
+      );
+    }
+  });
+
+  const doc = new Document({ sections: [{ properties: {}, children }] });
+  const buffer = await Packer.toBuffer(doc);
+  fs.writeFileSync(outputPath, buffer);
+  onProgress(`✅ Saved ${results.length} records → ${outputPath}`);
+  return { success: true, outputPath, count: results.length };
+}
+
+function getNonEmptySchemaFields(row) {
+  const fields = [];
+  for (const [k, v] of Object.entries(row || {})) {
+    if (k === 'cadnum' || k === 'error' || k === 'sections' || k === CADNUM_FIELD) continue;
+    if (!v) continue;
+    fields.push(k);
+  }
+  return fields;
+}
+
+async function writeCompactExcelReport(results, outputPath, onProgress) {
+  const workbook = new ExcelJS.Workbook();
+  const fieldFrequency = new Map();
+  const rowsWithFields = results.map((row) => {
+    const fields = getNonEmptySchemaFields(row).sort((a, b) => a.localeCompare(b, 'uk'));
+    for (const f of fields) fieldFrequency.set(f, (fieldFrequency.get(f) || 0) + 1);
+    return { row, fields };
+  });
+
+  const frequencyThreshold = Math.max(2, Math.ceil(results.length * 0.35));
+  const coreFields = [...fieldFrequency.entries()]
+    .filter(([, cnt]) => cnt >= frequencyThreshold)
+    .map(([f]) => f)
+    .sort((a, b) => a.localeCompare(b, 'uk'));
+
+  const mainRows = [];
+  const outlierRows = [];
+  for (const item of rowsWithFields) {
+    const have = new Set(item.fields);
+    const missingCoreCount = coreFields.reduce((acc, f) => acc + (have.has(f) ? 0 : 1), 0);
+    if (coreFields.length > 0 && missingCoreCount >= 3) outlierRows.push(item);
+    else mainRows.push(item);
+  }
+
+  const usedSheetNames = new Set();
+  const makeSheetName = (base) => {
+    let name = String(base || 'Sheet').slice(0, 31);
+    let idx = 2;
+    while (usedSheetNames.has(name)) {
+      const suffix = `_${idx++}`;
+      name = `${String(base || 'Sheet').slice(0, Math.max(1, 31 - suffix.length))}${suffix}`;
+    }
+    usedSheetNames.add(name);
+    return name;
+  };
+
+  const writeSheet = (name, rows, fields) => {
+    const sheet = workbook.addWorksheet(makeSheetName(name));
+    const headers = ['#', CADNUM_FIELD, ...fields, 'Помилка'];
+    sheet.addRow(headers);
+    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+    sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }];
+
+    rows.forEach((item, rowIdx) => {
+      const row = item.row;
+      sheet.addRow([
+        rowIdx + 1,
+        row[CADNUM_FIELD] || row.cadnum || '',
+        ...fields.map((f) => row[f] || ''),
+        row.error || '',
+      ]);
+    });
+
+    sheet.columns.forEach((col) => {
+      let maxLen = 12;
+      col.eachCell((cell) => {
+        if (cell.value) maxLen = Math.max(maxLen, String(cell.value).length);
+      });
+      col.width = Math.min(maxLen + 2, 60);
+    });
+  };
+
+  if (mainRows.length) {
+    const extraMainFields = [...new Set(mainRows.flatMap((x) => x.fields.filter((f) => !coreFields.includes(f))))];
+    writeSheet('Main', mainRows, [...coreFields, ...extraMainFields].sort((a, b) => a.localeCompare(b, 'uk')));
+  }
+
+  outlierRows.forEach((item, idx) => {
+    const cad = String(item.row[CADNUM_FIELD] || item.row.cadnum || `Outlier_${idx + 1}`);
+    const safeCad = cad.replace(/[\\/*?:[\]]/g, '_').slice(0, 20);
+    writeSheet(`Diff_${safeCad}`, [item], item.fields);
+  });
+
+  if (!mainRows.length && !outlierRows.length) workbook.addWorksheet(makeSheetName('Main'));
+  await workbook.xlsx.writeFile(outputPath);
+  const sheetCount = workbook.worksheets.length;
+  onProgress(`✅ Saved ${results.length} records in ${sheetCount} sheet(s) → ${outputPath}`);
+  return { success: true, outputPath, count: results.length };
 }
 
 let _stopped = false;
 
-async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
+async function lookupEland(csvPath, outputPath, onProgress, chromePath, options = {}) {
+  const outputFormat = detectOutputFormat(outputPath, options.format);
   _stopped = false;
   onProgress('🌐 Opening e.land.gov.ua — please log in with your digital signature key…');
 
@@ -150,20 +443,20 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
         if (!navRes && !domRes) throw new Error('Lookup response timeout (45s)');
       }
 
+      await page.waitForSelector(TABLE_ROWS_SELECTOR, { timeout: 10000 });
+      await page.waitForFunction((selector) => {
+        const rows = document.querySelectorAll(selector).length;
+        const now = Date.now();
+        if (window.__elandRowsCount !== rows) {
+          window.__elandRowsCount = rows;
+          window.__elandRowsAt = now;
+          return false;
+        }
+        return rows >= 6 && (now - (window.__elandRowsAt || now)) > 500;
+      }, { timeout: 10000 }, TABLE_ROWS_SELECTOR);
+
       await new Promise(r => setTimeout(r, 250));
       return extractFields(page);
-    };
-
-    const discoveredFields = [CADNUM_FIELD];
-    const discoveredSet = new Set(discoveredFields);
-    const rememberFields = (obj) => {
-      for (const key of Object.keys(obj || {})) {
-        if (key === 'cadnum' || key === 'error') continue;
-        if (!discoveredSet.has(key)) {
-          discoveredSet.add(key);
-          discoveredFields.push(key);
-        }
-      }
     };
 
     const results = [];
@@ -175,7 +468,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
       try {
         const digits = cadnum.replace(/\D/g, '');
         let data = await submitLookup(digits);
-        let filled = Object.entries(data)
+        let filled = Object.entries(data.fields)
           .filter(([k, v]) => k !== 'Кадастровий номер земельної ділянки' && !!v)
           .length;
         const noDataMessage = `⚠ No data found for ${cadnum}`;
@@ -185,7 +478,7 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
           await page.goto(ELAND_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
           await page.waitForSelector('#cadastr_find_by_cadnum_cadNum', { timeout: 30000 });
           data = await submitLookup(digits);
-          filled = Object.entries(data)
+          filled = Object.entries(data.fields)
             .filter(([k, v]) => k !== 'Кадастровий номер земельної ділянки' && !!v)
             .length;
         }
@@ -194,10 +487,10 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
         const rowData = {
           cadnum,
           [CADNUM_FIELD]: cadnum,
-          ...data,
+          ...data.fields,
+          sections: data.sections || [],
           error: filled === 0 ? noDataMessage : '',
         };
-        rememberFields(rowData);
         results.push(rowData);
 
         // Keep current page; next iteration ensures input exists and only reloads if needed.
@@ -218,38 +511,16 @@ async function lookupEland(csvPath, outputXlsx, onProgress, chromePath) {
       await new Promise(r => setTimeout(r, 200));
     }
 
+    if (outputFormat === 'docx') {
+      onProgress('📄 Writing Word document…');
+      await browser.close();
+      return writeDocxReport(results, outputPath, onProgress);
+    }
+
+    onProgress('📊 Writing compact Excel file…');
+    await writeCompactExcelReport(results, outputPath, onProgress);
     await browser.close();
-
-    // Write Excel
-    onProgress('📊 Writing Excel file…');
-    const workbook = new ExcelJS.Workbook();
-    const sheet    = workbook.addWorksheet('e.land дані');
-
-    const headers = ['#', ...discoveredFields, 'Помилка'];
-    sheet.addRow(headers);
-    sheet.getRow(1).font    = { bold: true };
-    sheet.getRow(1).fill    = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
-    sheet.getRow(1).font    = { bold: true, color: { argb: 'FFFFFFFF' } };
-
-    results.forEach((row, idx) => {
-      sheet.addRow([
-        idx + 1,
-        ...discoveredFields.map(f => row[f] || ''),
-        row.error || '',
-      ]);
-    });
-
-    sheet.columns.forEach(col => {
-      let maxLen = 12;
-      col.eachCell(cell => {
-        if (cell.value) maxLen = Math.max(maxLen, String(cell.value).length);
-      });
-      col.width = Math.min(maxLen + 2, 60);
-    });
-
-    await workbook.xlsx.writeFile(outputXlsx);
-    onProgress(`✅ Saved ${results.length} records → ${outputXlsx}`);
-    return { success: true, outputPath: outputXlsx, count: results.length };
+    return { success: true, outputPath, count: results.length };
 
   } catch (err) {
     await browser.close().catch(() => {});
