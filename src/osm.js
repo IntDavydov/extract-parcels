@@ -120,6 +120,91 @@ function featureCentroid(f) {
   return [sumLon / allCoords.length, sumLat / allCoords.length];
 }
 
+function cleanTextKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[’'`]/g, '\'')
+    .replace(/[.,/\\()\-–—_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pickSettlementName(props = {}) {
+  return (
+    props.name ||
+    props.name1 ||
+    props['name:uk'] ||
+    props.official_name ||
+    props.adm4_name1 ||
+    props.adm4_name ||
+    props.place_name ||
+    ''
+  );
+}
+
+function settlementSourceRank(source) {
+  const s = String(source || '');
+  if (s === 'hotosm_preferred') return 5;
+  if (s === 'hotosm') return 4;
+  if (s === 'osm_overpass_preferred') return 3;
+  if (s === 'osm') return 2;
+  if (s === 'admin4') return 1;
+  return 0;
+}
+
+function dedupeAndNameSettlements(features, fallbackPrefix = 'Settlement') {
+  const buckets = new Map();
+  for (const f of features || []) {
+    if (!f?.geometry || (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon')) continue;
+    const centroid = featureCentroid(f) || [0, 0];
+    const area = featureAreaM2(f);
+    const name = pickSettlementName(f.properties);
+    const nameKey = cleanTextKey(name);
+    const spatialKey = `${Math.round(centroid[0] * 1000)}|${Math.round(centroid[1] * 1000)}|${Math.round(area / 5000)}`;
+    const key = `${nameKey || '__noname__'}|${spatialKey}`;
+    const rank = settlementSourceRank(f.properties?._source);
+    const prev = buckets.get(key);
+    if (!prev || rank > prev.rank) buckets.set(key, { feature: f, rank });
+  }
+
+  const deduped = [...buckets.values()].map((x) => x.feature);
+  let unnamedCounter = 1;
+  return deduped.map((f) => {
+    const rawName = pickSettlementName(f.properties);
+    const safeName = String(rawName || '').trim();
+    return {
+      ...f,
+      properties: {
+        ...(f.properties || {}),
+        name: safeName || `${fallbackPrefix} ${unnamedCounter++}`,
+        _layer: 'Settlements',
+        _type: 'settlement',
+      },
+    };
+  });
+}
+
+function dedupeSettlementPins(pins) {
+  const seen = new Set();
+  const out = [];
+  for (const p of pins || []) {
+    const c = p?.geometry?.coordinates;
+    if (!c || c.length < 2) continue;
+    const name = pickSettlementName(p.properties);
+    const key = `${Math.round(c[0] * 1e6)}|${Math.round(c[1] * 1e6)}|${cleanTextKey(name)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      ...p,
+      properties: {
+        ...(p.properties || {}),
+        name: String(name || '').trim() || 'Settlement Pin',
+      },
+    });
+  }
+  return out;
+}
+
 // Returns true if the polygon is at least minWidthM wide at its narrowest point
 function isWideEnough(f, minWidthM) {
   try {
@@ -646,20 +731,23 @@ async function fetchSettlementsFromHumdata(territory, bbox, onProgress, areaGeom
     }
   }
   
-  onProgress(`  → Merged: ${hotosmSettlements.length} HOTOSM + ${settlementPolygons.length - usedAdmin4Indices.size} admin4-only = ${mergedBoundaries.length} total`);
+  const mergedBeforeDedupe = mergedBoundaries.length;
+  let cleanedMergedBoundaries = dedupeAndNameSettlements(mergedBoundaries);
+  onProgress(`  → Merged: ${hotosmSettlements.length} HOTOSM + ${settlementPolygons.length - usedAdmin4Indices.size} admin4-only = ${mergedBeforeDedupe} total (${cleanedMergedBoundaries.length} after dedupe)`);
   
-  let boundaries = mergedBoundaries;
+  let boundaries = cleanedMergedBoundaries;
   if (usingCustomBoundary && areaGeometry) {
     const beforeBoundaries = boundaries.length;
     const beforePins = settlementPins.length;
     boundaries = boundaries
       .map((f) => clipPolygonFeatureToGeometry(f, areaGeometry))
       .filter(Boolean);
-    settlementPins = settlementPins.filter((f) => featureInsideGeometry(f, areaGeometry));
+    boundaries = dedupeAndNameSettlements(boundaries, 'Custom Settlement');
+    settlementPins = dedupeSettlementPins(settlementPins.filter((f) => featureInsideGeometry(f, areaGeometry)));
     onProgress(`  → Custom boundary clip: settlements ${beforeBoundaries} → ${boundaries.length}, pins ${beforePins} → ${settlementPins.length}`);
   }
 
-  const pins = settlementPins.map(f => ({
+  const pins = dedupeSettlementPins(settlementPins).map(f => ({
     ...f,
     properties: {
       ...f.properties,
@@ -2250,8 +2338,9 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
         }
         
         const hotosmCount = boundaries.filter(b => b.properties._source === 'hotosm_preferred' || b.properties._source === 'hotosm').length;
-        settlementBoundaries = mergedBoundaries;
-        onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBoundaries.length} total`);
+        const mergedBeforeDedupe = mergedBoundaries.length;
+        settlementBoundaries = dedupeAndNameSettlements(mergedBoundaries);
+        onProgress(`  → Final merge: ${hotosmCount} HOTOSM (kept) + ${osmSettlementPolygons.length} OSM Overpass + ${boundaries.length - hotosmCount - osmSettlementPolygons.length} admin4 = ${mergedBeforeDedupe} total (${settlementBoundaries.length} after dedupe)`);
         
         // Rebuild buffers from merged boundaries
         const mergedBuffers = buildTieredSettlementBuffers(settlementBoundaries, {
