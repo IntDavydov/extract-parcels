@@ -1268,7 +1268,20 @@ function kmlCoords(text) {
   return text.trim().split(/\s+/).map(pt => {
     const parts = pt.split(',').map(Number);
     return [parts[0], parts[1]];
-  }).filter(c => c[0] && c[1]);
+  }).filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+}
+
+function pathCoordsToClosedRing(coords) {
+  if (!Array.isArray(coords) || coords.length < 3) return null;
+  const ring = coords.map(([lng, lat]) => [lng, lat]).filter(([lng, lat]) =>
+    Number.isFinite(lng) && Number.isFinite(lat)
+  );
+  if (ring.length < 3) return null;
+  const [firstLng, firstLat] = ring[0];
+  const [lastLng, lastLat] = ring[ring.length - 1];
+  const isClosed = Math.abs(firstLng - lastLng) < 1e-9 && Math.abs(firstLat - lastLat) < 1e-9;
+  if (!isClosed) ring.push([firstLng, firstLat]);
+  return ring.length >= 4 ? ring : null;
 }
 
 function kmlNodeToGeometry(doc) {
@@ -1284,10 +1297,12 @@ function kmlNodeToGeometry(doc) {
 
     const polygon = pm.getElementsByTagName('Polygon')[0];
     const multiGeom = pm.getElementsByTagName('MultiGeometry')[0];
+    const lineString = pm.getElementsByTagName('LineString')[0];
     const point = pm.getElementsByTagName('Point')[0];
 
     if (multiGeom) {
       const polys = multiGeom.getElementsByTagName('Polygon');
+      const lines = multiGeom.getElementsByTagName('LineString');
       if (polys.length > 0) {
         const rings = [];
         for (let j = 0; j < polys.length; j++) {
@@ -1299,6 +1314,16 @@ function kmlNodeToGeometry(doc) {
         geometry = rings.length === 1
           ? { type: 'Polygon', coordinates: rings[0] }
           : { type: 'MultiPolygon', coordinates: rings };
+      } else if (lines.length > 0) {
+        const paths = [];
+        for (let j = 0; j < lines.length; j++) {
+          const coords = lines[j].getElementsByTagName('coordinates')[0];
+          if (!coords) continue;
+          const path = kmlCoords(coords.textContent);
+          if (path.length >= 2) paths.push(path);
+        }
+        if (paths.length === 1) geometry = { type: 'LineString', coordinates: paths[0] };
+        else if (paths.length > 1) geometry = { type: 'MultiLineString', coordinates: paths };
       }
     } else if (polygon) {
       const outer = polygon.getElementsByTagName('outerBoundaryIs')[0];
@@ -1314,11 +1339,19 @@ function kmlNodeToGeometry(doc) {
           geometry = { type: 'Polygon', coordinates: rings };
         }
       }
+    } else if (lineString) {
+      const coords = lineString.getElementsByTagName('coordinates')[0];
+      if (coords) {
+        const pathCoords = kmlCoords(coords.textContent);
+        if (pathCoords.length >= 2) geometry = { type: 'LineString', coordinates: pathCoords };
+      }
     } else if (point) {
       const coords = point.getElementsByTagName('coordinates')[0];
       if (coords) {
         const [lng, lat] = kmlCoords(coords.textContent)[0] || [];
-        if (lng && lat) geometry = { type: 'Point', coordinates: [lng, lat] };
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          geometry = { type: 'Point', coordinates: [lng, lat] };
+        }
       }
     }
 
@@ -1340,19 +1373,40 @@ async function loadBoundaryGeometryFromFile(filePath) {
   }
 
   const doc = new DOMParser().parseFromString(kmlText, 'text/xml');
-  const parsed = kmlNodeToGeometry(doc).filter((f) =>
+  const parsed = kmlNodeToGeometry(doc);
+  const polygonLike = parsed.filter((f) =>
     f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon')
   );
-  if (!parsed.length) throw new Error('Boundary KMZ/KML has no polygon geometry');
+  const pathAsPolygons = parsed.flatMap((f) => {
+    if (!f.geometry) return [];
+    if (f.geometry.type === 'LineString') {
+      const ring = pathCoordsToClosedRing(f.geometry.coordinates);
+      if (!ring) return [];
+      return [{ ...f, geometry: { type: 'Polygon', coordinates: [ring] } }];
+    }
+    if (f.geometry.type === 'MultiLineString') {
+      const polys = [];
+      for (const pathCoords of f.geometry.coordinates || []) {
+        const ring = pathCoordsToClosedRing(pathCoords);
+        if (ring) polys.push({ ...f, geometry: { type: 'Polygon', coordinates: [ring] } });
+      }
+      return polys;
+    }
+    return [];
+  });
+  const candidates = polygonLike.concat(pathAsPolygons);
+  if (!candidates.length) {
+    throw new Error('Boundary KMZ/KML has no polygon geometry or convertible paths');
+  }
 
   // Use the largest polygon as the custom area filter.
-  let selected = parsed[0];
+  let selected = candidates[0];
   let maxArea = featureAreaM2({ type: 'Feature', geometry: selected.geometry, properties: {} });
-  for (let i = 1; i < parsed.length; i++) {
-    const area = featureAreaM2({ type: 'Feature', geometry: parsed[i].geometry, properties: {} });
+  for (let i = 1; i < candidates.length; i++) {
+    const area = featureAreaM2({ type: 'Feature', geometry: candidates[i].geometry, properties: {} });
     if (area > maxArea) {
       maxArea = area;
-      selected = parsed[i];
+      selected = candidates[i];
     }
   }
 
