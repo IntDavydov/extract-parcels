@@ -329,7 +329,7 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
     const boundaryField = document.getElementById('field-boundary');
     boundaryField.style.display = 'block';
     const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Custom settlement boundary KMZ <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(single polygon defining settlement area filter)</span>';
+    label.innerHTML = 'Custom settlement boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(one or multiple files; polygons/closed paths are supported)</span>';
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
     document.getElementById('wind-settings').style.display = 'none';
   } else if (isKadastr) {
@@ -393,7 +393,7 @@ function checkStartReady() {
   } else if (fetchMode === 'kadastr') {
     ready = !!outputFolder && (isSingleKmz || isMultiKmz);
   } else if (fetchMode === 'custom') {
-    ready = !!outputFolder && isSingleKmz;
+    ready = !!outputFolder && (isSingleKmz || isMultiKmz);
   } else {
     ready = !!outputFolder && (
       isMultiKmz  ? true :
@@ -512,20 +512,21 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
   // ── Custom settlement boundary mode (KMZ/KML) ──
   if (fetchMode === 'custom') {
-    const bf = boundaryFiles[0] || null;
-    if (!bf) { appendLog('⚠ Please attach one KMZ/KML boundary file.'); return; }
-    if (bf.url === '') { appendLog('⚠ Boundary file could not be parsed.'); return; }
+    if (!boundaryFiles.length) { appendLog('⚠ Please attach at least one KMZ/KML boundary file.'); return; }
 
     const layerSet = ['settlements'];
-    const customName = sanitizeFilename((bf.name || 'custom_settlement').replace(/\.(kmz|kml)$/i, ''));
+    const customName = boundaryFiles.length === 1
+      ? sanitizeFilename((boundaryFiles[0].name || 'custom_settlement').replace(/\.(kmz|kml)$/i, ''))
+      : 'custom_settlements';
     const finalOutput = await window.api.resolveOutputPath(outputFolder, `${customName}_settlements`);
 
     document.getElementById('main-log').textContent = '';
     setBusy(true);
     userStopped = false;
     appendLog('🧭 Custom settlement boundary mode');
-    appendLog(`📎 Boundary: ${bf.name}`);
-    appendLog('🏘 Fetching settlements + 700m buffers clipped to your KMZ boundary…');
+    appendLog(`📎 Boundaries: ${boundaryFiles.length}`);
+    boundaryFiles.forEach((f, idx) => appendLog(`   ${idx + 1}. ${f.name}`));
+    appendLog('🏘 Fetching settlement areas + 700m buffers from your custom KMZ/KML boundaries…');
 
     try {
       const osmResult = await window.api.fetchOSM({
@@ -534,8 +535,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         outputPath: finalOutput,
         format: 'kmz',
         windOptions: null,
-        fallbackBbox: bf.bbox || null,
-        customBoundaryPath: bf.path,
+        fallbackBbox: boundaryFiles[0]?.bbox || null,
+        customBoundaryPaths: boundaryFiles.map((f) => f.path),
       });
       if (!osmResult.success) {
         appendLog(`[ERROR] Custom boundary fetch failed: ${osmResult.error}`);

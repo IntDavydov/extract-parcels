@@ -1399,22 +1399,31 @@ async function loadBoundaryGeometryFromFile(filePath) {
     throw new Error('Boundary KMZ/KML has no polygon geometry or convertible paths');
   }
 
+  const fileBaseName = path.basename(filePath, path.extname(filePath));
+  const areas = candidates.map((candidate, idx) => ({
+    geometry: candidate.geometry,
+    name: (candidate.name && candidate.name.trim())
+      ? candidate.name.trim()
+      : (candidates.length > 1 ? `${fileBaseName} #${idx + 1}` : fileBaseName),
+    bbox: featureBbox({ type: 'Feature', geometry: candidate.geometry, properties: {} }),
+  }));
+
   // Use the largest polygon as the custom area filter.
-  let selected = candidates[0];
+  let selected = areas[0];
   let maxArea = featureAreaM2({ type: 'Feature', geometry: selected.geometry, properties: {} });
-  for (let i = 1; i < candidates.length; i++) {
-    const area = featureAreaM2({ type: 'Feature', geometry: candidates[i].geometry, properties: {} });
+  for (let i = 1; i < areas.length; i++) {
+    const area = featureAreaM2({ type: 'Feature', geometry: areas[i].geometry, properties: {} });
     if (area > maxArea) {
       maxArea = area;
-      selected = candidates[i];
+      selected = areas[i];
     }
   }
 
-  const bbox = featureBbox({ type: 'Feature', geometry: selected.geometry, properties: {} });
   return {
     geometry: selected.geometry,
-    name: selected.name || path.basename(filePath, path.extname(filePath)),
-    bbox,
+    name: selected.name || fileBaseName,
+    bbox: selected.bbox,
+    areas,
   };
 }
 
@@ -1960,32 +1969,71 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   };
 }
 
-async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox, customBoundaryPath = null) {
+async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox, customBoundaryInput = null) {
   const layerMap = {};
   const osmSettlementPolygons = [];
 
   // 1. Resolve bbox + boundary polygon
   let customBoundaryGeom = null;
+  let customBoundaryAreas = [];
+  const customBoundaryPaths = Array.isArray(customBoundaryInput)
+    ? customBoundaryInput.filter(Boolean)
+    : (customBoundaryInput ? [customBoundaryInput] : []);
   let bbox;
-  if (customBoundaryPath) {
-    onProgress(`🧭 Loading custom boundary: ${customBoundaryPath}`);
-    const customBoundary = await loadBoundaryGeometryFromFile(customBoundaryPath);
-    customBoundaryGeom = customBoundary.geometry;
+  if (customBoundaryPaths.length) {
+    const total = customBoundaryPaths.length;
+    for (let i = 0; i < total; i++) {
+      const customBoundaryPath = customBoundaryPaths[i];
+      onProgress(`🧭 Loading custom boundary ${i + 1}/${total}: ${customBoundaryPath}`);
+      const customBoundary = await loadBoundaryGeometryFromFile(customBoundaryPath);
+      const fileBaseName = path.basename(customBoundaryPath, path.extname(customBoundaryPath));
+      const areas = (customBoundary.areas && customBoundary.areas.length)
+        ? customBoundary.areas
+        : [{ geometry: customBoundary.geometry, name: customBoundary.name || fileBaseName, bbox: customBoundary.bbox }];
+      areas.forEach((area, idx) => {
+        customBoundaryAreas.push({
+          geometry: area.geometry,
+          bbox: area.bbox,
+          name: area.name || (areas.length > 1 ? `${fileBaseName} #${idx + 1}` : fileBaseName),
+          sourceFile: fileBaseName,
+        });
+      });
+      onProgress(`  → ${areas.length} custom area(s) found`);
+    }
+    if (!customBoundaryAreas.length) {
+      throw new Error('No valid custom boundary areas were found');
+    }
+    const polygonCoords = customBoundaryAreas.flatMap((area) => {
+      if (!area.geometry) return [];
+      if (area.geometry.type === 'Polygon') return [area.geometry.coordinates];
+      if (area.geometry.type === 'MultiPolygon') return area.geometry.coordinates;
+      return [];
+    });
+    if (!polygonCoords.length) {
+      throw new Error('Custom boundary areas must be polygons');
+    }
+    customBoundaryGeom = polygonCoords.length === 1
+      ? { type: 'Polygon', coordinates: polygonCoords[0] }
+      : { type: 'MultiPolygon', coordinates: polygonCoords };
+    const south = Math.min(...customBoundaryAreas.map((a) => a.bbox.south));
+    const west = Math.min(...customBoundaryAreas.map((a) => a.bbox.west));
+    const north = Math.max(...customBoundaryAreas.map((a) => a.bbox.north));
+    const east = Math.max(...customBoundaryAreas.map((a) => a.bbox.east));
     bbox = {
-      south: customBoundary.bbox.south,
-      west: customBoundary.bbox.west,
-      north: customBoundary.bbox.north,
-      east: customBoundary.bbox.east,
+      south,
+      west,
+      north,
+      east,
       boundaryGeojson: customBoundaryGeom,
-      displayName: territory || customBoundary.name || 'Custom boundary',
+      displayName: territory || (customBoundaryPaths.length === 1 ? customBoundaryAreas[0].sourceFile : 'Custom boundaries'),
     };
-    onProgress(`📐 Custom boundary bbox: ${bbox.south.toFixed(4)},${bbox.west.toFixed(4)} → ${bbox.north.toFixed(4)},${bbox.east.toFixed(4)}`);
+    onProgress(`📐 Custom boundaries bbox: ${bbox.south.toFixed(4)},${bbox.west.toFixed(4)} → ${bbox.north.toFixed(4)},${bbox.east.toFixed(4)}`);
   } else {
     bbox = await getBbox(territory, onProgress, fallbackBbox);
   }
 
   // Always add the territory boundary as a layer — as lines only so it never blocks clicks
-  if (bbox.boundaryGeojson && !customBoundaryPath) {
+  if (bbox.boundaryGeojson && !customBoundaryPaths.length) {
     onProgress(`🗺 Adding territory boundary: ${bbox.displayName}`);
     const g = bbox.boundaryGeojson;
     // Convert polygon rings → MultiLineString so Google Earth renders outline only (no fill intercepts clicks)
@@ -2300,44 +2348,50 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
   // 4. Fetch settlements from HUMDATA (official Ukraine admin boundaries)
   if (layers.includes('settlements')) {
-    if (customBoundaryGeom) {
-      onProgress('🏘 Using provided custom boundary as settlement area…');
-      const customSettlementArea = {
-        type: 'Feature',
-        geometry: customBoundaryGeom,
-        properties: {
-          name: bbox.displayName || territory || 'Custom settlement area',
-          _layer: 'Settlements',
-          _type: 'settlement_area',
-          _source: 'custom_boundary',
-        },
-      };
-      const customSettlement = {
-        ...customSettlementArea,
-        properties: {
-          ...customSettlementArea.properties,
-          _layer: 'Settlements',
-          _type: 'settlement',
-        },
-      };
-      layerMap['Settlements'] = [customSettlement];
-      try {
-        const customBuffer = turfBuffer(customSettlementArea, 0.7, { units: 'kilometers' });
-        if (customBuffer && customBuffer.geometry) {
-          customBuffer.properties = {
-            name: customSettlement.properties.name,
-            buffer_size: '700m',
-            tier: 'large',
-            _layer: 'Settlement Buffers',
-            _type: 'buffer_700m',
+    if (customBoundaryAreas.length) {
+      onProgress(`🏘 Using ${customBoundaryAreas.length} provided custom boundary area(s) as settlements…`);
+      const customSettlements = [];
+      const customBuffers = [];
+      for (const area of customBoundaryAreas) {
+        const customSettlementArea = {
+          type: 'Feature',
+          geometry: area.geometry,
+          properties: {
+            name: area.name || bbox.displayName || territory || 'Custom settlement area',
+            _layer: 'Settlements',
+            _type: 'settlement_area',
             _source: 'custom_boundary',
-          };
-          layerMap['Settlement Buffers'] = [customBuffer];
-          onProgress('  → Created 1 custom settlement area + 1 buffer (700m)');
+          },
+        };
+        const customSettlement = {
+          ...customSettlementArea,
+          properties: {
+            ...customSettlementArea.properties,
+            _layer: 'Settlements',
+            _type: 'settlement',
+          },
+        };
+        customSettlements.push(customSettlement);
+        try {
+          const customBuffer = turfBuffer(customSettlementArea, 0.7, { units: 'kilometers' });
+          if (customBuffer && customBuffer.geometry) {
+            customBuffer.properties = {
+              name: customSettlement.properties.name,
+              buffer_size: '700m',
+              tier: 'large',
+              _layer: 'Settlement Buffers',
+              _type: 'buffer_700m',
+              _source: 'custom_boundary',
+            };
+            customBuffers.push(customBuffer);
+          }
+        } catch (err) {
+          onProgress(`  ⚠ Could not build custom settlement buffer for "${customSettlement.properties.name}": ${err.message}`);
         }
-      } catch (err) {
-        onProgress(`  ⚠ Could not build custom settlement buffer: ${err.message}`);
       }
+      layerMap['Settlements'] = customSettlements;
+      if (customBuffers.length) layerMap['Settlement Buffers'] = customBuffers;
+      onProgress(`  → Created ${customSettlements.length} custom settlement area(s) + ${customBuffers.length} buffer(s) (700m)`);
       // Custom mode intentionally has no settlement pins.
       // Skip external settlement fetch/merge and continue with other requested layers.
     } else {

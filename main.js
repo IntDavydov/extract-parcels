@@ -403,7 +403,7 @@ ipcMain.handle('fetch-osm', async (event, options) => {
       (msg) => event.sender.send('log', msg),
       options.windOptions || null,
       options.fallbackBbox || null,
-      options.customBoundaryPath || null
+      options.customBoundaryPaths || options.customBoundaryPath || null
     );
     return { success: true, path: resultPath };
   } catch (err) {
