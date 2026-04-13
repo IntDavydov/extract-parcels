@@ -89,8 +89,10 @@ async function extractFields(page) {
   const parsed = await page.evaluate(() => {
     const out = {};
     const sectionsOut = [];
+    const rowEntries = [];
     const rows = document.querySelectorAll('div.box-body.table-responsive.no-padding table tbody tr');
     const sectionCounts = {};
+    const rowKeyCounts = {};
     let sectionTitle = 'Без секції';
     let sectionOrdinal = 1;
     let cadnumValue = '';
@@ -149,42 +151,36 @@ async function extractFields(page) {
       const value = clean(cells[1].innerText);
       if (!label) continue;
 
-      const key = `[${sectionName()}] ${label}`;
-      if (!(key in out)) out[key] = value;
-      else if (!out[key] && value) out[key] = value;
-      else if (value && out[key] !== value) {
-        let idx = 2;
-        let altKey = `${key} (${idx})`;
-        while (altKey in out) {
-          idx += 1;
-          altKey = `${key} (${idx})`;
-        }
-        out[altKey] = value;
-      }
+      const baseKey = `[${sectionName()}] ${label}`;
+      rowKeyCounts[baseKey] = (rowKeyCounts[baseKey] || 0) + 1;
+      const key = rowKeyCounts[baseKey] > 1 ? `${baseKey} (${rowKeyCounts[baseKey]})` : baseKey;
+      out[key] = value;
+      rowEntries.push({ section: sectionName(), label, value });
       const sName = sectionName();
       const sectionRef = sectionsOut.find((s) => s.title === sName);
       if (sectionRef) sectionRef.rows.push({ label, value });
       if (!cadnumValue && label.toLowerCase().includes('кадастровий номер')) cadnumValue = value;
     }
 
-    return { fields: out, cadnumValue, sections: sectionsOut };
+    return { fields: out, cadnumValue, sections: sectionsOut, rowEntries };
   });
 
   const result = {};
-  for (const [k, v] of Object.entries(parsed.fields)) {
-    const sectionMatch = String(k).match(/^\[(.*?)\]\s+(.+)$/);
-    if (!sectionMatch) {
-      result[canonicalFieldLabel(k)] = v;
-      continue;
-    }
-    const section = canonicalSectionTitle(sectionMatch[1]);
-    const label = canonicalFieldLabel(sectionMatch[2]);
-    const key = `[${section}] ${label}`;
-    if (!(key in result)) result[key] = v;
-    else if (!result[key] && v) result[key] = v;
+  const fieldOrder = [];
+  const rowEntries = Array.isArray(parsed.rowEntries) ? parsed.rowEntries : [];
+  const canonicalCounts = {};
+  for (const entry of rowEntries) {
+    const section = canonicalSectionTitle(entry.section || 'Без секції');
+    const label = canonicalFieldLabel(entry.label || '');
+    if (!label) continue;
+    const baseKey = `[${section}] ${label}`;
+    canonicalCounts[baseKey] = (canonicalCounts[baseKey] || 0) + 1;
+    const key = canonicalCounts[baseKey] > 1 ? `${baseKey} (${canonicalCounts[baseKey]})` : baseKey;
+    result[key] = normalizeLabel(entry.value || '');
+    fieldOrder.push(key);
   }
   if (parsed.cadnumValue) result[CADNUM_FIELD] = normalizeLabel(parsed.cadnumValue);
-  return { fields: result, sections: parsed.sections || [] };
+  return { fields: result, fieldOrder, sections: parsed.sections || [] };
 }
 
 function detectOutputFormat(outputPath, requestedFormat = null) {
@@ -264,36 +260,47 @@ async function writeDocxReport(results, outputPath, onProgress) {
   return { success: true, outputPath, count: results.length };
 }
 
-function getNonEmptySchemaFields(row) {
+function getSchemaFieldsInOrder(row) {
+  if (Array.isArray(row?.fieldOrder) && row.fieldOrder.length) return [...row.fieldOrder];
   const fields = [];
   for (const [k, v] of Object.entries(row || {})) {
-    if (k === 'cadnum' || k === 'error' || k === 'sections' || k === CADNUM_FIELD) continue;
-    if (!v) continue;
+    if (k === 'cadnum' || k === 'error' || k === 'sections' || k === 'fieldOrder' || k === CADNUM_FIELD) continue;
     fields.push(k);
   }
   return fields;
 }
 
+function hasValue(v) {
+  return normalizeLabel(v || '') !== '';
+}
+
 async function writeCompactExcelReport(results, outputPath, onProgress) {
   const workbook = new ExcelJS.Workbook();
   const fieldFrequency = new Map();
+  const fieldFirstSeen = new Map();
   const rowsWithFields = results.map((row) => {
-    const fields = getNonEmptySchemaFields(row).sort((a, b) => a.localeCompare(b, 'uk'));
-    for (const f of fields) fieldFrequency.set(f, (fieldFrequency.get(f) || 0) + 1);
-    return { row, fields };
+    const fieldsOrdered = getSchemaFieldsInOrder(row);
+    const nonEmptyFields = fieldsOrdered.filter((f) => hasValue(row[f]));
+    for (const f of nonEmptyFields) {
+      fieldFrequency.set(f, (fieldFrequency.get(f) || 0) + 1);
+      if (!fieldFirstSeen.has(f)) fieldFirstSeen.set(f, fieldFirstSeen.size);
+    }
+    for (const f of fieldsOrdered) {
+      if (!fieldFirstSeen.has(f)) fieldFirstSeen.set(f, fieldFirstSeen.size);
+    }
+    return { row, fieldsOrdered };
   });
 
   const frequencyThreshold = Math.max(2, Math.ceil(results.length * 0.35));
   const coreFields = [...fieldFrequency.entries()]
     .filter(([, cnt]) => cnt >= frequencyThreshold)
     .map(([f]) => f)
-    .sort((a, b) => a.localeCompare(b, 'uk'));
+    .sort((a, b) => (fieldFirstSeen.get(a) || 0) - (fieldFirstSeen.get(b) || 0));
 
   const mainRows = [];
   const outlierRows = [];
   for (const item of rowsWithFields) {
-    const have = new Set(item.fields);
-    const missingCoreCount = coreFields.reduce((acc, f) => acc + (have.has(f) ? 0 : 1), 0);
+    const missingCoreCount = coreFields.reduce((acc, f) => acc + (hasValue(item.row[f]) ? 0 : 1), 0);
     if (coreFields.length > 0 && missingCoreCount >= 3) outlierRows.push(item);
     else mainRows.push(item);
   }
@@ -338,14 +345,22 @@ async function writeCompactExcelReport(results, outputPath, onProgress) {
   };
 
   if (mainRows.length) {
-    const extraMainFields = [...new Set(mainRows.flatMap((x) => x.fields.filter((f) => !coreFields.includes(f))))];
-    writeSheet('Main', mainRows, [...coreFields, ...extraMainFields].sort((a, b) => a.localeCompare(b, 'uk')));
+    const extraMainFields = [];
+    const seen = new Set(coreFields);
+    for (const item of mainRows) {
+      for (const f of item.fieldsOrdered) {
+        if (seen.has(f)) continue;
+        seen.add(f);
+        extraMainFields.push(f);
+      }
+    }
+    writeSheet('Main', mainRows, [...coreFields, ...extraMainFields]);
   }
 
   outlierRows.forEach((item, idx) => {
     const cad = String(item.row[CADNUM_FIELD] || item.row.cadnum || `Outlier_${idx + 1}`);
     const safeCad = cad.replace(/[\\/*?:[\]]/g, '_').slice(0, 20);
-    writeSheet(`Diff_${safeCad}`, [item], item.fields);
+    writeSheet(`Diff_${safeCad}`, [item], item.fieldsOrdered);
   });
 
   if (!mainRows.length && !outlierRows.length) workbook.addWorksheet(makeSheetName('Main'));
@@ -488,6 +503,7 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
           cadnum,
           [CADNUM_FIELD]: cadnum,
           ...data.fields,
+          fieldOrder: data.fieldOrder || [],
           sections: data.sections || [],
           error: filled === 0 ? noDataMessage : '',
         };
