@@ -277,20 +277,32 @@ document.getElementById('btn-pick-folder').addEventListener('click', async () =>
 });
 
 // ── Layer checkboxes ───────────────────────────────────────
+function updateLayerSettingsVisibility() {
+  const windChecked = !!document.getElementById('layer-wind')?.checked;
+  const forestsChecked = !!document.getElementById('layer-forests')?.checked;
+  const windSettings = document.getElementById('wind-settings');
+  const forestSettings = document.getElementById('forest-settings');
+  if (windSettings) windSettings.style.display = windChecked ? 'block' : 'none';
+  if (forestSettings) forestSettings.style.display = forestsChecked ? 'block' : 'none';
+}
+
 document.getElementById('btn-select-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = true);
-  document.getElementById('wind-settings').style.display = 'block';
+  updateLayerSettingsVisibility();
   checkStartReady();
 });
 
 document.getElementById('btn-clear-all').addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = false);
-  document.getElementById('wind-settings').style.display = 'none';
+  updateLayerSettingsVisibility();
   checkStartReady();
 });
 
 document.getElementById('layer-wind').addEventListener('change', (e) => {
-  document.getElementById('wind-settings').style.display = e.target.checked ? 'block' : 'none';
+  updateLayerSettingsVisibility();
+});
+document.getElementById('layer-forests').addEventListener('change', () => {
+  updateLayerSettingsVisibility();
 });
 
 function applyFullParcelsMode(enabled) {
@@ -301,7 +313,7 @@ function applyFullParcelsMode(enabled) {
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = enabled; if (enabled) cb.checked = false; });
   document.getElementById('btn-select-all').disabled = enabled;
   document.getElementById('btn-clear-all').disabled  = enabled;
-  if (enabled) document.getElementById('wind-settings').style.display = 'none';
+  if (enabled) updateLayerSettingsVisibility();
   if (enabled && boundaryFiles.length) { boundaryFiles = []; renderBoundaryList(); }
   // Disable ... multi-area when in full-parcels mode
   if (enabled) {
@@ -309,6 +321,7 @@ function applyFullParcelsMode(enabled) {
     const dotIdx = val.indexOf('...');
     if (dotIdx >= 0) areaInput.value = val.slice(0, dotIdx).trim();
   }
+  updateLayerSettingsVisibility();
   checkStartReady();
 }
 
@@ -331,20 +344,21 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
     const label = boundaryField.querySelector('label');
     label.innerHTML = 'Custom settlement boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(one or multiple files; polygons/closed paths are supported)</span>';
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    document.getElementById('wind-settings').style.display = 'none';
+    updateLayerSettingsVisibility();
   } else if (isKadastr) {
     const boundaryField = document.getElementById('field-boundary');
     boundaryField.style.display = 'block';
     const label = boundaryField.querySelector('label');
     label.innerHTML = 'Boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(parcel scraping; single or multiple files)</span>';
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    document.getElementById('wind-settings').style.display = 'none';
+    updateLayerSettingsVisibility();
   } else if (!isCadnum) {
     const boundaryField = document.getElementById('field-boundary');
     const label = boundaryField.querySelector('label');
     label.innerHTML = 'Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span>';
   }
-  
+
+  updateLayerSettingsVisibility();
   checkStartReady();
 });
 
@@ -369,7 +383,10 @@ document.getElementById('area-name').addEventListener('input', () => {
 
 // Track every individual checkbox change
 document.querySelectorAll('input[name="layer"]').forEach(cb => {
-  cb.addEventListener('change', checkStartReady);
+  cb.addEventListener('change', () => {
+    updateLayerSettingsVisibility();
+    checkStartReady();
+  });
 });
 
 // ── Start / Stop ───────────────────────────────────────────
@@ -580,7 +597,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
   const windOptions = layers.includes('wind') ? {
     hubHeight: parseInt(document.getElementById('wind-hub-height').value, 10),
-  } : null;
+  } : {};
+  if (layers.includes('forests')) {
+    const forestMeters = parseInt(document.getElementById('forest-buffer-meters').value, 10);
+    windOptions.forestBufferMeters = Number.isFinite(forestMeters) && forestMeters > 0 ? forestMeters : 700;
+  }
+  const layerOptions = Object.keys(windOptions).length ? windOptions : null;
 
   document.getElementById('main-log').textContent = '';
   setBusy(true);
@@ -800,7 +822,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const areaOutput   = await window.api.resolveOutputPath(outputFolder, areaFilename);
       const osmResult = await window.api.fetchOSM({
         territory: area, layers, outputPath: areaOutput,
-        format: 'kmz', windOptions, fallbackBbox: null,
+        format: 'kmz', windOptions: layerOptions, fallbackBbox: null,
       });
       if (!osmResult.success) { appendLog(`[ERROR] Failed for "${area}": ${osmResult.error}`); continue; }
       appendLog(`✅ ${area} → ${areaOutput}`);
@@ -839,7 +861,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     appendLog(`\n━━━ Phase 2: OSM layers [${layers.join(', ')}] ━━━`);
     const osmResult = await window.api.fetchOSM({
       territory, layers, outputPath: osmTemp, format: 'kmz',
-      windOptions, fallbackBbox: boundaryBbox?.bbox || null,
+      windOptions: layerOptions, fallbackBbox: boundaryBbox?.bbox || null,
     });
     if (!osmResult.success) {
       appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);

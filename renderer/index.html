@@ -68,7 +68,7 @@
             <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
             <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
             <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
-            <label><input type="checkbox" name="layer" value="forests" /> Forests</label>
+            <label><input type="checkbox" name="layer" value="forests" id="layer-forests" /> Forests</label>
             <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
             <label><input type="checkbox" name="layer" value="airports" /> ✈ Airoports + 45km buffer</label>
             <label><input type="checkbox" name="layer" value="nuclear_plants" /> ☢ Nuclear Power Plants + 30km buffer</label>
@@ -83,6 +83,13 @@
                 <option value="100" selected>100 m (recommended)</option>
                 <option value="150">150 m</option>
               </select>
+            </div>
+          </div>
+
+          <div id="forest-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
+            <div class="field" style="margin-bottom:0;">
+              <label for="forest-buffer-meters" style="font-size:12px;">Forest buffer distance (m)</label>
+              <input id="forest-buffer-meters" type="number" min="1" step="1" value="700" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" />
             </div>
           </div>
 

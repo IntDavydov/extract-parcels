@@ -2247,14 +2247,27 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       });
     }
 
-    // Forest Buffers: 700m around forest polygons
+    // Forest Buffers: configurable distance (default 700m) around forest polygons
     if (layerMap['Forests']) {
+      const forestBufferMetersRaw = Number(windOptions && windOptions.forestBufferMeters);
+      const forestBufferMeters = Number.isFinite(forestBufferMetersRaw) && forestBufferMetersRaw > 0
+        ? forestBufferMetersRaw
+        : 700;
+      const forestBufferKm = forestBufferMeters / 1000;
       const forestBufs = layerMap['Forests']
         .filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'))
         .map(f => {
           try {
-            const buf = turfBuffer(f, 0.7, { units: 'kilometers' });
-            return buf ? { ...buf, properties: { ...f.properties, _layer: 'Forest Buffers', _type: 'buffer_700m' } } : null;
+            const buf = turfBuffer(f, forestBufferKm, { units: 'kilometers' });
+            return buf ? {
+              ...buf,
+              properties: {
+                ...f.properties,
+                buffer_size: `${Math.round(forestBufferMeters)}m`,
+                _layer: 'Forest Buffers',
+                _type: `buffer_${Math.round(forestBufferMeters)}m`,
+              },
+            } : null;
           } catch (_) { return null; }
         }).filter(Boolean);
       if (forestBufs.length) layerMap['Forest Buffers'] = forestBufs;
