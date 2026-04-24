@@ -645,11 +645,13 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (isKadastrMode && isMultiKmz) {
     const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
     const kmzPaths = [], folderNames = [];
+    const cadCsvPaths = [];
 
     for (let i = 0; i < boundaryFiles.length; i++) {
       const bf = boundaryFiles[i];
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
       const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
+      const tempCadCsvPath = `${outputFolder}/_kadastr_temp_${i}_cadnums.csv`;
 
       const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
@@ -657,6 +659,14 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const scraperOut = `${outputFolder}/land_plots.kmz`;
       const fsRename = await window.api.mergeKmz([scraperOut], tempPath, true);
       if (!fsRename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); continue; }
+
+      const scraperCadCsv = `${outputFolder}/land_plots_cadnums.csv`;
+      const csvCopy = await window.api.mergeCadnumCsvs([scraperCadCsv], tempCadCsvPath, false);
+      if (!csvCopy.success) {
+        appendLog(`⚠ Could not save temp cadnums CSV for ${bf.name}: ${csvCopy.error || 'unknown error'}`);
+      } else {
+        cadCsvPaths.push(tempCadCsvPath);
+      }
 
       kmzPaths.push(tempPath);
       folderNames.push(folderName);
@@ -666,6 +676,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     appendLog('\n📦 Merging into kadastr.kmz…');
     const mergeResult = await window.api.mergeKmz(kmzPaths, finalOutput, true, folderNames);
+    if (cadCsvPaths.length) {
+      const finalCadCsv = `${outputFolder}/land_plots_cadnums.csv`;
+      const cadMerge = await window.api.mergeCadnumCsvs(cadCsvPaths, finalCadCsv, true);
+      if (cadMerge.success) appendLog(`📊 Cadnums merged → ${finalCadCsv} (${cadMerge.count})`);
+      else appendLog(`⚠ Cadnums merge failed: ${cadMerge.error || 'unknown error'}`);
+    }
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);

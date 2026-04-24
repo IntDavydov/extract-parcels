@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   mergeKmz: (paths, outputPath, cleanup = true, areaNames, docName) =>
     ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames, docName }),
 
+  mergeCadnumCsvs: (paths, outputPath, cleanup = true) =>
+    ipcRenderer.invoke('merge-cadnum-csvs', { paths, outputPath, cleanup }),
+
   mergeKmzFiles: (sourceDir, outputPath) =>
     ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
 

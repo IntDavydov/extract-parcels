@@ -369,6 +369,37 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
   }
 });
 
+ipcMain.handle('merge-cadnum-csvs', (_event, { paths, outputPath, cleanup = true }) => {
+  try {
+    const cadnums = [];
+    const seen = new Set();
+    for (const p of (paths || [])) {
+      if (!p || !fs.existsSync(p)) continue;
+      const text = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = String(rawLine || '').trim();
+        if (!line) continue;
+        if (/^#?,?cadnum/i.test(line)) continue;
+        const parts = line.split(',');
+        const cadnum = (parts.length > 1 ? parts.slice(1).join(',') : parts[0]).trim();
+        if (!cadnum || seen.has(cadnum)) continue;
+        seen.add(cadnum);
+        cadnums.push(cadnum);
+      }
+    }
+    const rows = ['#,cadnum', ...cadnums.map((cadnum, idx) => `${idx + 1},${cadnum}`)];
+    fs.writeFileSync(outputPath, '\uFEFF' + rows.join('\r\n'), 'utf8');
+    if (cleanup) {
+      for (const p of (paths || [])) {
+        try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+      }
+    }
+    return { success: true, outputPath, count: cadnums.length };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, outputXlsx, format }) => {
   try {
     const onProgress = (msg) => event.sender.send('log', msg);

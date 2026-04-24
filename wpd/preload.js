@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   stopScraping: () => ipcRenderer.send('stop-scraping'),
   mergeKmz: (paths, outputPath, cleanup = true, areaNames, docName) =>
     ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames, docName }),
+  mergeCadnumCsvs: (paths, outputPath, cleanup = true) =>
+    ipcRenderer.invoke('merge-cadnum-csvs', { paths, outputPath, cleanup }),
   openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
   openKmlDialog: () => ipcRenderer.invoke('open-kml-dialog'),
   openCsvDialog: () => ipcRenderer.invoke('open-csv-dialog'),
