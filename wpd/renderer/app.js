@@ -8,7 +8,7 @@ let outputFolder = '';
 let boundaryFiles = [];
 let csvPath = '';
 let elandOutputPath = '';
-let elandOutputFormat = 'xlsx';
+let elandOutputFormat = 'xlsx_full';
 let userStopped = false;
 
 function flushLog() {
@@ -289,7 +289,7 @@ function syncElandOutputControls() {
 }
 
 document.getElementById('eland-output-format').addEventListener('change', (e) => {
-  elandOutputFormat = String(e.target.value || 'xlsx');
+  elandOutputFormat = String(e.target.value || 'xlsx_full');
   elandOutputPath = '';
   document.getElementById('output-file-display').textContent = 'not selected';
   syncElandOutputControls();

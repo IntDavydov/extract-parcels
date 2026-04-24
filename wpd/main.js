@@ -376,7 +376,10 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, output
     const chromePath = await ensurePuppeteerChrome();
     if (chromePath) onProgress(`✅ Chrome: ${chromePath}`);
     const targetPath = outputPath || outputXlsx;
-    return await lookupEland(csvPath, targetPath, onProgress, chromePath, { format });
+    return await lookupEland(csvPath, targetPath, onProgress, chromePath, {
+      format,
+      partialOptionsPath: path.join(app.getAppPath(), 'info', 'e-land-options.xlsx'),
+    });
   } catch (err) {
     event.sender.send('log', `❌ e.land lookup failed: ${err.message}`);
     return { success: false, error: err.message };

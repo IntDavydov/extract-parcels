@@ -889,7 +889,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 let preTabOutputFolder = '';
 let elandCsvPath = '';
 let elandBusy    = false;
-let elandOutputFormat = 'xlsx';
+let elandOutputFormat = 'xlsx_full';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
 
@@ -923,7 +923,7 @@ document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async 
 });
 
 document.getElementById('eland-output-format').addEventListener('change', (e) => {
-  elandOutputFormat = String(e.target.value || 'xlsx');
+  elandOutputFormat = String(e.target.value || 'xlsx_full');
 });
 
 document.getElementById('btn-eland-start').addEventListener('click', async () => {

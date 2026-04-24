@@ -3,6 +3,7 @@
 const puppeteer = require('puppeteer');
 const ExcelJS   = require('exceljs');
 const fs        = require('fs');
+const path      = require('path');
 const {
   Document,
   Packer,
@@ -20,6 +21,7 @@ const ELAND_URL = 'https://e.land.gov.ua/back/cadaster/';
 const CADNUM_FIELD = 'Кадастровий номер земельної ділянки';
 const TABLE_ROWS_SELECTOR = 'div.box-body.table-responsive.no-padding table tbody tr';
 const DOCX_HEADER_FILL = '3C8DBC';
+const PARTIAL_OPTIONS_REL_PATH = path.join('info', 'e-land-options.xlsx');
 
 function readCadnums(csvPath) {
   const text = fs.readFileSync(csvPath, 'utf8').replace(/^\uFEFF/, '');
@@ -185,8 +187,10 @@ async function extractFields(page) {
 
 function detectOutputFormat(outputPath, requestedFormat = null) {
   const fmt = String(requestedFormat || '').trim().toLowerCase();
-  if (fmt === 'docx' || fmt === 'xlsx') return fmt;
-  return String(outputPath || '').toLowerCase().endsWith('.docx') ? 'docx' : 'xlsx';
+  if (fmt === 'docx') return 'docx';
+  if (fmt === 'xlsx_partial') return 'xlsx_partial';
+  if (fmt === 'xlsx' || fmt === 'xlsx_full') return 'xlsx_full';
+  return String(outputPath || '').toLowerCase().endsWith('.docx') ? 'docx' : 'xlsx_full';
 }
 
 function buildElandDocxRows(entry) {
@@ -370,6 +374,114 @@ async function writeCompactExcelReport(results, outputPath, onProgress) {
   return { success: true, outputPath, count: results.length };
 }
 
+function toCellText(v) {
+  if (v == null) return '';
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map((x) => x.text || '').join('');
+    if (v.text) return String(v.text);
+    if (v.result != null) return String(v.result);
+  }
+  return String(v);
+}
+
+function resolvePartialOptionsPath(explicitPath = null) {
+  const candidates = [
+    explicitPath,
+    path.join(process.cwd(), PARTIAL_OPTIONS_REL_PATH),
+    path.resolve(__dirname, '..', PARTIAL_OPTIONS_REL_PATH),
+    path.resolve(__dirname, '..', '..', PARTIAL_OPTIONS_REL_PATH),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch (_) {}
+  }
+  throw new Error(`Partial schema file not found: ${PARTIAL_OPTIONS_REL_PATH}`);
+}
+
+async function loadPartialOptionsFields(explicitPath = null) {
+  const optionsPath = resolvePartialOptionsPath(explicitPath);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(optionsPath);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error(`No worksheets in ${optionsPath}`);
+
+  const fields = [];
+  const seen = new Set();
+  ws.eachRow((row) => {
+    const values = (row.values || []).slice(1).map((v) => normalizeLabel(toCellText(v)));
+    const labelRaw = values.find((v) => v && !/^\d+$/.test(v));
+    if (!labelRaw) return;
+    const field = canonicalFieldLabel(labelRaw);
+    if (!field || seen.has(field)) return;
+    seen.add(field);
+    fields.push(field);
+  });
+  if (!fields.length) throw new Error(`No fields found in ${optionsPath}`);
+  return fields;
+}
+
+function normalizeFieldKeyBaseLabel(fieldKey) {
+  const plain = normalizeLabel(String(fieldKey || '').replace(/\s*\(\d+\)\s*$/, ''));
+  const m = plain.match(/^\[[^\]]+\]\s+(.+)$/);
+  return canonicalFieldLabel(m ? m[1] : plain);
+}
+
+function getOrderedRowFieldKeys(row) {
+  const ordered = getSchemaFieldsInOrder(row);
+  const seen = new Set(ordered);
+  const extras = Object.keys(row || {}).filter((k) =>
+    !seen.has(k) && k !== 'cadnum' && k !== 'error' && k !== 'sections' && k !== 'fieldOrder' && k !== CADNUM_FIELD
+  );
+  return ordered.concat(extras);
+}
+
+function getPartialFieldValue(row, fieldLabel) {
+  const target = canonicalFieldLabel(fieldLabel);
+  if (target === CADNUM_FIELD) return normalizeLabel(row[CADNUM_FIELD] || row.cadnum || '');
+  if (hasValue(row[target])) return normalizeLabel(row[target]);
+  const keys = getOrderedRowFieldKeys(row);
+  for (const key of keys) {
+    if (normalizeFieldKeyBaseLabel(key) !== target) continue;
+    const value = normalizeLabel(row[key] || '');
+    if (value) return value;
+  }
+  return '';
+}
+
+async function writePartialExcelReport(results, outputPath, onProgress, explicitOptionsPath = null) {
+  const workbook = new ExcelJS.Workbook();
+  const schemaFields = await loadPartialOptionsFields(explicitOptionsPath);
+  const fields = schemaFields.filter((f) => f !== CADNUM_FIELD);
+  const sheet = workbook.addWorksheet('Main');
+  const headers = ['#', CADNUM_FIELD, ...fields, 'Помилка'];
+  sheet.addRow(headers);
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+  sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }];
+
+  results.forEach((row, idx) => {
+    sheet.addRow([
+      idx + 1,
+      normalizeLabel(row[CADNUM_FIELD] || row.cadnum || ''),
+      ...fields.map((f) => getPartialFieldValue(row, f)),
+      row.error || '',
+    ]);
+  });
+
+  sheet.columns.forEach((col) => {
+    let maxLen = 12;
+    col.eachCell((cell) => {
+      if (cell.value) maxLen = Math.max(maxLen, String(cell.value).length);
+    });
+    col.width = Math.min(maxLen + 2, 60);
+  });
+
+  await workbook.xlsx.writeFile(outputPath);
+  onProgress(`✅ Saved ${results.length} records in 1 sheet (partial schema) → ${outputPath}`);
+  return { success: true, outputPath, count: results.length };
+}
+
 let _stopped = false;
 
 async function lookupEland(csvPath, outputPath, onProgress, chromePath, options = {}) {
@@ -533,8 +645,13 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
       return writeDocxReport(results, outputPath, onProgress);
     }
 
-    onProgress('📊 Writing compact Excel file…');
-    await writeCompactExcelReport(results, outputPath, onProgress);
+    if (outputFormat === 'xlsx_partial') {
+      onProgress('📊 Writing partial Excel file…');
+      await writePartialExcelReport(results, outputPath, onProgress, options.partialOptionsPath || null);
+    } else {
+      onProgress('📊 Writing full Excel file…');
+      await writeCompactExcelReport(results, outputPath, onProgress);
+    }
     await browser.close();
     return { success: true, outputPath, count: results.length };
 
