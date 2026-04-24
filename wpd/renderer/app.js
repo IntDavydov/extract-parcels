@@ -296,24 +296,16 @@ document.getElementById('btn-pick-csv').addEventListener('click', async () => {
   }
 });
 
-function syncElandOutputControls() {
-  const isDocx = elandOutputFormat === 'docx';
-  document.getElementById('output-file-label').innerHTML = isDocx
-    ? 'Output DOCX <span style="color:#e05;">*required</span>'
-    : 'Output XLSX <span style="color:#e05;">*required</span>';
-}
-
 document.getElementById('eland-output-format').addEventListener('change', (e) => {
   elandOutputFormat = String(e.target.value || 'xlsx_full');
   elandOutputPath = '';
   document.getElementById('output-file-display').textContent = 'not selected';
-  syncElandOutputControls();
   checkReady();
 });
 
 document.getElementById('btn-pick-output-file').addEventListener('click', async () => {
-  const ext = elandOutputFormat === 'docx' ? 'docx' : 'xlsx';
-  const kind = elandOutputFormat === 'docx' ? 'Word' : 'Excel';
+  const ext = 'xlsx';
+  const kind = 'Excel';
   const result = await window.api.saveDialog({
     title: 'Save e.land lookup result',
     defaultPath: elandOutputPath || `eland_lookup.${ext}`,
@@ -347,5 +339,3 @@ document.getElementById('btn-eland-stop').addEventListener('click', () => {
   window.api.stopElandLookup();
   appendLog('⛔ e.land stop requested');
 });
-
-syncElandOutputControls();

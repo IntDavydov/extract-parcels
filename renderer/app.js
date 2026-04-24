@@ -950,8 +950,7 @@ document.getElementById('btn-eland-start').addEventListener('click', async () =>
 
   const csvName = elandCsvPath.split(/[\\/]/).pop() || 'cadnums.csv';
   const baseName = csvName.replace(/\.csv$/i, '') || 'cadnums';
-  const extension = elandOutputFormat === 'docx' ? 'docx' : 'xlsx';
-  const outputPath = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + `_eland.${extension}`;
+  const outputPath = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + `_eland.xlsx`;
   const result = await window.api.startElandLookup(elandCsvPath, outputPath, { format: elandOutputFormat });
   if (result && result.success) window.api.showInFolder(result.outputPath);
 

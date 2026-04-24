@@ -193,6 +193,16 @@ function detectOutputFormat(outputPath, requestedFormat = null) {
   return String(outputPath || '').toLowerCase().endsWith('.docx') ? 'docx' : 'xlsx_full';
 }
 
+function toDocxOutputPath(outputPath) {
+  const parsed = path.parse(String(outputPath || 'eland_lookup.xlsx'));
+  return path.join(parsed.dir, `${parsed.name}.docx`);
+}
+
+function toXlsxOutputPath(outputPath) {
+  const parsed = path.parse(String(outputPath || 'eland_lookup.docx'));
+  return path.join(parsed.dir, `${parsed.name}.xlsx`);
+}
+
 function buildElandDocxRows(entry) {
   const rows = [];
   for (const section of (entry.sections || [])) {
@@ -645,15 +655,22 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
       return writeDocxReport(results, outputPath, onProgress);
     }
 
+    const excelOutputPath = String(outputPath || '').toLowerCase().endsWith('.docx')
+      ? toXlsxOutputPath(outputPath)
+      : outputPath;
+
     if (outputFormat === 'xlsx_partial') {
       onProgress('📊 Writing partial Excel file…');
-      await writePartialExcelReport(results, outputPath, onProgress, options.partialOptionsPath || null);
+      await writePartialExcelReport(results, excelOutputPath, onProgress, options.partialOptionsPath || null);
     } else {
       onProgress('📊 Writing full Excel file…');
-      await writeCompactExcelReport(results, outputPath, onProgress);
+      await writeCompactExcelReport(results, excelOutputPath, onProgress);
     }
+    const docxOutputPath = toDocxOutputPath(excelOutputPath);
+    onProgress('📄 Writing Word document…');
+    await writeDocxReport(results, docxOutputPath, onProgress);
     await browser.close();
-    return { success: true, outputPath, count: results.length };
+    return { success: true, outputPath: excelOutputPath, docxOutputPath, count: results.length };
 
   } catch (err) {
     await browser.close().catch(() => {});
