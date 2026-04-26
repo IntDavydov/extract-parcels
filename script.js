@@ -565,6 +565,11 @@ function mergeFeatures() {
         finalFeature = unioned;
         merged++;
       }
+      // Set cadnum as the name property for the feature
+      if (finalFeature && cadnum) {
+        if (!finalFeature.properties) finalFeature.properties = {};
+        finalFeature.properties.name = cadnum;
+      }
       results.push(finalFeature);
     } catch (err) {
       console.warn(`Failed to merge parcel ${cadnum}:`, err.message);
