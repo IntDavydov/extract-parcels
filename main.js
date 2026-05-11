@@ -463,6 +463,26 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
     if (!parsedKmls.length) throw new Error('No valid KMZ files found to merge');
 
     const escXmlAttr = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const getFolderOwnName = (folderXml) => {
+      const m = folderXml.match(/^<Folder[^>]*>\s*<name>([\s\S]*?)<\/name>/i);
+      return m ? m[1].trim() : null;
+    };
+    const getFolderInnerXml = (folderXml) => folderXml
+      .replace(/^<Folder[^>]*>\s*<name>[\s\S]*?<\/name>/i, '')
+      .replace(/<\/Folder>\s*$/i, '');
+    const flattenParcelsAreaFolders = (areaFolders, areaName) => {
+      // Kadastr multi-merge inputs often look like:
+      // Parcels -> {areaName} -> [Parcel Boundaries, Parcels]
+      // We flatten this to: {areaName} -> [Parcel Boundaries, Parcels]
+      if (!areaName || areaFolders.length !== 1) return null;
+      const topFolder = areaFolders[0];
+      if (getFolderOwnName(topFolder) !== 'Parcels') return null;
+      const childFolders = extractElements(getFolderInnerXml(topFolder), 'Folder');
+      if (childFolders.length !== 1) return null;
+      const coordsFolder = childFolders[0];
+      if (getFolderOwnName(coordsFolder) !== areaName) return null;
+      return getFolderInnerXml(coordsFolder);
+    };
     const useAreaFolders = areaNames && areaNames.length > 0;
 
     // Single-file with no area wrapping: just copy
@@ -496,10 +516,13 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
         // Wrap all this KMZ's content in a parent folder named after the area
         const areaGroundOverlays = extractElements(kml, 'GroundOverlay');
         const areaFolders        = extractElements(kml, 'Folder');
+        const flattenedAreaContent = flattenParcelsAreaFolders(areaFolders, areaName);
+        const folderContent = flattenedAreaContent !== null
+          ? areaGroundOverlays.join('') + flattenedAreaContent
+          : areaGroundOverlays.join('') + areaFolders.join('');
         folders.push(
           `<Folder><name>${escXmlAttr(areaName)}</name>` +
-          areaGroundOverlays.join('') +
-          areaFolders.join('') +
+          folderContent +
           `</Folder>`
         );
       } else {
@@ -623,8 +646,86 @@ ipcMain.handle('open-csv-dialog', async () => {
   return result;
 });
 
+ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFolder }) => {
+  const JSZip = require('jszip');
+  try {
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      throw new Error('Source KML/KMZ file was not found');
+    }
+    if (!outputFolder || !fs.existsSync(outputFolder)) {
+      throw new Error('Output folder was not found');
+    }
+
+    let kmlText;
+    if (sourcePath.toLowerCase().endsWith('.kmz')) {
+      const buf = fs.readFileSync(sourcePath);
+      const zip = await JSZip.loadAsync(buf);
+      const kmlName = Object.keys(zip.files).find((n) => n.toLowerCase().endsWith('.kml'));
+      if (!kmlName) throw new Error('No .kml inside KMZ');
+      kmlText = await zip.files[kmlName].async('text');
+    } else {
+      kmlText = fs.readFileSync(sourcePath, 'utf8');
+    }
+
+    const polygonBlocks = [...kmlText.matchAll(/<Polygon[\s\S]*?<\/Polygon>/gi)].map((m) => m[0]);
+    if (!polygonBlocks.length) throw new Error('No Polygon geometries found in file');
+
+    const rows = ['polygon_index,ring_index,point_index,latitude,longitude,combined_coordinates'];
+    let pointCount = 0;
+    let usedPolygonCount = 0;
+
+    for (let polygonIdx = 0; polygonIdx < polygonBlocks.length; polygonIdx++) {
+      const polygonXml = polygonBlocks[polygonIdx];
+      const ringMatches = [...polygonXml.matchAll(/<LinearRing[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>[\s\S]*?<\/LinearRing>/gi)];
+      if (!ringMatches.length) continue;
+      let polygonHadPoints = false;
+      for (let ringIdx = 0; ringIdx < ringMatches.length; ringIdx++) {
+        const coordText = String(ringMatches[ringIdx][1] || '').trim();
+        if (!coordText) continue;
+        const coordParts = coordText.split(/\s+/).filter(Boolean);
+        for (let pointIdx = 0; pointIdx < coordParts.length; pointIdx++) {
+          const [lonRaw, latRaw] = coordParts[pointIdx].split(',');
+          const lon = Number(lonRaw);
+          const lat = Number(latRaw);
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+          rows.push(`${polygonIdx + 1},${ringIdx + 1},${pointIdx + 1},${lat},${lon},"${lat}, ${lon}"`);
+          pointCount++;
+          polygonHadPoints = true;
+        }
+      }
+      if (polygonHadPoints) usedPolygonCount++;
+    }
+
+    if (!pointCount) throw new Error('No valid polygon coordinates found in file');
+
+    const safeBase = path
+      .basename(sourcePath, path.extname(sourcePath))
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+      .trim() || 'polygon_coordinates';
+    let outputPath = path.join(outputFolder, `${safeBase}_polygon_coordinates.csv`);
+    if (fs.existsSync(outputPath)) {
+      for (let i = 1; i < 1000; i++) {
+        const candidate = path.join(outputFolder, `${safeBase}_polygon_coordinates_${i}.csv`);
+        if (!fs.existsSync(candidate)) {
+          outputPath = candidate;
+          break;
+        }
+      }
+    }
+
+    fs.writeFileSync(outputPath, rows.join('\n'), 'utf8');
+    return { success: true, outputPath, pointCount, polygonCount: usedPolygonCount };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('show-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('open-path', async (_event, targetPath) => {
+  return shell.openPath(targetPath);
 });
 
 ipcMain.handle('resolve-bbox', async (_event, territory) => {

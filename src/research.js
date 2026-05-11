@@ -1,14 +1,23 @@
-'use strict';
+"use strict";
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, httpGet, httpPost, polygonAreaM2 } = require('./osm');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const {
+  getBbox,
+  fetchNatureReservesFromPZF,
+  fetchEmeraldFromEEA,
+  fetchWindHeatmap,
+  httpGet,
+  httpPost,
+  polygonAreaM2,
+} = require("./osm");
 
 // ── Overpass endpoint ─────────────────────────────────────
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-const OVERPASS_ALT = 'https://overpass.kumi.systems/api/interpreter';
-const OVERPASS_ALT_2 = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const OVERPASS_ALT = "https://overpass.kumi.systems/api/interpreter";
+const OVERPASS_ALT_2 =
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter";
 const OVERPASS_TIMEOUT_FAST_MS = 35000;
 const OVERPASS_TIMEOUT_NORMAL_MS = 55000;
 const OVERPASS_FOREST_TOTAL_TIMEOUT_MS = 25000;
@@ -22,95 +31,105 @@ const TASK_TIMEOUTS_MS = {
   page: 60000,
 };
 const LOCAL_WIND_TIFF_CANDIDATES = [
-  'test-files/UKR_wind-speed_150m.tif',
-  'test-files/ukr_wind_speed_150m.tif',
-  'test-files/wind-speed-150m-ukraine.tif',
-  'test-files/gwa_wind_150m.tif',
-  'UKR_wind-speed_150m.tif',
-  'ukr_wind_speed_150m.tif',
-  'wind-speed-150m-ukraine.tif',
-  'gwa_wind_150m.tif',
+  "test-files/UKR_wind-speed_150m.tif",
+  "test-files/ukr_wind_speed_150m.tif",
+  "test-files/wind-speed-150m-ukraine.tif",
+  "test-files/gwa_wind_150m.tif",
+  "UKR_wind-speed_150m.tif",
+  "ukr_wind_speed_150m.tif",
+  "wind-speed-150m-ukraine.tif",
+  "gwa_wind_150m.tif",
 ];
 let _localWindDatasetPromise = null;
 const LOCAL_INFRA_CACHE_CANDIDATES = [
-  'test-files/ukraine-infra-cache.json',
-  'test-files/infra-cache.json',
-  'test-files/ukraine-infra-cache.geojson',
-  'ukraine-infra-cache.json',
-  'infra-cache.json',
-  'ukraine-infra-cache.geojson',
+  "test-files/ukraine-infra-cache.json",
+  "test-files/infra-cache.json",
+  "test-files/ukraine-infra-cache.geojson",
+  "ukraine-infra-cache.json",
+  "infra-cache.json",
+  "ukraine-infra-cache.geojson",
 ];
 let _localInfraCachePromise = null;
-const GENERATED_INFRA_CACHE_PATH = path.join(os.homedir(), '.land-management-cache', 'ukraine-infra-cache.json');
+const GENERATED_INFRA_CACHE_PATH = path.join(
+  os.homedir(),
+  ".land-management-cache",
+  "ukraine-infra-cache.json",
+);
 const LOCAL_PBF_CANDIDATES = [
-  'test-files/ukraine-latest.osm.pbf',
-  'test-files/ukraine.osm.pbf',
-  'test-files/ukraine-latest.pbf',
-  'ukraine-latest.osm.pbf',
-  'ukraine.osm.pbf',
-  'ukraine-latest.pbf',
+  "test-files/ukraine-latest.osm.pbf",
+  "test-files/ukraine.osm.pbf",
+  "test-files/ukraine-latest.pbf",
+  "ukraine-latest.osm.pbf",
+  "ukraine.osm.pbf",
+  "ukraine-latest.pbf",
 ];
 const LOCAL_WORLDCOVER_TIFF_CANDIDATES = [
-  'WORLDCOVER/ESA_WORLDCOVER_10M_2021_V200/MAP',
-  'terrascope_ukraine/WORLDCOVER/ESA_WORLDCOVER_10M_2021_V200/MAP',
-  'extra/ESA_WORLDCOVER_10M_2021_V200/MAP',
-  'test-files/ESA_WorldCover_2021_Ukraine.tif',
-  'test-files/ESA_WorldCover_Ukraine.tif',
-  'test-files/worldcover-ukraine.tif',
-  'test-files/worldcover_ukraine.tif',
-  'ESA_WorldCover_2021_Ukraine.tif',
-  'ESA_WorldCover_Ukraine.tif',
-  'worldcover-ukraine.tif',
-  'worldcover_ukraine.tif',
+  "WORLDCOVER/ESA_WORLDCOVER_10M_2021_V200/MAP",
+  "terrascope_ukraine/WORLDCOVER/ESA_WORLDCOVER_10M_2021_V200/MAP",
+  "extra/ESA_WORLDCOVER_10M_2021_V200/MAP",
+  "test-files/ESA_WorldCover_2021_Ukraine.tif",
+  "test-files/ESA_WorldCover_Ukraine.tif",
+  "test-files/worldcover-ukraine.tif",
+  "test-files/worldcover_ukraine.tif",
+  "ESA_WorldCover_2021_Ukraine.tif",
+  "ESA_WorldCover_Ukraine.tif",
+  "worldcover-ukraine.tif",
+  "worldcover_ukraine.tif",
 ];
 const TREE_COVER_CLASSES = new Set([10]);
 let _localWorldCoverDatasetPromise = null;
 const LOCAL_GEOLOGY_CANDIDATES = [
-  path.join(os.homedir(), '.land-management-cache', 'geology-karst.geojson'),
-  'test-files/geology-karst.geojson',
-  'test-files/geology.geojson',
-  'test-files/karst.geojson',
-  'geology-karst.geojson',
-  'geology.geojson',
-  'karst.geojson',
+  path.join(os.homedir(), ".land-management-cache", "geology-karst.geojson"),
+  "test-files/geology-karst.geojson",
+  "test-files/geology.geojson",
+  "test-files/karst.geojson",
+  "geology-karst.geojson",
+  "geology.geojson",
+  "karst.geojson",
 ];
 let _localGeologyDatasetPromise = null;
 
 const LOCAL_EMERALD_CANDIDATES = [
-  path.join(os.homedir(), '.land-management-cache', 'ukraine-emerald.geojson'),
-  'test-files/ukraine-emerald.geojson',
-  'ukraine-emerald.geojson',
+  path.join(os.homedir(), ".land-management-cache", "ukraine-emerald.geojson"),
+  "test-files/ukraine-emerald.geojson",
+  "ukraine-emerald.geojson",
 ];
 let _localEmeraldDatasetPromise = null;
 
 const LOCAL_PZF_CANDIDATES = [
-  path.join(os.homedir(), '.land-management-cache', 'ukraine-pzf.geojson'),
-  'test-files/ukraine-pzf.geojson',
-  'ukraine-pzf.geojson',
+  path.join(os.homedir(), ".land-management-cache", "ukraine-pzf.geojson"),
+  "test-files/ukraine-pzf.geojson",
+  "ukraine-pzf.geojson",
 ];
 let _localPzfDatasetPromise = null;
 
 function withTimeout(promise, timeoutMs, label) {
   let timer = null;
   const timeoutPromise = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(`${label} timeout after ${Math.round(timeoutMs / 1000)}s`),
+        ),
+      timeoutMs,
+    );
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timer) clearTimeout(timer);
   });
 }
 
-function sanitizeHttpUrl(value, base = '') {
-  if (!value) return '';
+function sanitizeHttpUrl(value, base = "") {
+  if (!value) return "";
   const raw = String(value).trim();
-  if (!raw) return '';
-  if (/^javascript:/i.test(raw) || raw === '#') return '';
+  if (!raw) return "";
+  if (/^javascript:/i.test(raw) || raw === "#") return "";
   try {
     const url = new URL(raw, base || undefined);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
     return url.href;
   } catch (_) {
-    return '';
+    return "";
   }
 }
 
@@ -120,7 +139,7 @@ function parseSearchResultUrls(html) {
   const re = /href="([^"]+)"/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
-    const rawHref = String(m[1] || '').replace(/&amp;/g, '&');
+    const rawHref = String(m[1] || "").replace(/&amp;/g, "&");
     let direct = sanitizeHttpUrl(rawHref);
     if (direct) {
       urls.push(direct);
@@ -129,20 +148,28 @@ function parseSearchResultUrls(html) {
     // DuckDuckGo redirect links look like /l/?kh=-1&uddg=<encoded_url>
     const uddgMatch = rawHref.match(/[?&]uddg=([^&]+)/i);
     if (uddgMatch) {
-      let decoded = '';
-      try { decoded = decodeURIComponent(uddgMatch[1]); } catch (_) { decoded = uddgMatch[1]; }
+      let decoded = "";
+      try {
+        decoded = decodeURIComponent(uddgMatch[1]);
+      } catch (_) {
+        decoded = uddgMatch[1];
+      }
       const u = sanitizeHttpUrl(decoded);
       if (u) urls.push(u);
       continue;
     }
-    const abs = sanitizeHttpUrl(rawHref, 'https://duckduckgo.com');
+    const abs = sanitizeHttpUrl(rawHref, "https://duckduckgo.com");
     if (abs) urls.push(abs);
   }
   // Also catch plain uddg params in scripts/attributes
   const uddgRe = /[?&]uddg=([^&"'\s]+)/gi;
   while ((m = uddgRe.exec(html)) !== null) {
-    let decoded = '';
-    try { decoded = decodeURIComponent(String(m[1]).replace(/&amp;/g, '&')); } catch (_) { decoded = m[1]; }
+    let decoded = "";
+    try {
+      decoded = decodeURIComponent(String(m[1]).replace(/&amp;/g, "&"));
+    } catch (_) {
+      decoded = m[1];
+    }
     const u = sanitizeHttpUrl(decoded);
     if (u) urls.push(u);
   }
@@ -151,46 +178,84 @@ function parseSearchResultUrls(html) {
 
 function transliterateUaToLat(text) {
   const map = {
-    а:'a', б:'b', в:'v', г:'h', ґ:'g', д:'d', е:'e', є:'ye', ж:'zh', з:'z', и:'y', і:'i', ї:'yi', й:'y',
-    к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f', х:'kh', ц:'ts', ч:'ch',
-    ш:'sh', щ:'shch', ь:'', ю:'yu', я:'ya',
+    а: "a",
+    б: "b",
+    в: "v",
+    г: "h",
+    ґ: "g",
+    д: "d",
+    е: "e",
+    є: "ye",
+    ж: "zh",
+    з: "z",
+    и: "y",
+    і: "i",
+    ї: "yi",
+    й: "y",
+    к: "k",
+    л: "l",
+    м: "m",
+    н: "n",
+    о: "o",
+    п: "p",
+    р: "r",
+    с: "s",
+    т: "t",
+    у: "u",
+    ф: "f",
+    х: "kh",
+    ц: "ts",
+    ч: "ch",
+    ш: "sh",
+    щ: "shch",
+    ь: "",
+    ю: "yu",
+    я: "ya",
   };
-  return String(text || '')
+  return String(text || "")
     .toLowerCase()
-    .split('')
-    .map(ch => map[ch] ?? ch)
-    .join('')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .split("")
+    .map((ch) => map[ch] ?? ch)
+    .join("")
+    .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
 
 function isLikelyOfficialHromadaSite(url, hromadaName) {
   if (!url) return false;
   const lower = url.toLowerCase();
-  if (/decentralization\.ua|wikipedia|facebook|instagram|youtube|tiktok|telegram|radar\.|youcontrol|opendatabot|clarity-project|wikidata|google\./i.test(lower)) {
+  if (
+    /decentralization\.ua|wikipedia|facebook|instagram|youtube|tiktok|telegram|radar\.|youcontrol|opendatabot|clarity-project|wikidata|google\./i.test(
+      lower,
+    )
+  ) {
     return false;
   }
   if (/\/search|\/maps|\/news|\/tag\//i.test(lower)) return false;
   const host = (() => {
-    try { return new URL(url).hostname.toLowerCase(); } catch (_) { return ''; }
+    try {
+      return new URL(url).hostname.toLowerCase();
+    } catch (_) {
+      return "";
+    }
   })();
   if (!host) return false;
-  if (host.endsWith('.gov.ua') || host.endsWith('.rada.gov.ua')) return true;
+  if (host.endsWith(".gov.ua") || host.endsWith(".rada.gov.ua")) return true;
   if (/gromada|rada|otg|miska|silska|selyshchna/.test(host)) return true;
 
-  const token = String(hromadaName || '')
+  const token = String(hromadaName || "")
     .toLowerCase()
-    .replace(/['’`"]/g, '')
-    .replace(/[^a-zа-яіїєґ0-9]+/gi, ' ')
+    .replace(/['’`"]/g, "")
+    .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
     .trim()
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2);
   if (!token.length) return false;
-  if (token.some(t => t.length >= 5 && host.includes(t))) return true;
+  if (token.some((t) => t.length >= 5 && host.includes(t))) return true;
 
   const lat = transliterateUaToLat(hromadaName).split(/\s+/).filter(Boolean);
-  return lat.some(t => t.length >= 5 && host.includes(t));
+  return lat.some((t) => t.length >= 5 && host.includes(t));
 }
 
 function shouldUseWebsiteSearchFallback(url, hromadaName) {
@@ -198,54 +263,73 @@ function shouldUseWebsiteSearchFallback(url, hromadaName) {
   if (!safe) return true;
   const lower = safe.toLowerCase();
   if (/\.(pdf|doc|docx|xls|xlsx|zip)(\?|#|$)/i.test(lower)) return true;
-  if (/facebook|instagram|youtube|tiktok|telegram|wikipedia|decentralization\.ua/.test(lower)) return true;
+  if (
+    /facebook|instagram|youtube|tiktok|telegram|wikipedia|decentralization\.ua/.test(
+      lower,
+    )
+  )
+    return true;
   return !isLikelyOfficialHromadaSite(safe, hromadaName);
 }
 
 function isRecoverableOfficialSiteError(message) {
-  const m = String(message || '').toLowerCase();
+  const m = String(message || "").toLowerCase();
   return (
-    m.includes('err_name_not_resolved') ||
-    m.includes('err_connection') ||
-    m.includes('err_timed_out') ||
-    m.includes('err_internet_disconnected') ||
-    m.includes('failed to scrape official site')
+    m.includes("err_name_not_resolved") ||
+    m.includes("err_connection") ||
+    m.includes("err_timed_out") ||
+    m.includes("err_internet_disconnected") ||
+    m.includes("failed to scrape official site")
   );
 }
 
 async function verifyOfficialSiteCandidate(url, hromadaName) {
   try {
-    const html = await httpGet(url, { 'User-Agent': 'land-management-app/1.0' }, 12000);
-    const text = String(html || '').toLowerCase();
+    const html = await httpGet(
+      url,
+      { "User-Agent": "land-management-app/1.0" },
+      12000,
+    );
+    const text = String(html || "").toLowerCase();
     if (!text) return false;
     if (!/(громад|рада|official|офіцій)/i.test(text)) return false;
-    const uaTokens = String(hromadaName || '')
+    const uaTokens = String(hromadaName || "")
       .toLowerCase()
-      .replace(/[^a-zа-яіїєґ0-9]+/gi, ' ')
+      .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
       .trim()
       .split(/\s+/)
-      .filter(t => t.length >= 5);
-    const latTokens = transliterateUaToLat(hromadaName).split(/\s+/).filter(t => t.length >= 5);
+      .filter((t) => t.length >= 5);
+    const latTokens = transliterateUaToLat(hromadaName)
+      .split(/\s+/)
+      .filter((t) => t.length >= 5);
     const allTokens = [...new Set([...uaTokens, ...latTokens])];
     if (!allTokens.length) return true;
-    return allTokens.some(t => text.includes(t));
+    return allTokens.some((t) => text.includes(t));
   } catch (_) {
     return false;
   }
 }
 
-async function findOfficialSiteByWebSearch(hromadaName, oblastName, onProgress) {
-  const hName = String(hromadaName || '').replace(/\s+територіальна\s+громада$/i, '').trim();
+async function findOfficialSiteByWebSearch(
+  hromadaName,
+  oblastName,
+  onProgress,
+) {
+  const hName = String(hromadaName || "")
+    .replace(/\s+територіальна\s+громада$/i, "")
+    .trim();
   const hNameLat = transliterateUaToLat(hName);
   const q1 = `${hName} офіційний сайт громади`;
-  const q2 = `${hName} ${oblastName || ''} сайт ради`;
+  const q2 = `${hName} ${oblastName || ""} сайт ради`;
   const q3 = `${hName} сільська рада офіційний сайт`;
   const q4 = `${hNameLat} rada official site`;
   const queries = [q1, q2, q3, q4];
   for (const q of queries) {
     try {
       const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
-      const html = await httpGet(url, { 'User-Agent': 'land-management-app/1.0' });
+      const html = await httpGet(url, {
+        "User-Agent": "land-management-app/1.0",
+      });
       const candidates = parseSearchResultUrls(html);
       for (const c of candidates.slice(0, 12)) {
         if (!isLikelyOfficialHromadaSite(c, hromadaName)) continue;
@@ -253,26 +337,39 @@ async function findOfficialSiteByWebSearch(hromadaName, oblastName, onProgress) 
       }
     } catch (_) {}
   }
-  onProgress && onProgress(`  ⚠ ${hromadaName}: official site fallback search found nothing`);
-  return '';
+  onProgress &&
+    onProgress(
+      `  ⚠ ${hromadaName}: official site fallback search found nothing`,
+    );
+  return "";
 }
 
-async function findOfficialSiteByBrowserSearch(hromadaName, oblastName, browser, onProgress) {
-  const hName = String(hromadaName || '').replace(/\s+територіальна\s+громада$/i, '').trim();
-  const q = `${hName} ${oblastName || ''} офіційний сайт громади`;
+async function findOfficialSiteByBrowserSearch(
+  hromadaName,
+  oblastName,
+  browser,
+  onProgress,
+) {
+  const hName = String(hromadaName || "")
+    .replace(/\s+територіальна\s+громада$/i, "")
+    .trim();
+  const q = `${hName} ${oblastName || ""} офіційний сайт громади`;
   const page = await browser.newPage();
   try {
-    await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(q)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForSelector('a[href]', { timeout: 10000 }).catch(() => {});
+    await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(q)}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await page.waitForSelector("a[href]", { timeout: 10000 }).catch(() => {});
     const links = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('a[href]'))
-        .map(a => a.getAttribute('href') || '')
+      return Array.from(document.querySelectorAll("a[href]"))
+        .map((a) => a.getAttribute("href") || "")
         .filter(Boolean)
         .slice(0, 200);
     });
     const candidates = [];
     for (const href of links) {
-      const s = String(href).replace(/&amp;/g, '&');
+      const s = String(href).replace(/&amp;/g, "&");
       const direct = sanitizeHttpUrl(s);
       if (direct) candidates.push(direct);
       const m = s.match(/[?&]uddg=([^&]+)/i);
@@ -294,34 +391,38 @@ async function findOfficialSiteByBrowserSearch(hromadaName, oblastName, browser,
   } finally {
     await page.close();
   }
-  onProgress && onProgress(`  ⚠ ${hromadaName}: browser search fallback found nothing`);
-  return '';
+  onProgress &&
+    onProgress(`  ⚠ ${hromadaName}: browser search fallback found nothing`);
+  return "";
 }
 
 function normalizeHromadaName(hromadaName) {
-  return String(hromadaName || '')
-    .replace(/\s+територіальна\s+громада$/i, '')
-    .replace(/\s+(міська|селищна|сільська)\s+територіальна\s+громада$/i, '')
-    .replace(/\s+громада$/i, '')
+  return String(hromadaName || "")
+    .replace(/\s+територіальна\s+громада$/i, "")
+    .replace(/\s+(міська|селищна|сільська)\s+територіальна\s+громада$/i, "")
+    .replace(/\s+громада$/i, "")
     .trim();
 }
 
 function buildGromadaInfoSlugCandidates(hromadaName) {
   const normalized = normalizeHromadaName(hromadaName);
-  const lat = transliterateUaToLat(normalized).replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const lat = transliterateUaToLat(normalized)
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
   if (!lat) return [];
 
   function expandSlugVariants(base) {
     const out = new Set([base]);
     const queue = [base];
     const rules = [
-      s => s.replace(/tsk/g, 'ck'),   // мізоцька -> mizocka
-      s => s.replace(/tsk/g, 'c'),    // rare compact forms
-      s => s.replace(/shch/g, 'sch'), // -> sch
-      s => s.replace(/shch/g, 'sh'),  // -> sh
-      s => s.replace(/h/g, 'g'),      // г often appears as g in domains
-      s => s.replace(/yi/g, 'i'),
-      s => s.replace(/iy/g, 'i'),
+      (s) => s.replace(/tsk/g, "ck"), // мізоцька -> mizocka
+      (s) => s.replace(/tsk/g, "c"), // rare compact forms
+      (s) => s.replace(/shch/g, "sch"), // -> sch
+      (s) => s.replace(/shch/g, "sh"), // -> sh
+      (s) => s.replace(/h/g, "g"), // г often appears as g in domains
+      (s) => s.replace(/yi/g, "i"),
+      (s) => s.replace(/iy/g, "i"),
     ];
     while (queue.length) {
       const cur = queue.shift();
@@ -337,33 +438,33 @@ function buildGromadaInfoSlugCandidates(hromadaName) {
   }
 
   return expandSlugVariants(lat)
-    .map(s => s.replace(/-+/g, '-').replace(/^-|-$/g, ''))
+    .map((s) => s.replace(/-+/g, "-").replace(/^-|-$/g, ""))
     .filter(Boolean);
 }
 
 function parseGromadaInfoHtml(html) {
-  const raw = String(html || '');
-  if (!raw) return { address: '', head: '', contacts: '' };
+  const raw = String(html || "");
+  if (!raw) return { address: "", head: "", contacts: "" };
 
   // Convert the page to plain text lines to parse key fields consistently.
   const text = raw
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|h\d|tr|section|article)>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h\d|tr|section|article)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
-    .replace(/\r/g, '')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
     .trim();
 
-  let address = '';
-  let head = '';
-  let contacts = '';
+  let address = "";
+  let head = "";
+  let contacts = "";
 
   const addressMatch = text.match(/(?:^|\n)\s*Адреса:\s*([^\n]{5,180})/i);
   if (addressMatch) address = addressMatch[1].trim();
@@ -371,16 +472,19 @@ function parseGromadaInfoHtml(html) {
   const headMatch = text.match(/(?:^|\n)\s*Голова:\s*([^\n]{3,120})/i);
   if (headMatch) head = headMatch[1].trim();
 
-  const contactMatch = text.match(/(?:^|\n)\s*(?:Контактні\s*телефони|Телефон(?:и)?):\s*([^\n]{3,120})/i);
+  const contactMatch = text.match(
+    /(?:^|\n)\s*(?:Контактні\s*телефони|Телефон(?:и)?):\s*([^\n]{3,120})/i,
+  );
   if (contactMatch) contacts = contactMatch[1].trim();
 
   return { address, head, contacts };
 }
 
 async function fetchGromadaInfoFallback(hromadaName, onProgress) {
-  const result = { address: '', head: '', contacts: '', sourceUrl: '' };
-  const slugCandidates = buildGromadaInfoSlugCandidates(hromadaName)
-    .map(slug => `https://gromada.info/gromada/${slug}/`);
+  const result = { address: "", head: "", contacts: "", sourceUrl: "" };
+  const slugCandidates = buildGromadaInfoSlugCandidates(hromadaName).map(
+    (slug) => `https://gromada.info/gromada/${slug}/`,
+  );
 
   let searchCandidates = [];
   try {
@@ -391,9 +495,13 @@ async function fetchGromadaInfoFallback(hromadaName, onProgress) {
     ];
     for (const query of searchQueries) {
       const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const html = await httpGet(searchUrl, { 'User-Agent': 'land-management-app/1.0' }, 12000);
+      const html = await httpGet(
+        searchUrl,
+        { "User-Agent": "land-management-app/1.0" },
+        12000,
+      );
       const found = parseSearchResultUrls(html)
-        .filter(u => /gromada\.info\/gromada\//i.test(u))
+        .filter((u) => /gromada\.info\/gromada\//i.test(u))
         .slice(0, 8);
       searchCandidates.push(...found);
     }
@@ -404,7 +512,11 @@ async function fetchGromadaInfoFallback(hromadaName, onProgress) {
   const candidates = [...new Set([...slugCandidates, ...searchCandidates])];
   for (const candidate of candidates) {
     try {
-      const html = await httpGet(candidate, { 'User-Agent': 'land-management-app/1.0' }, 15000);
+      const html = await httpGet(
+        candidate,
+        { "User-Agent": "land-management-app/1.0" },
+        15000,
+      );
       const parsed = parseGromadaInfoHtml(html);
       if (!parsed.address && !parsed.head && !parsed.contacts) continue;
       result.address = parsed.address;
@@ -416,19 +528,24 @@ async function fetchGromadaInfoFallback(hromadaName, onProgress) {
       // try next candidate
     }
   }
-  onProgress && onProgress(`  ⚠ ${hromadaName}: gromada.info fallback found nothing`);
+  onProgress &&
+    onProgress(`  ⚠ ${hromadaName}: gromada.info fallback found nothing`);
   return result;
 }
 
 function getGeometryCentroid(geometry, fallbackBbox = null) {
   if (!geometry) {
     if (!fallbackBbox) return null;
-    return [(fallbackBbox.west + fallbackBbox.east) / 2, (fallbackBbox.south + fallbackBbox.north) / 2];
+    return [
+      (fallbackBbox.west + fallbackBbox.east) / 2,
+      (fallbackBbox.south + fallbackBbox.north) / 2,
+    ];
   }
   const rings = [];
-  if (geometry.type === 'Polygon') {
-    if (Array.isArray(geometry.coordinates[0])) rings.push(geometry.coordinates[0]);
-  } else if (geometry.type === 'MultiPolygon') {
+  if (geometry.type === "Polygon") {
+    if (Array.isArray(geometry.coordinates[0]))
+      rings.push(geometry.coordinates[0]);
+  } else if (geometry.type === "MultiPolygon") {
     for (const poly of geometry.coordinates) {
       if (Array.isArray(poly[0])) rings.push(poly[0]);
     }
@@ -447,7 +564,10 @@ function getGeometryCentroid(geometry, fallbackBbox = null) {
   }
   if (count > 0) return [sumLon / count, sumLat / count];
   if (!fallbackBbox) return null;
-  return [(fallbackBbox.west + fallbackBbox.east) / 2, (fallbackBbox.south + fallbackBbox.north) / 2];
+  return [
+    (fallbackBbox.west + fallbackBbox.east) / 2,
+    (fallbackBbox.south + fallbackBbox.north) / 2,
+  ];
 }
 
 function pointInRing(point, ring) {
@@ -456,7 +576,10 @@ function pointInRing(point, ring) {
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [xi, yi] = ring[i];
     const [xj, yj] = ring[j];
-    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-12) + xi) {
+    if (
+      yi > py !== yj > py &&
+      px < ((xj - xi) * (py - yi)) / (yj - yi || 1e-12) + xi
+    ) {
       inside = !inside;
     }
   }
@@ -468,11 +591,21 @@ function pointInGeometry(point, geometry) {
 
   function countVertices(g) {
     if (!g) return 0;
-    if (g.type === 'Polygon') return (g.coordinates || []).reduce((s, ring) => s + (Array.isArray(ring) ? ring.length : 0), 0);
-    if (g.type === 'MultiPolygon') {
+    if (g.type === "Polygon")
+      return (g.coordinates || []).reduce(
+        (s, ring) => s + (Array.isArray(ring) ? ring.length : 0),
+        0,
+      );
+    if (g.type === "MultiPolygon") {
       return (g.coordinates || []).reduce((s, poly) => {
         if (!Array.isArray(poly)) return s;
-        return s + poly.reduce((ps, ring) => ps + (Array.isArray(ring) ? ring.length : 0), 0);
+        return (
+          s +
+          poly.reduce(
+            (ps, ring) => ps + (Array.isArray(ring) ? ring.length : 0),
+            0,
+          )
+        );
       }, 0);
     }
     return 0;
@@ -481,35 +614,38 @@ function pointInGeometry(point, geometry) {
   const vertexCount = countVertices(geometry);
   if (vertexCount > POINT_IN_POLYGON_TURF_THRESHOLD) {
     try {
-      const pointFactory = require('@turf/helpers').point;
-      const booleanPointInPolygon = require('@turf/boolean-point-in-polygon').default;
+      const pointFactory = require("@turf/helpers").point;
+      const booleanPointInPolygon =
+        require("@turf/boolean-point-in-polygon").default;
       return booleanPointInPolygon(pointFactory(point), geometry);
     } catch (_) {
       return false;
     }
   }
 
-  if (geometry.type === 'Polygon') {
+  if (geometry.type === "Polygon") {
     const [outer = [], ...holes] = geometry.coordinates || [];
     if (!outer.length || !pointInRing(point, outer)) return false;
-    return !holes.some(h => h.length && pointInRing(point, h));
+    return !holes.some((h) => h.length && pointInRing(point, h));
   }
-  if (geometry.type === 'MultiPolygon') {
+  if (geometry.type === "MultiPolygon") {
     for (const poly of geometry.coordinates || []) {
       const [outer = [], ...holes] = poly || [];
       if (!outer.length || !pointInRing(point, outer)) continue;
-      if (!holes.some(h => h.length && pointInRing(point, h))) return true;
+      if (!holes.some((h) => h.length && pointInRing(point, h))) return true;
     }
   }
   return false;
 }
 
 function getSearchRoots() {
-  const isPackaged = __dirname.includes('app.asar');
+  const isPackaged = __dirname.includes("app.asar");
   const appRoot = isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked')
-    : path.join(__dirname, '..');
-  const appAsarRoot = isPackaged ? path.join(process.resourcesPath, 'app.asar') : null;
+    ? path.join(process.resourcesPath, "app.asar.unpacked")
+    : path.join(__dirname, "..");
+  const appAsarRoot = isPackaged
+    ? path.join(process.resourcesPath, "app.asar")
+    : null;
   const cacheRoot = path.dirname(GENERATED_INFRA_CACHE_PATH);
   return [appRoot, appAsarRoot, process.cwd(), cacheRoot].filter(Boolean);
 }
@@ -534,7 +670,7 @@ async function loadLocalWindDataset(onProgress) {
     _localWindDatasetPromise = (async () => {
       const tiffPath = resolveLocalWindTiffPath();
       if (!tiffPath) return null;
-      const geotiff = require('geotiff');
+      const geotiff = require("geotiff");
       const tiff = await geotiff.fromFile(tiffPath);
       const image = await tiff.getImage();
       const [minLon, minLat, maxLon, maxLat] = image.getBoundingBox();
@@ -542,11 +678,26 @@ async function loadLocalWindDataset(onProgress) {
       const height = image.getHeight();
       const noDataRaw = image.getGDALNoData && image.getGDALNoData();
       const noData = noDataRaw == null ? null : Number(noDataRaw);
-      if (onProgress) onProgress(`  → Local wind GeoTIFF loaded: ${path.basename(tiffPath)} (${width}x${height})`);
-      return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData, tiff };
+      if (onProgress)
+        onProgress(
+          `  → Local wind GeoTIFF loaded: ${path.basename(tiffPath)} (${width}x${height})`,
+        );
+      return {
+        tiffPath,
+        image,
+        minLon,
+        minLat,
+        maxLon,
+        maxLat,
+        width,
+        height,
+        noData,
+        tiff,
+      };
     })().catch((err) => {
       _localWindDatasetPromise = Promise.resolve(null);
-      if (onProgress) onProgress(`  ⚠ Local wind GeoTIFF unavailable: ${err.message}`);
+      if (onProgress)
+        onProgress(`  ⚠ Local wind GeoTIFF unavailable: ${err.message}`);
       return null;
     });
   }
@@ -564,12 +715,25 @@ async function getLocalWindSpeedAtCentroid(boundaryGeometry, bbox, onProgress) {
   const xRes = (maxLon - minLon) / width;
   const yRes = (maxLat - minLat) / height;
   if (!isFinite(xRes) || !isFinite(yRes) || xRes <= 0 || yRes <= 0) return null;
-  const px = Math.max(0, Math.min(width - 1, Math.floor((lon - minLon) / xRes)));
-  const py = Math.max(0, Math.min(height - 1, Math.floor((maxLat - lat) / yRes)));
-  const values = await dataset.image.readRasters({ window: [px, py, px + 1, py + 1] });
+  const px = Math.max(
+    0,
+    Math.min(width - 1, Math.floor((lon - minLon) / xRes)),
+  );
+  const py = Math.max(
+    0,
+    Math.min(height - 1, Math.floor((maxLat - lat) / yRes)),
+  );
+  const values = await dataset.image.readRasters({
+    window: [px, py, px + 1, py + 1],
+  });
   const v = values && values[0] ? Number(values[0][0]) : NaN;
   if (!isFinite(v)) return null;
-  if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(v - dataset.noData) < 1e-6) return null;
+  if (
+    dataset.noData != null &&
+    Number.isFinite(dataset.noData) &&
+    Math.abs(v - dataset.noData) < 1e-6
+  )
+    return null;
   if (v <= 0 || v > 80) return null;
   return Math.round(v * 100) / 100;
 }
@@ -577,10 +741,12 @@ async function getLocalWindSpeedAtCentroid(boundaryGeometry, bbox, onProgress) {
 async function loadLocalWorldCoverDatasets(onProgress) {
   if (!_localWorldCoverDatasetPromise) {
     _localWorldCoverDatasetPromise = (async () => {
-      const resolvedPath = resolveFromCandidates(LOCAL_WORLDCOVER_TIFF_CANDIDATES);
+      const resolvedPath = resolveFromCandidates(
+        LOCAL_WORLDCOVER_TIFF_CANDIDATES,
+      );
       if (!resolvedPath) return [];
 
-      const geotiff = require('geotiff');
+      const geotiff = require("geotiff");
       const datasets = [];
 
       async function loadTiff(tiffPath) {
@@ -591,13 +757,27 @@ async function loadLocalWorldCoverDatasets(onProgress) {
         const height = image.getHeight();
         const noDataRaw = image.getGDALNoData && image.getGDALNoData();
         const noData = noDataRaw == null ? null : Number(noDataRaw);
-        return { tiffPath, image, minLon, minLat, maxLon, maxLat, width, height, noData, tiff };
+        return {
+          tiffPath,
+          image,
+          minLon,
+          minLat,
+          maxLon,
+          maxLat,
+          width,
+          height,
+          noData,
+          tiff,
+        };
       }
 
       const stat = fs.statSync(resolvedPath);
       if (stat.isDirectory()) {
-        if (onProgress) onProgress(`  → Scanning directory for WorldCover tiles: ${resolvedPath}`);
-        
+        if (onProgress)
+          onProgress(
+            `  → Scanning directory for WorldCover tiles: ${resolvedPath}`,
+          );
+
         function findTifs(dir) {
           let results = [];
           const list = fs.readdirSync(dir);
@@ -606,7 +786,7 @@ async function loadLocalWorldCoverDatasets(onProgress) {
             const s = fs.statSync(fullPath);
             if (s.isDirectory()) {
               results = results.concat(findTifs(fullPath));
-            } else if (file.endsWith('_Map.tif')) {
+            } else if (file.endsWith("_Map.tif")) {
               results.push(fullPath);
             }
           }
@@ -614,27 +794,36 @@ async function loadLocalWorldCoverDatasets(onProgress) {
         }
 
         const tifs = findTifs(resolvedPath);
-        if (onProgress) onProgress(`  → Found ${tifs.length} WorldCover tiles. Loading...`);
+        if (onProgress)
+          onProgress(`  → Found ${tifs.length} WorldCover tiles. Loading...`);
         for (const t of tifs) {
           try {
             datasets.push(await loadTiff(t));
           } catch (e) {
-            if (onProgress) onProgress(`  ⚠ Failed to load tile ${t}: ${e.message}`);
+            if (onProgress)
+              onProgress(`  ⚠ Failed to load tile ${t}: ${e.message}`);
           }
         }
       } else {
         try {
           datasets.push(await loadTiff(resolvedPath));
-          if (onProgress) onProgress(`  → Local WorldCover loaded: ${path.basename(resolvedPath)}`);
+          if (onProgress)
+            onProgress(
+              `  → Local WorldCover loaded: ${path.basename(resolvedPath)}`,
+            );
         } catch (e) {
-          if (onProgress) onProgress(`  ⚠ Failed to load WorldCover file ${resolvedPath}: ${e.message}`);
+          if (onProgress)
+            onProgress(
+              `  ⚠ Failed to load WorldCover file ${resolvedPath}: ${e.message}`,
+            );
         }
       }
 
       return datasets;
     })().catch((err) => {
       _localWorldCoverDatasetPromise = Promise.resolve([]);
-      if (onProgress) onProgress(`  ⚠ Local WorldCover unavailable: ${err.message}`);
+      if (onProgress)
+        onProgress(`  ⚠ Local WorldCover unavailable: ${err.message}`);
       return [];
     });
   }
@@ -650,9 +839,14 @@ async function getLocalForestPct(boundaryGeometry, bbox, onProgress) {
 
   for (const dataset of datasets) {
     const { minLon, minLat, maxLon, maxLat, width, height } = dataset;
-    
+
     // Check if tile intersects the hromada bbox at all
-    if (bbox.west > maxLon || bbox.east < minLon || bbox.south > maxLat || bbox.north < minLat) {
+    if (
+      bbox.west > maxLon ||
+      bbox.east < minLon ||
+      bbox.south > maxLat ||
+      bbox.north < minLat
+    ) {
       continue;
     }
 
@@ -672,25 +866,35 @@ async function getLocalForestPct(boundaryGeometry, bbox, onProgress) {
     const bottom = Math.min(height, Math.ceil((maxLat - clipSouth) / yRes));
     if (!(left < right && top < bottom)) continue;
 
-    const rasters = await dataset.image.readRasters({ window: [left, top, right, bottom] });
+    const rasters = await dataset.image.readRasters({
+      window: [left, top, right, bottom],
+    });
     const data = rasters && rasters[0] ? rasters[0] : null;
     if (!data) continue;
 
     const winWidth = right - left;
     const winHeight = bottom - top;
     const windowPixels = winWidth * winHeight;
-    const sampleStep = Math.max(1, Math.ceil(Math.sqrt(windowPixels / FOREST_TARGET_SAMPLES)));
-    
+    const sampleStep = Math.max(
+      1,
+      Math.ceil(Math.sqrt(windowPixels / FOREST_TARGET_SAMPLES)),
+    );
+
     for (let y = 0; y < winHeight; y += sampleStep) {
       for (let x = 0; x < winWidth; x += sampleStep) {
         const idx = y * winWidth + x;
         const cls = Number(data[idx]);
         if (!Number.isFinite(cls)) continue;
-        if (dataset.noData != null && Number.isFinite(dataset.noData) && Math.abs(cls - dataset.noData) < 1e-6) continue;
-        
+        if (
+          dataset.noData != null &&
+          Number.isFinite(dataset.noData) &&
+          Math.abs(cls - dataset.noData) < 1e-6
+        )
+          continue;
+
         const lon = minLon + (left + x + 0.5) * xRes;
         const lat = maxLat - (top + y + 0.5) * yRes;
-        
+
         if (!pointInGeometry([lon, lat], boundaryGeometry)) continue;
         totalPixels += 1;
         if (TREE_COVER_CLASSES.has(cls)) treePixels += 1;
@@ -699,7 +903,10 @@ async function getLocalForestPct(boundaryGeometry, bbox, onProgress) {
   }
 
   if (!totalPixels) return null;
-  return Math.max(0, Math.min(1, Math.round((treePixels / totalPixels) * 1000) / 1000));
+  return Math.max(
+    0,
+    Math.min(1, Math.round((treePixels / totalPixels) * 1000) / 1000),
+  );
 }
 
 async function loadLocalGeologyDataset(onProgress) {
@@ -707,26 +914,47 @@ async function loadLocalGeologyDataset(onProgress) {
     _localGeologyDatasetPromise = (async () => {
       const geoPath = resolveFromCandidates(LOCAL_GEOLOGY_CANDIDATES);
       if (!geoPath) return null;
-      let raw = fs.readFileSync(geoPath, 'utf8');
+      let raw = fs.readFileSync(geoPath, "utf8");
       const parsed = JSON.parse(raw);
       raw = null;
-      
-      const features = (parsed && parsed.type === 'FeatureCollection' ? (parsed.features || []) : []).map(f => {
+
+      const features = (
+        parsed && parsed.type === "FeatureCollection"
+          ? parsed.features || []
+          : []
+      ).map((f) => {
         const p = f.properties || {};
         return {
           geometry: f.geometry,
           properties: {
-            karstRisk: p.karst_risk || p.karstRisk || p.karst || p.risk || p['Ризик'] || '',
-            geologicalConditions: p.geology || p.geological || p.lithology || p.formation || p.name || p['Характеристика'] || ''
-          }
+            karstRisk:
+              p.karst_risk ||
+              p.karstRisk ||
+              p.karst ||
+              p.risk ||
+              p["Ризик"] ||
+              "",
+            geologicalConditions:
+              p.geology ||
+              p.geological ||
+              p.lithology ||
+              p.formation ||
+              p.name ||
+              p["Характеристика"] ||
+              "",
+          },
         };
       });
-      
-      if (onProgress) onProgress(`  → Local geology dataset loaded: ${path.basename(geoPath)} (${features.length} features)`);
+
+      if (onProgress)
+        onProgress(
+          `  → Local geology dataset loaded: ${path.basename(geoPath)} (${features.length} features)`,
+        );
       return { geoPath, features };
     })().catch((err) => {
       _localGeologyDatasetPromise = Promise.resolve(null);
-      if (onProgress) onProgress(`  ⚠ Local geology dataset unavailable: ${err.message}`);
+      if (onProgress)
+        onProgress(`  ⚠ Local geology dataset unavailable: ${err.message}`);
       return null;
     });
   }
@@ -735,13 +963,17 @@ async function loadLocalGeologyDataset(onProgress) {
 
 async function getLocalGeologyAndKarst(boundaryGeometry, bbox, onProgress) {
   const ds = await loadLocalGeologyDataset(onProgress);
-  if (!ds || !boundaryGeometry) return { karstRisk: '', geologicalConditions: '' };
+  if (!ds || !boundaryGeometry)
+    return { karstRisk: "", geologicalConditions: "" };
   const centroid = getGeometryCentroid(boundaryGeometry, bbox);
-  if (!centroid) return { karstRisk: '', geologicalConditions: '' };
-  const found = ds.features.find(f => pointInGeometry(centroid, f.geometry));
-  if (!found) return { karstRisk: '', geologicalConditions: '' };
+  if (!centroid) return { karstRisk: "", geologicalConditions: "" };
+  const found = ds.features.find((f) => pointInGeometry(centroid, f.geometry));
+  if (!found) return { karstRisk: "", geologicalConditions: "" };
   const p = found.properties || {};
-  return { karstRisk: String(p.karstRisk || ''), geologicalConditions: String(p.geologicalConditions || '') };
+  return {
+    karstRisk: String(p.karstRisk || ""),
+    geologicalConditions: String(p.geologicalConditions || ""),
+  };
 }
 
 async function loadLocalEmeraldDataset(onProgress) {
@@ -749,31 +981,36 @@ async function loadLocalEmeraldDataset(onProgress) {
     _localEmeraldDatasetPromise = (async () => {
       const geoPath = resolveFromCandidates(LOCAL_EMERALD_CANDIDATES);
       if (!geoPath) return null;
-      
+
       const features = [];
       // Wrap in an IIFE so the massive raw string and JSON object are garbage collected immediately
       (() => {
-        const raw = fs.readFileSync(geoPath, 'utf8');
+        const raw = fs.readFileSync(geoPath, "utf8");
         const parsed = JSON.parse(raw);
-        const bboxCalc = require('@turf/bbox').default;
-        
-        for (const f of (parsed.features || [])) {
+        const bboxCalc = require("@turf/bbox").default;
+
+        for (const f of parsed.features || []) {
           if (!f.geometry) continue;
           try {
             const bx = bboxCalc(f);
             features.push({
-              name: f.properties?.name || f.properties?.SITENAME || 'Emerald Site',
-              bbox: { west: bx[0], south: bx[1], east: bx[2], north: bx[3] }
+              name:
+                f.properties?.name || f.properties?.SITENAME || "Emerald Site",
+              bbox: { west: bx[0], south: bx[1], east: bx[2], north: bx[3] },
             });
-          } catch(e) {}
+          } catch (e) {}
         }
       })();
 
-      if (onProgress) onProgress(`  → Local Emerald dataset loaded (indexed): ${path.basename(geoPath)} (${features.length} features)`);
+      if (onProgress)
+        onProgress(
+          `  → Local Emerald dataset loaded (indexed): ${path.basename(geoPath)} (${features.length} features)`,
+        );
       return { geoPath, features };
     })().catch((err) => {
       _localEmeraldDatasetPromise = Promise.resolve(null);
-      if (onProgress) onProgress(`  ⚠ Local Emerald dataset unavailable: ${err.message}`);
+      if (onProgress)
+        onProgress(`  ⚠ Local Emerald dataset unavailable: ${err.message}`);
       return null;
     });
   }
@@ -789,11 +1026,16 @@ async function getLocalEmerald(boundaryGeometry, bbox, onProgress) {
   // We only check if our centroid falls inside the bounding box of the Emerald site
   // This is a 99% accurate approximation that uses 0 MB of RAM instead of 400 MB.
   const [lon, lat] = centroid;
-  const found = ds.features.find(f => {
-    return lon >= f.bbox.west && lon <= f.bbox.east && lat >= f.bbox.south && lat <= f.bbox.north;
+  const found = ds.features.find((f) => {
+    return (
+      lon >= f.bbox.west &&
+      lon <= f.bbox.east &&
+      lat >= f.bbox.south &&
+      lat <= f.bbox.north
+    );
   });
-  
-  return found ? ['+'] : [];
+
+  return found ? ["+"] : [];
 }
 
 async function loadLocalPzfDataset(onProgress) {
@@ -801,20 +1043,34 @@ async function loadLocalPzfDataset(onProgress) {
     _localPzfDatasetPromise = (async () => {
       const geoPath = resolveFromCandidates(LOCAL_PZF_CANDIDATES);
       if (!geoPath) return null;
-      let raw = fs.readFileSync(geoPath, 'utf8');
+      let raw = fs.readFileSync(geoPath, "utf8");
       const parsed = JSON.parse(raw);
       raw = null;
-      
-      const features = (parsed && parsed.type === 'FeatureCollection' ? (parsed.features || []) : []).map(f => ({
+
+      const features = (
+        parsed && parsed.type === "FeatureCollection"
+          ? parsed.features || []
+          : []
+      ).map((f) => ({
         geometry: f.geometry,
-        properties: { name: f.properties?.name || f.properties?.NAME || f.properties?.name_en || 'Nature Reserve' }
+        properties: {
+          name:
+            f.properties?.name ||
+            f.properties?.NAME ||
+            f.properties?.name_en ||
+            "Nature Reserve",
+        },
       }));
-      
-      if (onProgress) onProgress(`  → Local PZF dataset loaded: ${path.basename(geoPath)} (${features.length} features)`);
+
+      if (onProgress)
+        onProgress(
+          `  → Local PZF dataset loaded: ${path.basename(geoPath)} (${features.length} features)`,
+        );
       return { geoPath, features };
     })().catch((err) => {
       _localPzfDatasetPromise = Promise.resolve(null);
-      if (onProgress) onProgress(`  ⚠ Local PZF dataset unavailable: ${err.message}`);
+      if (onProgress)
+        onProgress(`  ⚠ Local PZF dataset unavailable: ${err.message}`);
       return null;
     });
   }
@@ -824,10 +1080,14 @@ async function loadLocalPzfDataset(onProgress) {
 async function getLocalPzf(boundaryGeometry, bbox, onProgress) {
   const ds = await loadLocalPzfDataset(onProgress);
   if (!ds || !boundaryGeometry) return null;
-  
-  const overlapping = ds.features.filter(f => {
+
+  const overlapping = ds.features.filter((f) => {
     // If it's our newly generated point GeoJSON
-    if (f.geometry && f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+    if (
+      f.geometry &&
+      f.geometry.type === "Point" &&
+      Array.isArray(f.geometry.coordinates)
+    ) {
       return pointInGeometry(f.geometry.coordinates, boundaryGeometry);
     }
     // If it's a polygon, check if its centroid is in our boundary
@@ -839,35 +1099,46 @@ async function getLocalPzf(boundaryGeometry, bbox, onProgress) {
   });
 
   if (!overlapping.length) return [];
-  
-  return overlapping.map(f => {
+
+  return overlapping.map((f) => {
     const p = f.properties || {};
-    return p.name || p.NAME || p.name_en || 'Nature Reserve';
+    return p.name || p.NAME || p.name_en || "Nature Reserve";
   });
 }
 
-async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS, totalTimeoutMs = 0) {
-  const body = 'data=' + encodeURIComponent(ql);
-  let rawResponse = '';
+async function overpassQuery(
+  ql,
+  onProgress,
+  timeoutMs = OVERPASS_TIMEOUT_NORMAL_MS,
+  totalTimeoutMs = 0,
+) {
+  const body = "data=" + encodeURIComponent(ql);
+  let rawResponse = "";
   const startedAt = Date.now();
   for (const url of [OVERPASS_URL, OVERPASS_ALT, OVERPASS_ALT_2]) {
     let reqTimeoutMs = timeoutMs;
     if (totalTimeoutMs > 0) {
       const elapsed = Date.now() - startedAt;
       const remaining = totalTimeoutMs - elapsed;
-      if (remaining <= 0) throw new Error(`Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s)`);
+      if (remaining <= 0)
+        throw new Error(
+          `Overpass total timeout (${Math.round(totalTimeoutMs / 1000)}s)`,
+        );
       reqTimeoutMs = Math.min(timeoutMs, remaining);
     }
     try {
       rawResponse = await httpPost(
         url,
         body,
-        { 'Content-Type': 'application/x-www-form-urlencoded' },
-        reqTimeoutMs
+        { "Content-Type": "application/x-www-form-urlencoded" },
+        reqTimeoutMs,
       );
       const trimmed = rawResponse.trimStart();
-      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-        onProgress && onProgress(`  ⚠ Overpass ${url} returned non-JSON, trying next mirror…`);
+      if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+        onProgress &&
+          onProgress(
+            `  ⚠ Overpass ${url} returned non-JSON, trying next mirror…`,
+          );
         continue;
       }
       return JSON.parse(rawResponse);
@@ -876,60 +1147,95 @@ async function overpassQuery(ql, onProgress, timeoutMs = OVERPASS_TIMEOUT_NORMAL
     }
   }
   if (rawResponse) {
-    const preview = rawResponse.slice(0, 300).replace(/\s+/g, ' ');
-    throw new Error(`All Overpass endpoints failed (last response was non-JSON): ${preview}`);
+    const preview = rawResponse.slice(0, 300).replace(/\s+/g, " ");
+    throw new Error(
+      `All Overpass endpoints failed (last response was non-JSON): ${preview}`,
+    );
   }
-  throw new Error('All Overpass endpoints failed');
+  throw new Error("All Overpass endpoints failed");
 }
 
 // ── decentralization.ua helpers ───────────────────────────
 
 async function getOblastId(oblastName) {
-  const raw = await httpGet('https://decentralization.ua/state', { 'Accept': 'application/json' });
+  const raw = await httpGet("https://decentralization.ua/state", {
+    Accept: "application/json",
+  });
   const list = JSON.parse(raw);
-  const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const norm = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
   const needle = norm(oblastName);
   // Try exact match first, then partial
-  let match = list.find(o => norm(o.title) === needle);
-  if (!match) match = list.find(o => norm(o.title).includes(needle) || needle.includes(norm(o.title)));
+  let match = list.find((o) => norm(o.title) === needle);
+  if (!match)
+    match = list.find(
+      (o) => norm(o.title).includes(needle) || needle.includes(norm(o.title)),
+    );
   if (!match) {
     // Try stripping "область" suffix
-    const short = needle.replace(/\s*область\s*$/i, '').trim();
-    match = list.find(o => norm(o.title).replace(/\s*область\s*$/i, '').trim() === short);
+    const short = needle.replace(/\s*область\s*$/i, "").trim();
+    match = list.find(
+      (o) =>
+        norm(o.title)
+          .replace(/\s*область\s*$/i, "")
+          .trim() === short,
+    );
   }
-  if (!match) throw new Error(`Oblast "${oblastName}" not found. Available: ${list.map(o => o.title).join(', ')}`);
+  if (!match)
+    throw new Error(
+      `Oblast "${oblastName}" not found. Available: ${list.map((o) => o.title).join(", ")}`,
+    );
   return { id: match.id, title: match.title };
 }
 
 // Scrape hromada list from decentralization.ua via Puppeteer
 // The site uses /newgromada with a filter dropdown; pagination via ?area_id=&page=N
 async function getHromadaList(stateId, browser, onProgress) {
-  onProgress(`  → Opening decentralization.ua hromada list for oblast id=${stateId}…`);
+  onProgress(
+    `  → Opening decentralization.ua hromada list for oblast id=${stateId}…`,
+  );
 
   // Helper: extract all hromada rows from the current page DOM
   function extractRows(page) {
     return page.evaluate(() => {
-      const rows = Array.from(document.querySelectorAll('.row.resize-row.title-align.new-grid, .row.new-area-grid'))
-        .filter(r => r.querySelector('a[href*="/newgromada/"]'));
-      return rows.map(row => {
-        const link = row.querySelector('a[href*="/newgromada/"]');
-        const href = link ? link.getAttribute('href') : '';
-        const idMatch = href.match(/\/newgromada\/(\d+)/);
-        // Each content cell has label + value separated by whitespace: "Район\n\nВараський"
-        let type = '', district = '';
-        row.querySelectorAll('.new-community-content, .new-content').forEach(div => {
-          const parts = div.innerText ? div.innerText.split('\n').map(s => s.trim()).filter(Boolean) : div.textContent.split('\n').map(s => s.trim()).filter(Boolean);
-          if (parts[0] === 'Район' && parts[1]) district = parts[1];
-          if (parts[0] === 'Тип громади' && parts[1]) type = parts[1];
-        });
-        return {
-          id: idMatch ? idMatch[1] : null,
-          name: link ? link.textContent.trim() : '',
-          type,
-          district,
-          url: href.startsWith('http') ? href : 'https://decentralization.ua' + href,
-        };
-      }).filter(h => h.id && h.name);
+      const rows = Array.from(
+        document.querySelectorAll(
+          ".row.resize-row.title-align.new-grid, .row.new-area-grid",
+        ),
+      ).filter((r) => r.querySelector('a[href*="/newgromada/"]'));
+      return rows
+        .map((row) => {
+          const link = row.querySelector('a[href*="/newgromada/"]');
+          const href = link ? link.getAttribute("href") : "";
+          const idMatch = href.match(/\/newgromada\/(\d+)/);
+          // Each content cell has label + value separated by whitespace: "Район\n\nВараський"
+          let type = "",
+            district = "";
+          row
+            .querySelectorAll(".new-community-content, .new-content")
+            .forEach((div) => {
+              const parts = div.innerText
+                ? div.innerText
+                    .split("\n")
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                : div.textContent
+                    .split("\n")
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+              if (parts[0] === "Район" && parts[1]) district = parts[1];
+              if (parts[0] === "Тип громади" && parts[1]) type = parts[1];
+            });
+          return {
+            id: idMatch ? idMatch[1] : null,
+            name: link ? link.textContent.trim() : "",
+            type,
+            district,
+            url: href.startsWith("http")
+              ? href
+              : "https://decentralization.ua" + href,
+          };
+        })
+        .filter((h) => h.id && h.name);
     });
   }
 
@@ -937,15 +1243,21 @@ async function getHromadaList(stateId, browser, onProgress) {
   const page = await browser.newPage();
   try {
     const baseUrl = `https://decentralization.ua/newgromada?area_id=${stateId}&page=1`;
-    await page.goto(baseUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-    try { await page.waitForSelector('a[href*="/newgromada/"]', { timeout: 15000 }); } catch (_) {}
+    await page.goto(baseUrl, { waitUntil: "networkidle2", timeout: 60000 });
+    try {
+      await page.waitForSelector('a[href*="/newgromada/"]', { timeout: 15000 });
+    } catch (_) {}
 
     // Find total number of pages
     const maxPage = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('.pagination a[href*="page="], a[href*="page="]'));
+      const links = Array.from(
+        document.querySelectorAll(
+          '.pagination a[href*="page="], a[href*="page="]',
+        ),
+      );
       let max = 1;
-      links.forEach(a => {
-        const m = (a.getAttribute('href') || '').match(/[?&]page=(\d+)/);
+      links.forEach((a) => {
+        const m = (a.getAttribute("href") || "").match(/[?&]page=(\d+)/);
         if (m) max = Math.max(max, parseInt(m[1], 10));
       });
       return max;
@@ -958,14 +1270,31 @@ async function getHromadaList(stateId, browser, onProgress) {
 
     // Collect page 1 rows
     const page1Rows = await extractRows(page);
-    for (const h of page1Rows) { if (!seen.has(h.id)) { seen.add(h.id); all.push(h); } }
+    for (const h of page1Rows) {
+      if (!seen.has(h.id)) {
+        seen.add(h.id);
+        all.push(h);
+      }
+    }
 
     // Collect remaining pages
     for (let p = 2; p <= maxPage; p++) {
-      await page.goto(`https://decentralization.ua/newgromada?area_id=${stateId}&page=${p}`, { waitUntil: 'networkidle2', timeout: 60000 });
-      try { await page.waitForSelector('a[href*="/newgromada/"]', { timeout: 10000 }); } catch (_) {}
+      await page.goto(
+        `https://decentralization.ua/newgromada?area_id=${stateId}&page=${p}`,
+        { waitUntil: "networkidle2", timeout: 60000 },
+      );
+      try {
+        await page.waitForSelector('a[href*="/newgromada/"]', {
+          timeout: 10000,
+        });
+      } catch (_) {}
       const rows = await extractRows(page);
-      for (const h of rows) { if (!seen.has(h.id)) { seen.add(h.id); all.push(h); } }
+      for (const h of rows) {
+        if (!seen.has(h.id)) {
+          seen.add(h.id);
+          all.push(h);
+        }
+      }
       onProgress(`  → Page ${p}/${maxPage}: ${all.length} hromadas so far`);
     }
 
@@ -979,33 +1308,40 @@ async function getHromadaList(stateId, browser, onProgress) {
 // Scrape individual hromada page for КП stage and official site link
 async function getHromadaPageInfo(hromadaId, browser, onProgress) {
   const page = await browser.newPage();
-  const result = { kpStage: '', officialSiteUrl: '' };
+  const result = { kpStage: "", officialSiteUrl: "" };
   try {
     const url = `https://decentralization.ua/newgromada/${hromadaId}`;
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
 
     const info = await page.evaluate(() => {
-      const out = { kpStage: '', officialSiteUrl: '' };
+      const out = { kpStage: "", officialSiteUrl: "" };
 
       // Look for КП stage — field-value pattern
       const allText = document.body.innerText;
-      const kpMatch = allText.match(/Стадія\s+Комплексного\s+плану[:\s]+([^\n]+)/i);
+      const kpMatch = allText.match(
+        /Стадія\s+Комплексного\s+плану[:\s]+([^\n]+)/i,
+      );
       if (kpMatch) out.kpStage = kpMatch[1].trim();
 
       // Also try structured rows/dt-dd/info blocks
-      document.querySelectorAll('dt, th, label, .field-label, .info-label').forEach(el => {
-        const txt = el.textContent.trim();
-        if (/стадія.*комплексного|комплексний.*план/i.test(txt)) {
-          const sibling = el.nextElementSibling || el.closest('tr')?.querySelector('td:last-child');
-          if (sibling && !out.kpStage) out.kpStage = sibling.textContent.trim();
-        }
-      });
+      document
+        .querySelectorAll("dt, th, label, .field-label, .info-label")
+        .forEach((el) => {
+          const txt = el.textContent.trim();
+          if (/стадія.*комплексного|комплексний.*план/i.test(txt)) {
+            const sibling =
+              el.nextElementSibling ||
+              el.closest("tr")?.querySelector("td:last-child");
+            if (sibling && !out.kpStage)
+              out.kpStage = sibling.textContent.trim();
+          }
+        });
 
       // Official site link
-      const links = document.querySelectorAll('a');
+      const links = document.querySelectorAll("a");
       for (const a of links) {
         const txt = a.textContent.trim();
-        const href = a.getAttribute('href') || '';
+        const href = a.getAttribute("href") || "";
         if (/офіційний\s*сайт/i.test(txt) && href) {
           out.officialSiteUrl = href;
           break;
@@ -1013,9 +1349,13 @@ async function getHromadaPageInfo(hromadaId, browser, onProgress) {
       }
       // Fallback: look for external links in info block
       if (!out.officialSiteUrl) {
-        document.querySelectorAll('a[href^="http"]').forEach(a => {
-          const href = a.getAttribute('href') || '';
-          if (/\.gov\.ua|\.rada\.gov|гром/i.test(href) && !href.includes('decentralization.ua') && !out.officialSiteUrl) {
+        document.querySelectorAll('a[href^="http"]').forEach((a) => {
+          const href = a.getAttribute("href") || "";
+          if (
+            /\.gov\.ua|\.rada\.gov|гром/i.test(href) &&
+            !href.includes("decentralization.ua") &&
+            !out.officialSiteUrl
+          ) {
             out.officialSiteUrl = href;
           }
         });
@@ -1025,9 +1365,15 @@ async function getHromadaPageInfo(hromadaId, browser, onProgress) {
     });
 
     result.kpStage = info.kpStage;
-    result.officialSiteUrl = sanitizeHttpUrl(info.officialSiteUrl, 'https://decentralization.ua');
+    result.officialSiteUrl = sanitizeHttpUrl(
+      info.officialSiteUrl,
+      "https://decentralization.ua",
+    );
   } catch (e) {
-    onProgress && onProgress(`  ⚠ Failed to scrape hromada page ${hromadaId}: ${e.message}`);
+    onProgress &&
+      onProgress(
+        `  ⚠ Failed to scrape hromada page ${hromadaId}: ${e.message}`,
+      );
   } finally {
     await page.close();
   }
@@ -1036,41 +1382,54 @@ async function getHromadaPageInfo(hromadaId, browser, onProgress) {
 
 // Scrape official site for address, head, urban planning link
 async function getOfficialSiteInfo(siteUrl, browser, onProgress) {
-  const result = { address: '', head: '', urbanPlanningUrl: '' };
+  const result = { address: "", head: "", urbanPlanningUrl: "" };
   if (!siteUrl) return result;
   const page = await browser.newPage();
   try {
-    await page.goto(siteUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    await page.goto(siteUrl, { waitUntil: "networkidle2", timeout: 45000 });
     const extractInfoRaw = await page.evaluate((base) => {
-      const text = document.body.innerText || '';
-      let address = '';
-      let head = '';
-      let contactUrl = '';
-      let urbanPlanningUrl = '';
+      const text = document.body.innerText || "";
+      let address = "";
+      let head = "";
+      let contactUrl = "";
+      let urbanPlanningUrl = "";
 
-      const addrMatch = text.match(/(?:адреса|місцезнаходження|юридична адреса)[:\s]+([^\n]{5,120})/i);
+      const addrMatch = text.match(
+        /(?:адреса|місцезнаходження|юридична адреса)[:\s]+([^\n]{5,120})/i,
+      );
       if (addrMatch) address = addrMatch[1].trim();
 
-      const headMatch = text.match(/голова(?:\s+громади|\s+ради)?[:\s]+([^\n]{3,80})/i);
+      const headMatch = text.match(
+        /голова(?:\s+громади|\s+ради)?[:\s]+([^\n]{3,80})/i,
+      );
       if (headMatch) head = headMatch[1].trim();
 
       if (!head) {
-        document.querySelectorAll('dt, th, strong, b, .label').forEach(el => {
+        document.querySelectorAll("dt, th, strong, b, .label").forEach((el) => {
           if (/голова/i.test(el.textContent) && !head) {
-            const sib = el.nextElementSibling || el.closest('tr')?.querySelector('td:last-child');
-            if (sib) head = (sib.textContent || '').trim();
+            const sib =
+              el.nextElementSibling ||
+              el.closest("tr")?.querySelector("td:last-child");
+            if (sib) head = (sib.textContent || "").trim();
           }
         });
       }
 
-      for (const a of document.querySelectorAll('a')) {
-        const txt = (a.textContent || '').trim();
-        const href = a.getAttribute('href') || '';
+      for (const a of document.querySelectorAll("a")) {
+        const txt = (a.textContent || "").trim();
+        const href = a.getAttribute("href") || "";
         if (!href) continue;
-        let abs = '';
-        try { abs = new URL(href, base).href; } catch (_) {}
+        let abs = "";
+        try {
+          abs = new URL(href, base).href;
+        } catch (_) {}
         if (!contactUrl && /контакт/i.test(txt)) contactUrl = abs || href;
-        if (!urbanPlanningUrl && /комплексний\s*план|генеральний\s*план|містобудів|планувальн|стратег/i.test(txt)) {
+        if (
+          !urbanPlanningUrl &&
+          /комплексний\s*план|генеральний\s*план|містобудів|планувальн|стратег/i.test(
+            txt,
+          )
+        ) {
           urbanPlanningUrl = abs || href;
         }
       }
@@ -1078,51 +1437,73 @@ async function getOfficialSiteInfo(siteUrl, browser, onProgress) {
     }, siteUrl);
 
     const homeInfo = {
-      address: extractInfoRaw.address || '',
-      head: extractInfoRaw.head || '',
+      address: extractInfoRaw.address || "",
+      head: extractInfoRaw.head || "",
       contactUrl: sanitizeHttpUrl(extractInfoRaw.contactUrl, siteUrl),
-      urbanPlanningUrl: sanitizeHttpUrl(extractInfoRaw.urbanPlanningUrl, siteUrl),
+      urbanPlanningUrl: sanitizeHttpUrl(
+        extractInfoRaw.urbanPlanningUrl,
+        siteUrl,
+      ),
     };
     const contactCandidates = [
       homeInfo.contactUrl,
-      sanitizeHttpUrl('/feedback/', siteUrl),
-      sanitizeHttpUrl('/kontaktna-informacziya/', siteUrl),
+      sanitizeHttpUrl("/feedback/", siteUrl),
+      sanitizeHttpUrl("/kontaktna-informacziya/", siteUrl),
     ].filter(Boolean);
 
-    let contactInfo = { address: '', head: '', urbanPlanningUrl: '' };
+    let contactInfo = { address: "", head: "", urbanPlanningUrl: "" };
     for (const contactUrl of contactCandidates) {
       try {
-        await page.goto(contactUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(contactUrl, {
+          waitUntil: "networkidle2",
+          timeout: 30000,
+        });
       } catch (_) {
         continue;
       }
       const contactRaw = await page.evaluate((base) => {
-        const text = document.body.innerText || '';
-        let address = '';
-        let head = '';
-        let urbanPlanningUrl = '';
+        const text = document.body.innerText || "";
+        let address = "";
+        let head = "";
+        let urbanPlanningUrl = "";
 
-        const addrMatch = text.match(/(?:адреса|місцезнаходження|юридична адреса)[:\s]+([^\n]{5,120})/i);
+        const addrMatch = text.match(
+          /(?:адреса|місцезнаходження|юридична адреса)[:\s]+([^\n]{5,120})/i,
+        );
         if (addrMatch) address = addrMatch[1].trim();
 
-        const headMatch = text.match(/(?:^|\n)\s*голова(?:\s+громади|\s+ради)?[:\s]+([^\n]{3,120})/i);
+        const headMatch = text.match(
+          /(?:^|\n)\s*голова(?:\s+громади|\s+ради)?[:\s]+([^\n]{3,120})/i,
+        );
         if (headMatch) head = headMatch[1].trim();
 
         if (!head) {
-          document.querySelectorAll('dt, th, strong, b, .label, .field__label, .name, .title').forEach(el => {
-            if (/голова/i.test(el.textContent) && !head) {
-              const sib = el.nextElementSibling || el.closest('tr')?.querySelector('td:last-child');
-              if (sib) head = (sib.textContent || '').trim();
-            }
-          });
+          document
+            .querySelectorAll(
+              "dt, th, strong, b, .label, .field__label, .name, .title",
+            )
+            .forEach((el) => {
+              if (/голова/i.test(el.textContent) && !head) {
+                const sib =
+                  el.nextElementSibling ||
+                  el.closest("tr")?.querySelector("td:last-child");
+                if (sib) head = (sib.textContent || "").trim();
+              }
+            });
         }
 
-        for (const a of document.querySelectorAll('a')) {
-          const txt = (a.textContent || '').trim();
-          const href = a.getAttribute('href') || '';
+        for (const a of document.querySelectorAll("a")) {
+          const txt = (a.textContent || "").trim();
+          const href = a.getAttribute("href") || "";
           if (!href) continue;
-          if (/комплексний\s*план|генеральний\s*план|містобудів|планувальн|стратег/i.test(txt)) {
-            try { urbanPlanningUrl = new URL(href, base).href; } catch (_) {}
+          if (
+            /комплексний\s*план|генеральний\s*план|містобудів|планувальн|стратег/i.test(
+              txt,
+            )
+          ) {
+            try {
+              urbanPlanningUrl = new URL(href, base).href;
+            } catch (_) {}
             if (urbanPlanningUrl) break;
           }
         }
@@ -1130,17 +1511,26 @@ async function getOfficialSiteInfo(siteUrl, browser, onProgress) {
       }, contactUrl);
 
       contactInfo = {
-        address: contactRaw.address || '',
-        head: contactRaw.head || '',
-        urbanPlanningUrl: sanitizeHttpUrl(contactRaw.urbanPlanningUrl, contactUrl),
+        address: contactRaw.address || "",
+        head: contactRaw.head || "",
+        urbanPlanningUrl: sanitizeHttpUrl(
+          contactRaw.urbanPlanningUrl,
+          contactUrl,
+        ),
       };
-      if (contactInfo.address || contactInfo.head || contactInfo.urbanPlanningUrl) break;
+      if (
+        contactInfo.address ||
+        contactInfo.head ||
+        contactInfo.urbanPlanningUrl
+      )
+        break;
     }
 
     // Prefer Контакти tab values, but fallback to homepage when missing.
     result.address = contactInfo.address || homeInfo.address;
     result.head = contactInfo.head || homeInfo.head;
-    result.urbanPlanningUrl = contactInfo.urbanPlanningUrl || homeInfo.urbanPlanningUrl;
+    result.urbanPlanningUrl =
+      contactInfo.urbanPlanningUrl || homeInfo.urbanPlanningUrl;
   } catch (e) {
     throw new Error(`Failed to scrape official site ${siteUrl}: ${e.message}`);
   } finally {
@@ -1156,15 +1546,22 @@ async function getBboxFromGeoJson(hromadaId, onProgress) {
   try {
     const raw = await httpGet(url);
     const geo = JSON.parse(raw);
-    if (!geo.geometry || !['Polygon', 'MultiPolygon'].includes(geo.geometry.type)) {
-      throw new Error('Invalid polygon geometry');
+    if (
+      !geo.geometry ||
+      !["Polygon", "MultiPolygon"].includes(geo.geometry.type)
+    ) {
+      throw new Error("Invalid polygon geometry");
     }
-    const rings = geo.geometry.type === 'Polygon'
-      ? [geo.geometry.coordinates[0] || []]
-      : geo.geometry.coordinates.map(poly => poly[0] || []);
+    const rings =
+      geo.geometry.type === "Polygon"
+        ? [geo.geometry.coordinates[0] || []]
+        : geo.geometry.coordinates.map((poly) => poly[0] || []);
     const coords = rings.flat();
-    if (coords.length < 3) throw new Error('Polygon has less than 3 points');
-    let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+    if (coords.length < 3) throw new Error("Polygon has less than 3 points");
+    let west = Infinity,
+      east = -Infinity,
+      south = Infinity,
+      north = -Infinity;
     coords.forEach(([lon, lat]) => {
       west = Math.min(west, lon);
       east = Math.max(east, lon);
@@ -1176,7 +1573,9 @@ async function getBboxFromGeoJson(hromadaId, onProgress) {
       boundaryGeojson: geo.geometry,
     };
   } catch (e) {
-    throw new Error(`Failed to fetch geo_json for hromada ${hromadaId}: ${e.message}`);
+    throw new Error(
+      `Failed to fetch geo_json for hromada ${hromadaId}: ${e.message}`,
+    );
   }
 }
 
@@ -1187,7 +1586,8 @@ function bboxAreaKm2(bbox) {
   const latDeg = north - south;
   const lonDeg = east - west;
   const latM = latDeg * 111320;
-  const lonM = lonDeg * 111320 * Math.cos((south + north) / 2 * Math.PI / 180);
+  const lonM =
+    lonDeg * 111320 * Math.cos((((south + north) / 2) * Math.PI) / 180);
   return (latM * lonM) / 1e6;
 }
 
@@ -1201,17 +1601,23 @@ function ensureClosedRing(ring) {
 
 function boundaryAreaM2(geometry) {
   if (!geometry) return 0;
-  if (geometry.type === 'Polygon') {
+  if (geometry.type === "Polygon") {
     const [outer = [], ...holes] = geometry.coordinates;
     const outerArea = polygonAreaM2(ensureClosedRing(outer));
-    const holesArea = holes.reduce((sum, h) => sum + polygonAreaM2(ensureClosedRing(h)), 0);
+    const holesArea = holes.reduce(
+      (sum, h) => sum + polygonAreaM2(ensureClosedRing(h)),
+      0,
+    );
     return Math.max(0, outerArea - holesArea);
   }
-  if (geometry.type === 'MultiPolygon') {
+  if (geometry.type === "MultiPolygon") {
     return geometry.coordinates.reduce((sum, poly) => {
       const [outer = [], ...holes] = poly;
       const outerArea = polygonAreaM2(ensureClosedRing(outer));
-      const holesArea = holes.reduce((hSum, h) => hSum + polygonAreaM2(ensureClosedRing(h)), 0);
+      const holesArea = holes.reduce(
+        (hSum, h) => hSum + polygonAreaM2(ensureClosedRing(h)),
+        0,
+      );
       return sum + Math.max(0, outerArea - holesArea);
     }, 0);
   }
@@ -1219,16 +1625,28 @@ function boundaryAreaM2(geometry) {
 }
 
 function normalizeElementBbox(el) {
-  if (typeof el.lon === 'number' && typeof el.lat === 'number') {
+  if (typeof el.lon === "number" && typeof el.lat === "number") {
     return { west: el.lon, east: el.lon, south: el.lat, north: el.lat };
   }
-  if (el.center && typeof el.center.lon === 'number' && typeof el.center.lat === 'number') {
-    return { west: el.center.lon, east: el.center.lon, south: el.center.lat, north: el.center.lat };
+  if (
+    el.center &&
+    typeof el.center.lon === "number" &&
+    typeof el.center.lat === "number"
+  ) {
+    return {
+      west: el.center.lon,
+      east: el.center.lon,
+      south: el.center.lat,
+      north: el.center.lat,
+    };
   }
   if (Array.isArray(el.geometry) && el.geometry.length) {
-    let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
-    el.geometry.forEach(p => {
-      if (typeof p.lon !== 'number' || typeof p.lat !== 'number') return;
+    let west = Infinity,
+      east = -Infinity,
+      south = Infinity,
+      north = -Infinity;
+    el.geometry.forEach((p) => {
+      if (typeof p.lon !== "number" || typeof p.lat !== "number") return;
       west = Math.min(west, p.lon);
       east = Math.max(east, p.lon);
       south = Math.min(south, p.lat);
@@ -1240,13 +1658,20 @@ function normalizeElementBbox(el) {
 }
 
 function bboxesIntersect(a, b) {
-  return !(a.east < b.west || a.west > b.east || a.north < b.south || a.south > b.north);
+  return !(
+    a.east < b.west ||
+    a.west > b.east ||
+    a.north < b.south ||
+    a.south > b.north
+  );
 }
 
 function resolveLocalInfraCachePath() {
   const predefined = resolveFromCandidates(LOCAL_INFRA_CACHE_CANDIDATES);
   if (predefined) return predefined;
-  return fs.existsSync(GENERATED_INFRA_CACHE_PATH) ? GENERATED_INFRA_CACHE_PATH : null;
+  return fs.existsSync(GENERATED_INFRA_CACHE_PATH)
+    ? GENERATED_INFRA_CACHE_PATH
+    : null;
 }
 
 function resolveLocalPbfPath() {
@@ -1254,21 +1679,36 @@ function resolveLocalPbfPath() {
 }
 
 function convertGeoJsonFeatureToInfraElement(feature) {
-  if (!feature || feature.type !== 'Feature' || !feature.geometry || !feature.properties) return null;
+  if (
+    !feature ||
+    feature.type !== "Feature" ||
+    !feature.geometry ||
+    !feature.properties
+  )
+    return null;
   const tags = feature.properties.tags || feature.properties;
   const g = feature.geometry;
   if (!tags || (!tags.power && !tags.pipeline && !tags.man_made)) return null;
-  const el = { type: 'way', tags: { ...tags } };
-  if (g.type === 'Point' && Array.isArray(g.coordinates)) {
-    el.type = 'node';
+  const el = { type: "way", tags: { ...tags } };
+  if (g.type === "Point" && Array.isArray(g.coordinates)) {
+    el.type = "node";
     el.lon = Number(g.coordinates[0]);
     el.lat = Number(g.coordinates[1]);
-  } else if (g.type === 'LineString' && Array.isArray(g.coordinates)) {
-    el.geometry = g.coordinates.map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
-  } else if (g.type === 'Polygon' && Array.isArray(g.coordinates[0])) {
-    el.geometry = g.coordinates[0].map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
-  } else if (g.type === 'MultiLineString' && Array.isArray(g.coordinates[0])) {
-    el.geometry = g.coordinates[0].map(([lon, lat]) => ({ lon: Number(lon), lat: Number(lat) }));
+  } else if (g.type === "LineString" && Array.isArray(g.coordinates)) {
+    el.geometry = g.coordinates.map(([lon, lat]) => ({
+      lon: Number(lon),
+      lat: Number(lat),
+    }));
+  } else if (g.type === "Polygon" && Array.isArray(g.coordinates[0])) {
+    el.geometry = g.coordinates[0].map(([lon, lat]) => ({
+      lon: Number(lon),
+      lat: Number(lat),
+    }));
+  } else if (g.type === "MultiLineString" && Array.isArray(g.coordinates[0])) {
+    el.geometry = g.coordinates[0].map(([lon, lat]) => ({
+      lon: Number(lon),
+      lat: Number(lat),
+    }));
   } else {
     return null;
   }
@@ -1277,15 +1717,15 @@ function convertGeoJsonFeatureToInfraElement(feature) {
 
 function isInfraTagged(tags) {
   if (!tags) return false;
-  if (tags.power === 'line') return true;
-  if (tags.power === 'substation') return true;
-  if (tags.man_made === 'pipeline' && tags.substance === 'gas') return true;
-  if (tags.pipeline === 'gas') return true;
+  if (tags.power === "line") return true;
+  if (tags.power === "substation") return true;
+  if (tags.man_made === "pipeline" && tags.substance === "gas") return true;
+  if (tags.pipeline === "gas") return true;
   return false;
 }
 
 async function parsePbfCollectInfra(pbfPath, onProgress) {
-  const parseOSM = require('osm-pbf-parser');
+  const parseOSM = require("osm-pbf-parser");
   const wayCandidates = new Map();
   const nodeInfra = [];
   const neededNodeIds = new Set();
@@ -1294,13 +1734,13 @@ async function parsePbfCollectInfra(pbfPath, onProgress) {
     const parser = parseOSM();
     fs.createReadStream(pbfPath)
       .pipe(parser)
-      .on('data', (items) => {
+      .on("data", (items) => {
         for (const item of items || []) {
           if (!item || !item.tags) continue;
-          if (item.type === 'node') {
-            if (item.tags.power === 'substation') {
+          if (item.type === "node") {
+            if (item.tags.power === "substation") {
               nodeInfra.push({
-                type: 'node',
+                type: "node",
                 lon: Number(item.lon),
                 lat: Number(item.lat),
                 tags: item.tags,
@@ -1309,37 +1749,51 @@ async function parsePbfCollectInfra(pbfPath, onProgress) {
             }
             continue;
           }
-          if (item.type !== 'way' || !isInfraTagged(item.tags) || !Array.isArray(item.refs) || !item.refs.length) continue;
+          if (
+            item.type !== "way" ||
+            !isInfraTagged(item.tags) ||
+            !Array.isArray(item.refs) ||
+            !item.refs.length
+          )
+            continue;
           const id = String(item.id);
           if (!wayCandidates.has(id)) {
-            wayCandidates.set(id, { id, refs: item.refs.slice(), tags: { ...item.tags } });
+            wayCandidates.set(id, {
+              id,
+              refs: item.refs.slice(),
+              tags: { ...item.tags },
+            });
             item.refs.forEach((ref) => neededNodeIds.add(String(ref)));
             pass1Stats.way += 1;
           }
         }
       })
-      .on('error', reject)
-      .on('end', resolve);
+      .on("error", reject)
+      .on("end", resolve);
   });
-  onProgress(`  → PBF pass 1 done: ${pass1Stats.way} ways, ${pass1Stats.node} tagged nodes`);
+  onProgress(
+    `  → PBF pass 1 done: ${pass1Stats.way} ways, ${pass1Stats.node} tagged nodes`,
+  );
 
   const nodeCoords = new Map();
   await new Promise((resolve, reject) => {
     const parser = parseOSM();
     fs.createReadStream(pbfPath)
       .pipe(parser)
-      .on('data', (items) => {
+      .on("data", (items) => {
         for (const item of items || []) {
-          if (!item || item.type !== 'node') continue;
+          if (!item || item.type !== "node") continue;
           const id = String(item.id);
           if (!neededNodeIds.has(id)) continue;
           nodeCoords.set(id, [Number(item.lon), Number(item.lat)]);
         }
       })
-      .on('error', reject)
-      .on('end', resolve);
+      .on("error", reject)
+      .on("end", resolve);
   });
-  onProgress(`  → PBF pass 2 done: ${nodeCoords.size}/${neededNodeIds.size} referenced nodes resolved`);
+  onProgress(
+    `  → PBF pass 2 done: ${nodeCoords.size}/${neededNodeIds.size} referenced nodes resolved`,
+  );
 
   const elements = [];
   for (const entry of wayCandidates.values()) {
@@ -1348,21 +1802,33 @@ async function parsePbfCollectInfra(pbfPath, onProgress) {
       .filter(Boolean)
       .map(([lon, lat]) => ({ lon, lat }));
     if (!geometry.length) continue;
-    elements.push({ type: 'way', tags: entry.tags, geometry });
+    elements.push({ type: "way", tags: entry.tags, geometry });
   }
-  elements.push(...nodeInfra.filter((n) => Number.isFinite(n.lon) && Number.isFinite(n.lat)));
+  elements.push(
+    ...nodeInfra.filter(
+      (n) => Number.isFinite(n.lon) && Number.isFinite(n.lat),
+    ),
+  );
   return elements;
 }
 
 async function buildInfraCacheFromPbf(onProgress) {
   const pbfPath = resolveLocalPbfPath();
   if (!pbfPath) return null;
-  onProgress(`📦 Building offline infra cache from PBF: ${path.basename(pbfPath)} (one-time)…`);
+  onProgress(
+    `📦 Building offline infra cache from PBF: ${path.basename(pbfPath)} (one-time)…`,
+  );
   const elements = await parsePbfCollectInfra(pbfPath, onProgress);
   const outDir = path.dirname(GENERATED_INFRA_CACHE_PATH);
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(GENERATED_INFRA_CACHE_PATH, JSON.stringify({ elements }, null, 2), 'utf8');
-  onProgress(`  ✅ Offline infra cache saved: ${GENERATED_INFRA_CACHE_PATH} (${elements.length} elements)`);
+  fs.writeFileSync(
+    GENERATED_INFRA_CACHE_PATH,
+    JSON.stringify({ elements }, null, 2),
+    "utf8",
+  );
+  onProgress(
+    `  ✅ Offline infra cache saved: ${GENERATED_INFRA_CACHE_PATH} (${elements.length} elements)`,
+  );
   return GENERATED_INFRA_CACHE_PATH;
 }
 
@@ -1372,22 +1838,30 @@ async function loadLocalInfraCache(onProgress) {
     let cachePath = resolveLocalInfraCachePath();
     if (!cachePath) cachePath = await buildInfraCacheFromPbf(onProgress);
     if (!cachePath) return null;
-    const raw = fs.readFileSync(cachePath, 'utf8');
+    const raw = fs.readFileSync(cachePath, "utf8");
     let parsed = JSON.parse(raw);
     let elements = [];
     if (Array.isArray(parsed)) {
       elements = parsed;
     } else if (parsed && Array.isArray(parsed.elements)) {
       elements = parsed.elements;
-    } else if (parsed && parsed.type === 'FeatureCollection' && Array.isArray(parsed.features)) {
-      elements = parsed.features.map(convertGeoJsonFeatureToInfraElement).filter(Boolean);
+    } else if (
+      parsed &&
+      parsed.type === "FeatureCollection" &&
+      Array.isArray(parsed.features)
+    ) {
+      elements = parsed.features
+        .map(convertGeoJsonFeatureToInfraElement)
+        .filter(Boolean);
     } else {
-      throw new Error('Unsupported infra cache format');
+      throw new Error("Unsupported infra cache format");
     }
     const normalized = elements
       .map((el) => ({ ...el, _bbox: normalizeElementBbox(el) }))
       .filter((el) => el._bbox);
-    onProgress(`📦 Using local infra cache: ${path.basename(cachePath)} (${normalized.length} elements)`);
+    onProgress(
+      `📦 Using local infra cache: ${path.basename(cachePath)} (${normalized.length} elements)`,
+    );
     return normalized;
   })().catch((err) => {
     onProgress(`  ⚠ Local infra cache load failed: ${err.message}`);
@@ -1410,9 +1884,18 @@ async function prefetchOblastInfraData(oblastBbox, onProgress) {
   way["pipeline"="gas"](${b});
 );
 out geom tags;`;
-  onProgress(`🌍 Prefetching oblast infrastructure (power/substations/gas) once…`);
-  const data = await overpassQuery(infraQl, onProgress, OVERPASS_TIMEOUT_NORMAL_MS);
-  const elements = (data.elements || []).map(el => ({ ...el, _bbox: normalizeElementBbox(el) }));
+  onProgress(
+    `🌍 Prefetching oblast infrastructure (power/substations/gas) once…`,
+  );
+  const data = await overpassQuery(
+    infraQl,
+    onProgress,
+    OVERPASS_TIMEOUT_NORMAL_MS,
+  );
+  const elements = (data.elements || []).map((el) => ({
+    ...el,
+    _bbox: normalizeElementBbox(el),
+  }));
   onProgress(`  ✅ Infra cache loaded: ${elements.length} elements`);
   return elements;
 }
@@ -1420,46 +1903,61 @@ out geom tags;`;
 function infraSummaryFromElements(infraElements) {
   // ── Power lines ──────────────────────────────────────────
   const voltages = new Set();
-  infraElements.forEach(el => {
-    if (el.type !== 'way') return;
+  infraElements.forEach((el) => {
+    if (el.type !== "way") return;
     const tags = el.tags || {};
-    if (tags.power !== 'line') return;
+    if (tags.power !== "line") return;
     const v = tags.voltage;
     if (v) {
-      v.split(/[;,]/).forEach(part => {
+      v.split(/[;,]/).forEach((part) => {
         const kv = Math.round(parseFloat(part.trim()) / 1000);
         if (kv > 0) voltages.add(kv);
       });
     }
   });
-  const powerLinesText = voltages.size > 0
-    ? [...voltages].sort((a, b) => b - a).map(v => `${v} кВ`).join(', ')
-    : '';
+  const powerLinesText =
+    voltages.size > 0
+      ? [...voltages]
+          .sort((a, b) => b - a)
+          .map((v) => `${v} кВ`)
+          .join(", ")
+      : "";
 
   // ── Substations ──────────────────────────────────────────
   const substationNames = [];
-  infraElements.forEach(el => {
+  infraElements.forEach((el) => {
     const tags = el.tags || {};
-    if (tags.power !== 'substation') return;
-    const name = tags.name || tags['name:uk'] || '';
-    const voltage = tags.voltage || '';
+    if (tags.power !== "substation") return;
+    const name = tags.name || tags["name:uk"] || "";
+    const voltage = tags.voltage || "";
     if (name) {
-      const kv = voltage ? ` ${Math.round(parseFloat(voltage.split(/[;,]/)[0]) / 1000)}/${Math.round(parseFloat(voltage.split(/[;,]/)[1] || 10) / 1000)} кВ` : '';
+      const kv = voltage
+        ? ` ${Math.round(parseFloat(voltage.split(/[;,]/)[0]) / 1000)}/${Math.round(parseFloat(voltage.split(/[;,]/)[1] || 10) / 1000)} кВ`
+        : "";
       substationNames.push(name + kv);
     }
   });
-  const substationsText = substationNames.slice(0, 5).join('; ');
+  const substationsText = substationNames.slice(0, 5).join("; ");
 
   // ── Gas pipelines ────────────────────────────────────────
-  const hasGas = infraElements.some(el => {
+  const hasGas = infraElements.some((el) => {
     const tags = el.tags || {};
-    return (tags.man_made === 'pipeline' && tags.substance === 'gas') || tags.pipeline === 'gas';
+    return (
+      (tags.man_made === "pipeline" && tags.substance === "gas") ||
+      tags.pipeline === "gas"
+    );
   });
 
   return { powerLinesText, substationsText, hasGas };
 }
 
-async function fetchOsmResearchData(bbox, boundaryGeometry, onProgress, infraCacheElements = null, forestOverride = null) {
+async function fetchOsmResearchData(
+  bbox,
+  boundaryGeometry,
+  onProgress,
+  infraCacheElements = null,
+  forestOverride = null,
+) {
   const { south, west, north, east } = bbox;
   const b = `${south},${west},${north},${east}`;
 
@@ -1490,7 +1988,7 @@ out geom tags;`;
         forestQl,
         onProgress,
         20000,
-        OVERPASS_FOREST_TOTAL_TIMEOUT_MS
+        OVERPASS_FOREST_TOTAL_TIMEOUT_MS,
       );
       forestElements = forestData.elements || [];
     } catch (e) {
@@ -1500,13 +1998,24 @@ out geom tags;`;
 
   let infraElements = [];
   if (infraCacheElements && infraCacheElements.length) {
-    infraElements = infraCacheElements.filter(el => el._bbox && bboxesIntersect(el._bbox, bbox));
-    onProgress(`  → Using oblast infra cache: ${infraElements.length} nearby elements`);
+    infraElements = infraCacheElements.filter(
+      (el) => el._bbox && bboxesIntersect(el._bbox, bbox),
+    );
+    onProgress(
+      `  → Using oblast infra cache: ${infraElements.length} nearby elements`,
+    );
   } else {
     onProgress(`  → Querying Overpass for power/substations/gas…`);
     try {
-      const infraData = await overpassQuery(infraQl, onProgress, OVERPASS_TIMEOUT_FAST_MS);
-      infraElements = (infraData.elements || []).map(el => ({ ...el, _bbox: normalizeElementBbox(el) }));
+      const infraData = await overpassQuery(
+        infraQl,
+        onProgress,
+        OVERPASS_TIMEOUT_FAST_MS,
+      );
+      infraElements = (infraData.elements || []).map((el) => ({
+        ...el,
+        _bbox: normalizeElementBbox(el),
+      }));
     } catch (e) {
       onProgress(`  ⚠ Infra query timed out/failed: ${e.message}`);
     }
@@ -1514,26 +2023,34 @@ out geom tags;`;
 
   // ── Forest coverage ──────────────────────────────────────
   let forestAreaM2 = 0;
-  forestElements.forEach(el => {
-    if (el.type !== 'way') return;
+  forestElements.forEach((el) => {
+    if (el.type !== "way") return;
     const tags = el.tags || {};
-    if (tags.landuse !== 'forest' && tags.natural !== 'wood') return;
+    if (tags.landuse !== "forest" && tags.natural !== "wood") return;
     if (!el.geometry) return;
     // Build a ring from geometry if available
     let ring = null;
     if (el.geometry && el.geometry.length >= 3) {
-      ring = el.geometry.map(p => [p.lon, p.lat]);
+      ring = el.geometry.map((p) => [p.lon, p.lat]);
     }
     if (ring) forestAreaM2 += polygonAreaM2(ring);
   });
 
-  const totalAreaM2 = boundaryAreaM2(boundaryGeometry) || (bboxAreaKm2(bbox) * 1e6);
-  const forestPctRaw = forestOverride != null
-    ? forestOverride
-    : (totalAreaM2 > 0 ? (forestAreaM2 / totalAreaM2) : 0);
-  const forestPct = Math.max(0, Math.min(1, Math.round(forestPctRaw * 1000) / 1000));
+  const totalAreaM2 =
+    boundaryAreaM2(boundaryGeometry) || bboxAreaKm2(bbox) * 1e6;
+  const forestPctRaw =
+    forestOverride != null
+      ? forestOverride
+      : totalAreaM2 > 0
+        ? forestAreaM2 / totalAreaM2
+        : 0;
+  const forestPct = Math.max(
+    0,
+    Math.min(1, Math.round(forestPctRaw * 1000) / 1000),
+  );
 
-  const { powerLinesText, substationsText, hasGas } = infraSummaryFromElements(infraElements);
+  const { powerLinesText, substationsText, hasGas } =
+    infraSummaryFromElements(infraElements);
 
   return {
     forestPct,
@@ -1554,51 +2071,64 @@ function estimateRoughnessLength(forestPct) {
 // ── XLSX generation ───────────────────────────────────────
 
 const HEADERS = [
-  'No.',
-  'Community name',
-  'Community type',
-  'District',
-  'Forest cover %',
-  'Emerald Network',
-  'Nature reserve fund (https://pzf.land.kiev.ua)',
-  'Average wind speed (m/s) altitude of 150 m',
-  'Gas mains',
-  'Other Risks',
-  'Availability of power lines (voltage class)',
-  'Availability of substations (SS) and their capacity',
-  'Стадія Комплексного плану',
-  'Клас шорсткості поверхні',
-  'Ризик карстоутворення',
-  'Характеристика геологічних умов',
-  'My conclusions',
-  'Address/contacts',
-  'Head community',
-  'Link on urban planning documentation',
+  "No.",
+  "Community name",
+  "Community type",
+  "District",
+  "Forest cover %",
+  "Emerald Network",
+  "Nature reserve fund (https://pzf.land.kiev.ua)",
+  "Average wind speed (m/s) altitude of 150 m",
+  "Gas mains",
+  "Other Risks",
+  "Availability of power lines (voltage class)",
+  "Availability of substations (SS) and their capacity",
+  "Стадія Комплексного плану",
+  "Клас шорсткості поверхні",
+  "Ризик карстоутворення",
+  "Характеристика геологічних умов",
+  "My conclusions",
+  "Address/contacts",
+  "Head community",
+  "Link on urban planning documentation",
 ];
 
 async function buildXlsx(rows, outputPath, oblastName) {
-  const ExcelJS = require('exceljs');
+  const ExcelJS = require("exceljs");
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet(oblastName || 'Research');
+  const ws = wb.addWorksheet(oblastName || "Research");
 
   // Column widths
-  const colWidths = [5, 30, 18, 22, 14, 16, 45, 20, 14, 22, 30, 35, 25, 18, 18, 35, 25, 35, 25, 40];
+  const colWidths = [
+    5, 30, 18, 22, 14, 16, 45, 20, 14, 22, 30, 35, 25, 18, 18, 35, 25, 35, 25,
+    40,
+  ];
   HEADERS.forEach((h, i) => {
     const col = ws.getColumn(i + 1);
     col.width = colWidths[i] || 20;
   });
   // Forest cover is stored as a fraction (e.g. 0.2) — display as percentage in Excel.
-  ws.getColumn(5).numFmt = '0%';
+  ws.getColumn(5).numFmt = "0%";
 
   // Header row
   const headerRow = ws.addRow(HEADERS);
-  headerRow.eachCell(cell => {
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } };
-    cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+  headerRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E79" },
+    };
+    cell.alignment = {
+      wrapText: true,
+      vertical: "middle",
+      horizontal: "center",
+    };
     cell.border = {
-      top: { style: 'thin' }, bottom: { style: 'thin' },
-      left: { style: 'thin' }, right: { style: 'thin' },
+      top: { style: "thin" },
+      bottom: { style: "thin" },
+      left: { style: "thin" },
+      right: { style: "thin" },
     };
   });
   headerRow.height = 40;
@@ -1607,51 +2137,57 @@ async function buildXlsx(rows, outputPath, oblastName) {
   rows.forEach((r, idx) => {
     const row = ws.addRow([
       idx + 1,
-      { text: r.name, hyperlink: r.url || '' },
-      r.type || '',
-      r.district || '',
-      r.forestPct != null ? r.forestPct : '',
-      r.emerald || '',
-      r.natureReserves || '',
-      r.windSpeed != null ? r.windSpeed : '',
-      r.hasGas ? 'Є' : 'Відсутні',
-      '',  // Other risks — blank
-      r.powerLines || '',
-      r.substations || '',
-      r.kpStage || '',
-      r.roughness != null ? r.roughness : '',
-      r.karstRisk || '',
-      r.geologicalConditions || '',
-      '',  // Висновки — blank
-      r.address || '',
-      r.head || '',
-      r.urbanPlanningUrl ? { text: r.urbanPlanningUrl, hyperlink: r.urbanPlanningUrl } : '',
+      { text: r.name, hyperlink: r.url || "" },
+      r.type || "",
+      r.district || "",
+      r.forestPct != null ? r.forestPct : "",
+      r.emerald || "",
+      r.natureReserves || "",
+      r.windSpeed != null ? r.windSpeed : "",
+      r.hasGas ? "Є" : "Відсутні",
+      "", // Other risks — blank
+      r.powerLines || "",
+      r.substations || "",
+      r.kpStage || "",
+      r.roughness != null ? r.roughness : "",
+      r.karstRisk || "",
+      r.geologicalConditions || "",
+      "", // Висновки — blank
+      r.address || "",
+      r.head || "",
+      r.urbanPlanningUrl
+        ? { text: r.urbanPlanningUrl, hyperlink: r.urbanPlanningUrl }
+        : "",
     ]);
 
     row.eachCell((cell, colNum) => {
-      cell.alignment = { wrapText: true, vertical: 'top' };
+      cell.alignment = { wrapText: true, vertical: "top" };
       cell.border = {
-        top: { style: 'thin', color: { argb: 'FFDDDDDD' } },
-        bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } },
-        left: { style: 'thin', color: { argb: 'FFDDDDDD' } },
-        right: { style: 'thin', color: { argb: 'FFDDDDDD' } },
+        top: { style: "thin", color: { argb: "FFDDDDDD" } },
+        bottom: { style: "thin", color: { argb: "FFDDDDDD" } },
+        left: { style: "thin", color: { argb: "FFDDDDDD" } },
+        right: { style: "thin", color: { argb: "FFDDDDDD" } },
       };
       // Style community name cell as hyperlink
       if (colNum === 2 && r.url) {
-        cell.font = { color: { argb: 'FF0563C1' }, underline: true };
+        cell.font = { color: { argb: "FF0563C1" }, underline: true };
       }
       // Style last col as hyperlink
       if (colNum === 20 && r.urbanPlanningUrl) {
-        cell.font = { color: { argb: 'FF0563C1' }, underline: true };
+        cell.font = { color: { argb: "FF0563C1" }, underline: true };
       }
       // Alternate row shade
       if (idx % 2 === 1) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F9FF' } };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF5F9FF" },
+        };
       }
     });
   });
 
-  ws.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
+  ws.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
   await wb.xlsx.writeFile(outputPath);
 }
 
@@ -1663,7 +2199,12 @@ function stopResearch() {
   _stopRequested = true;
 }
 
-async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePath) {
+async function generateResearchXlsx(
+  oblastName,
+  outputPath,
+  onProgress,
+  chromePath,
+) {
   _stopRequested = false;
   onProgress(`🗺  Pre-Research XLSX: "${oblastName}"`);
 
@@ -1675,23 +2216,23 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
   // 2. Puppeteer browser
   let puppeteer;
   try {
-    puppeteer = require('puppeteer');
+    puppeteer = require("puppeteer");
   } catch (e) {
-    throw new Error('Puppeteer not available: ' + e.message);
+    throw new Error("Puppeteer not available: " + e.message);
   }
 
-  const launchOpts = { 
-    headless: 'new', 
+  const launchOpts = {
+    headless: "new",
     ignoreHTTPSErrors: true,
     args: [
-      '--no-sandbox', 
-      '--disable-dev-shm-usage',
-      '--disable-setuid-sandbox',
-      '--disable-web-security',
-      '--ignore-certificate-errors',
-      '--window-size=1920,1080',
-      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    ] 
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-setuid-sandbox",
+      "--disable-web-security",
+      "--ignore-certificate-errors",
+      "--window-size=1920,1080",
+      "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   };
   if (chromePath) launchOpts.executablePath = chromePath;
   const browser = await puppeteer.launch(launchOpts);
@@ -1700,16 +2241,25 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
     // 3. Get hromada list
     onProgress(`📋 Fetching hromada list…`);
     const hromadas = await getHromadaList(oblast.id, browser, onProgress);
-    if (!hromadas.length) throw new Error('No hromadas found — check the oblast name');
+    if (!hromadas.length)
+      throw new Error("No hromadas found — check the oblast name");
 
     onProgress(`  ✅ ${hromadas.length} hromadas to process`);
 
     // 4. Preload hromada boundaries + oblast infra cache
     onProgress(`📐 Loading hromada boundaries for cache planning…`);
     const hromadaGeo = new Map();
-    let oblastBbox = { west: Infinity, east: -Infinity, south: Infinity, north: -Infinity };
+    let oblastBbox = {
+      west: Infinity,
+      east: -Infinity,
+      south: Infinity,
+      north: -Infinity,
+    };
     for (let i = 0; i < hromadas.length; i++) {
-      if (_stopRequested) { onProgress('⛔ Stopped by user'); break; }
+      if (_stopRequested) {
+        onProgress("⛔ Stopped by user");
+        break;
+      }
       const h = hromadas[i];
       try {
         const geo = await getBboxFromGeoJson(h.id, onProgress);
@@ -1731,25 +2281,39 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
       try {
         const localInfraCache = await loadLocalInfraCache(onProgress);
         if (localInfraCache && localInfraCache.length) {
-          oblastInfraCache = localInfraCache.filter(el => bboxesIntersect(el._bbox, oblastBbox));
-          onProgress(`  ✅ Local infra cache prepared: ${oblastInfraCache.length} elements in oblast bbox`);
+          oblastInfraCache = localInfraCache.filter((el) =>
+            bboxesIntersect(el._bbox, oblastBbox),
+          );
+          onProgress(
+            `  ✅ Local infra cache prepared: ${oblastInfraCache.length} elements in oblast bbox`,
+          );
         } else {
-          oblastInfraCache = await prefetchOblastInfraData(oblastBbox, onProgress);
+          oblastInfraCache = await prefetchOblastInfraData(
+            oblastBbox,
+            onProgress,
+          );
         }
       } catch (e) {
-        onProgress(`  ⚠ Oblast infra prefetch failed, falling back to per-hromada infra queries: ${e.message}`);
+        onProgress(
+          `  ⚠ Oblast infra prefetch failed, falling back to per-hromada infra queries: ${e.message}`,
+        );
       }
     }
 
     // 5. Process each hromada sequentially (Overpass throttles parallel requests)
-    const BATCH = 1;  // Process one at a time to avoid Overpass overload
+    const BATCH = 1; // Process one at a time to avoid Overpass overload
     const PARTIAL_SAVE_EVERY = 20;
     const results = [];
 
     for (let i = 0; i < hromadas.length; i += BATCH) {
-      if (_stopRequested) { onProgress('⛔ Stopped by user'); break; }
+      if (_stopRequested) {
+        onProgress("⛔ Stopped by user");
+        break;
+      }
       const batch = hromadas.slice(i, i + BATCH);
-      onProgress(`\n📦 Hromada ${i + 1}/${hromadas.length}: ${batch.map(h => h.name).join(', ')}`);
+      onProgress(
+        `\n📦 Hromada ${i + 1}/${hromadas.length}: ${batch.map((h) => h.name).join(", ")}`,
+      );
 
       const batchResults = [];
       for (const hromada of batch) {
@@ -1759,43 +2323,47 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
           type: hromada.type,
           district: hromada.district,
           forestPct: null,
-          emerald: '',
-          natureReserves: '',
+          emerald: "",
+          natureReserves: "",
           windSpeed: null,
           hasGas: false,
-          powerLines: '',
-          substations: '',
-          kpStage: '',
+          powerLines: "",
+          substations: "",
+          kpStage: "",
           roughness: null,
-          karstRisk: '',
-          geologicalConditions: '',
-          address: '',
-          head: '',
-          urbanPlanningUrl: '',
+          karstRisk: "",
+          geologicalConditions: "",
+          address: "",
+          head: "",
+          urbanPlanningUrl: "",
         };
 
         try {
           // Resolve bbox using REST API geo_json endpoint
           onProgress(`  🔍 ${hromada.name}: fetching boundary…`);
-          const geo = hromadaGeo.get(hromada.id) || await getBboxFromGeoJson(hromada.id, onProgress);
+          const geo =
+            hromadaGeo.get(hromada.id) ||
+            (await getBboxFromGeoJson(hromada.id, onProgress));
           const { bbox, boundaryGeojson } = geo;
 
           try {
             const localForest = await withTimeout(
-              getLocalForestPct(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+              getLocalForestPct(boundaryGeojson, bbox, (msg) =>
+                onProgress(`  [${hromada.name}] ${msg}`),
+              ),
               TASK_TIMEOUTS_MS.osm,
-              'Local forest task'
+              "Local forest task",
             );
             const osm = await withTimeout(
               fetchOsmResearchData(
                 bbox,
                 boundaryGeojson,
-                msg => onProgress(`  [${hromada.name}] ${msg}`),
+                (msg) => onProgress(`  [${hromada.name}] ${msg}`),
                 oblastInfraCache,
-                localForest
+                localForest,
               ),
               TASK_TIMEOUTS_MS.osm,
-              'OSM task'
+              "OSM task",
             );
             row.forestPct = osm.forestPct;
             row.powerLines = osm.powerLinesText;
@@ -1808,17 +2376,19 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
 
           try {
             const localWind = await withTimeout(
-              getLocalWindSpeedAtCentroid(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+              getLocalWindSpeedAtCentroid(boundaryGeojson, bbox, (msg) =>
+                onProgress(`  [${hromada.name}] ${msg}`),
+              ),
               TASK_TIMEOUTS_MS.wind,
-              'Local wind task'
+              "Local wind task",
             );
             if (localWind != null) {
               row.windSpeed = localWind;
             } else {
               const wind = await withTimeout(
-                fetchWindHeatmap(bbox, 150, msg => {}),
+                fetchWindHeatmap(bbox, 150, (msg) => {}),
                 TASK_TIMEOUTS_MS.wind,
-                'Wind task'
+                "Wind task",
               );
               row.windSpeed = wind.avgSpeed;
             }
@@ -1828,19 +2398,21 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
 
           try {
             const localEmerald = await withTimeout(
-              getLocalEmerald(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+              getLocalEmerald(boundaryGeojson, bbox, (msg) =>
+                onProgress(`  [${hromada.name}] ${msg}`),
+              ),
               10000,
-              'Local Emerald task'
+              "Local Emerald task",
             );
             if (localEmerald != null) {
-              row.emerald = localEmerald.length > 0 ? '+' : '';
+              row.emerald = localEmerald.length > 0 ? "+" : "";
             } else {
               const emerald = await withTimeout(
-                fetchEmeraldFromEEA(bbox, msg => {}),
+                fetchEmeraldFromEEA(bbox, (msg) => {}),
                 TASK_TIMEOUTS_MS.emerald,
-                'Emerald task'
+                "Emerald task",
               );
-              row.emerald = emerald.length > 0 ? '+' : '';
+              row.emerald = emerald.length > 0 ? "+" : "";
             }
           } catch (e) {
             onProgress(`  ⚠ ${hromada.name}: Emerald error: ${e.message}`);
@@ -1848,21 +2420,27 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
 
           try {
             const localPzf = await withTimeout(
-              getLocalPzf(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+              getLocalPzf(boundaryGeojson, bbox, (msg) =>
+                onProgress(`  [${hromada.name}] ${msg}`),
+              ),
               10000,
-              'Local PZF task'
+              "Local PZF task",
             );
             if (localPzf != null) {
-              row.natureReserves = [...new Set(localPzf)].slice(0, 5).join('; ');
+              row.natureReserves = [...new Set(localPzf)]
+                .slice(0, 5)
+                .join("; ");
             } else {
               const pzf = await withTimeout(
-                fetchNatureReservesFromPZF(bbox, msg => {}),
+                fetchNatureReservesFromPZF(bbox, (msg) => {}),
                 TASK_TIMEOUTS_MS.pzf,
-                'PZF task'
+                "PZF task",
               );
               if (pzf.length > 0) {
-                const names = [...new Set(pzf.map(f => f.properties.name).filter(Boolean))];
-                row.natureReserves = names.slice(0, 5).join('; ');
+                const names = [
+                  ...new Set(pzf.map((f) => f.properties.name).filter(Boolean)),
+                ];
+                row.natureReserves = names.slice(0, 5).join("; ");
               }
             }
           } catch (e) {
@@ -1874,21 +2452,31 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
               const pageInfo = await withTimeout(
                 getHromadaPageInfo(hromada.id, browser, onProgress),
                 TASK_TIMEOUTS_MS.page,
-                'Community page task'
+                "Community page task",
               );
               row.kpStage = pageInfo.kpStage;
               let officialSiteUrl = pageInfo.officialSiteUrl;
-              if (shouldUseWebsiteSearchFallback(officialSiteUrl, hromada.name)) {
+              if (
+                shouldUseWebsiteSearchFallback(officialSiteUrl, hromada.name)
+              ) {
                 if (officialSiteUrl) {
-                  onProgress(`  ⚠ ${hromada.name}: suspicious official URL "${officialSiteUrl}", trying search fallback`);
+                  onProgress(
+                    `  ⚠ ${hromada.name}: suspicious official URL "${officialSiteUrl}", trying search fallback`,
+                  );
                 }
                 officialSiteUrl = await withTimeout(
-                  findOfficialSiteByWebSearch(hromada.name, oblastName, onProgress),
+                  findOfficialSiteByWebSearch(
+                    hromada.name,
+                    oblastName,
+                    onProgress,
+                  ),
                   15000,
-                  'Official site fallback search'
+                  "Official site fallback search",
                 );
                 if (officialSiteUrl) {
-                  onProgress(`  → ${hromada.name}: fallback official site found: ${officialSiteUrl}`);
+                  onProgress(
+                    `  → ${hromada.name}: fallback official site found: ${officialSiteUrl}`,
+                  );
                 }
               }
               if (officialSiteUrl) {
@@ -1896,46 +2484,71 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
                   const siteInfo = await withTimeout(
                     getOfficialSiteInfo(officialSiteUrl, browser, onProgress),
                     TASK_TIMEOUTS_MS.page,
-                    'Official site task'
+                    "Official site task",
                   );
                   row.address = siteInfo.address;
                   row.head = siteInfo.head;
                   row.urbanPlanningUrl = siteInfo.urbanPlanningUrl;
                 } catch (e) {
-                  onProgress(`  ⚠ ${hromada.name}: official site error: ${e.message}`);
+                  onProgress(
+                    `  ⚠ ${hromada.name}: official site error: ${e.message}`,
+                  );
                   if (isRecoverableOfficialSiteError(e.message)) {
                     let recoveredUrl = await withTimeout(
-                      findOfficialSiteByWebSearch(hromada.name, oblastName, onProgress),
+                      findOfficialSiteByWebSearch(
+                        hromada.name,
+                        oblastName,
+                        onProgress,
+                      ),
                       15000,
-                      'Official site recovery search'
+                      "Official site recovery search",
                     );
-                    if (!recoveredUrl && /timeout/i.test(String(e.message || ''))) {
+                    if (
+                      !recoveredUrl &&
+                      /timeout/i.test(String(e.message || ""))
+                    ) {
                       recoveredUrl = await withTimeout(
-                        findOfficialSiteByBrowserSearch(hromada.name, oblastName, browser, onProgress),
+                        findOfficialSiteByBrowserSearch(
+                          hromada.name,
+                          oblastName,
+                          browser,
+                          onProgress,
+                        ),
                         20000,
-                        'Official site browser recovery search'
+                        "Official site browser recovery search",
                       );
                     }
                     if (recoveredUrl && recoveredUrl !== officialSiteUrl) {
-                      onProgress(`  → ${hromada.name}: retrying with recovered site: ${recoveredUrl}`);
+                      onProgress(
+                        `  → ${hromada.name}: retrying with recovered site: ${recoveredUrl}`,
+                      );
                       try {
                         const retryInfo = await withTimeout(
-                          getOfficialSiteInfo(recoveredUrl, browser, onProgress),
+                          getOfficialSiteInfo(
+                            recoveredUrl,
+                            browser,
+                            onProgress,
+                          ),
                           TASK_TIMEOUTS_MS.page,
-                          'Official site retry task'
+                          "Official site retry task",
                         );
                         row.address = retryInfo.address || row.address;
                         row.head = retryInfo.head || row.head;
-                        row.urbanPlanningUrl = retryInfo.urbanPlanningUrl || row.urbanPlanningUrl;
+                        row.urbanPlanningUrl =
+                          retryInfo.urbanPlanningUrl || row.urbanPlanningUrl;
                       } catch (retryErr) {
-                        onProgress(`  ⚠ ${hromada.name}: recovered site retry failed: ${retryErr.message}`);
+                        onProgress(
+                          `  ⚠ ${hromada.name}: recovered site retry failed: ${retryErr.message}`,
+                        );
                       }
                     }
                   }
                 }
               }
             } catch (e) {
-              onProgress(`  ⚠ ${hromada.name}: page scrape error: ${e.message}`);
+              onProgress(
+                `  ⚠ ${hromada.name}: page scrape error: ${e.message}`,
+              );
             }
           }
 
@@ -1944,7 +2557,7 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
               const gromadaInfo = await withTimeout(
                 fetchGromadaInfoFallback(hromada.name, onProgress),
                 20000,
-                'gromada.info fallback task'
+                "gromada.info fallback task",
               );
               if (gromadaInfo.address && !row.address) {
                 row.address = gromadaInfo.contacts
@@ -1954,44 +2567,63 @@ async function generateResearchXlsx(oblastName, outputPath, onProgress, chromePa
               if (gromadaInfo.head && !row.head) {
                 row.head = gromadaInfo.head;
               }
-              if ((gromadaInfo.address || gromadaInfo.head) && gromadaInfo.sourceUrl) {
-                onProgress(`  → ${hromada.name}: filled from gromada.info (${gromadaInfo.sourceUrl})`);
+              if (
+                (gromadaInfo.address || gromadaInfo.head) &&
+                gromadaInfo.sourceUrl
+              ) {
+                onProgress(
+                  `  → ${hromada.name}: filled from gromada.info (${gromadaInfo.sourceUrl})`,
+                );
               }
             } catch (e) {
-              onProgress(`  ⚠ ${hromada.name}: gromada.info fallback error: ${e.message}`);
+              onProgress(
+                `  ⚠ ${hromada.name}: gromada.info fallback error: ${e.message}`,
+              );
             }
           }
 
           try {
             const geoInfo = await withTimeout(
-              getLocalGeologyAndKarst(boundaryGeojson, bbox, msg => onProgress(`  [${hromada.name}] ${msg}`)),
+              getLocalGeologyAndKarst(boundaryGeojson, bbox, (msg) =>
+                onProgress(`  [${hromada.name}] ${msg}`),
+              ),
               12000,
-              'Geology task'
+              "Geology task",
             );
-            row.karstRisk = geoInfo.karstRisk || '';
-            row.geologicalConditions = geoInfo.geologicalConditions || '';
+            row.karstRisk = geoInfo.karstRisk || "";
+            row.geologicalConditions = geoInfo.geologicalConditions || "";
           } catch (e) {
             onProgress(`  ⚠ ${hromada.name}: geology error: ${e.message}`);
           }
 
-          const forestLog = row.forestPct != null ? `${(row.forestPct * 100).toFixed(1)}%` : '?';
-          onProgress(`  ✅ ${hromada.name}: forest=${forestLog}, wind=${row.windSpeed ?? '?'} m/s, emerald=${row.emerald || '-'}`);
+          const forestLog =
+            row.forestPct != null
+              ? `${(row.forestPct * 100).toFixed(1)}%`
+              : "?";
+          onProgress(
+            `  ✅ ${hromada.name}: forest=${forestLog}, wind=${row.windSpeed ?? "?"} m/s, emerald=${row.emerald || "-"}`,
+          );
         } catch (e) {
           onProgress(`  ❌ ${hromada.name}: ${e.message}`);
         }
 
         batchResults.push(row);
-        
+
         // Pause between requests to avoid overwhelming Overpass
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300));
       }
 
       results.push(...batchResults);
 
       // Save periodically to reduce IO overhead
-      if (results.length % PARTIAL_SAVE_EVERY === 0 || results.length === hromadas.length) {
+      if (
+        results.length % PARTIAL_SAVE_EVERY === 0 ||
+        results.length === hromadas.length
+      ) {
         await buildXlsx(results, outputPath, oblastName);
-        onProgress(`  💾 Partial save: ${results.length}/${hromadas.length} rows written`);
+        onProgress(
+          `  💾 Partial save: ${results.length}/${hromadas.length} rows written`,
+        );
       }
     }
 

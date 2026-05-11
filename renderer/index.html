@@ -19,19 +19,37 @@
       </div>
 
       <div class="field global-fetch-mode">
-        <label for="parcel-fetch-mode">Fetch mode</label>
-        <select id="parcel-fetch-mode">
+        <label>Workflow mode</label>
+        <div class="mode-cards" id="parcel-mode-cards">
+          <button class="mode-card mode-card-half active" type="button" data-fetch-mode="boundary">🧭 Boundary + OSM layers</button>
+          <button class="mode-card mode-card-half" type="button" data-fetch-mode="kadastr">🗺 Kadastr parcel scraping (KMZ/KML)</button>
+          <button class="mode-card mode-card-full mode-card-shortcut" type="button" data-fetch-mode="eland">📋 e.land.gov.ua Lookup</button>
+          <button class="mode-card mode-card-third" type="button" data-fetch-mode="cadnum">🔢 Cadastral number lookup</button>
+          <button class="mode-card mode-card-third" type="button" data-fetch-mode="custom">🏘 Custom settlement boundary</button>
+          <button class="mode-card mode-card-third" type="button" data-fetch-mode="coords">📍 Extract polygon coordinates</button>
+        </div>
+        <select id="parcel-fetch-mode" style="display:none;">
           <option value="boundary" selected>Area boundary (KMZ/KML)</option>
           <option value="custom">Custom settlement boundary (KMZ)</option>
           <option value="kadastr">Kadastr parcel scraping (KMZ/KML)</option>
           <option value="cadnum">Cadastr number</option>
+          <option value="coords">Extract polygon coordinates</option>
+          <option value="eland">e.land.gov.ua Lookup</option>
         </select>
       </div>
 
       <div class="left-tab-panel active" id="tab-panel-parcels" role="tabpanel">
-        <div class="field">
-          <label for="area-name">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate multiple with <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">...</code></span></label>
-          <textarea id="area-name" rows="2" placeholder="e.g. Остерська громада ... Ніжинська громада" style="resize:none;"></textarea>
+        <div class="step-title"><span>1. Source input</span><span class="step-status" id="step-input-status">○</span></div>
+
+        <div class="field" id="field-area-names">
+          <label for="area-chip-input">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(add one or more)</span></label>
+          <div class="row" style="margin-bottom:6px;">
+            <input type="text" id="area-chip-input" placeholder="e.g. Остерська громада" />
+            <button class="btn btn-secondary btn-sm" id="btn-add-area" type="button">+ Add area</button>
+          </div>
+          <div class="chips-wrap" id="area-chips"></div>
+          <textarea id="area-name" rows="2" style="display:none;"></textarea>
+          <div class="field-error" id="err-area-name"></div>
         </div>
 
         <!-- chk-full-parcels checkbox hidden but logic preserved in app.js -->
@@ -40,6 +58,16 @@
         <div class="field" id="field-cadnum" style="display:none;">
           <label for="cadnum-input">Cadastral number(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate with space, comma, or newline</span></label>
           <textarea id="cadnum-input" rows="4" placeholder="3221486700:02:006:0072 3220489700:06:001:0058&#10;or: 3221486700:02:006:0072, 3220489700:06:001:0058&#10;or one per line" style="resize:vertical;"></textarea>
+          <div class="field-error" id="err-cadnum"></div>
+        </div>
+
+        <div class="field" id="field-eland-csv" style="display:none;">
+          <label>Cadnums CSV <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(from scraper, e.g. *_cadnums.csv)</span></label>
+          <div class="row">
+            <button class="btn btn-secondary btn-sm" id="btn-pick-eland-csv-mode">📎 Choose CSV</button>
+            <span class="path-display" id="eland-csv-display-main">not selected</span>
+          </div>
+          <div class="field-error" id="err-eland-csv"></div>
         </div>
 
         <div class="field" id="field-boundary">
@@ -49,7 +77,10 @@
             <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>
             <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;margin-top:6px;">✕ Clear all</button>
           </div>
+          <div class="field-error" id="err-boundary"></div>
         </div>
+
+        <div class="step-title"><span>2. Output</span><span class="step-status" id="step-output-status">○</span></div>
 
         <div class="field">
           <label>Output folder <span style="color:#e05;">*required</span></label>
@@ -57,7 +88,10 @@
             <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
             <span class="path-display" id="output-folder-display">not selected</span>
           </div>
+          <div class="field-error" id="err-output-folder"></div>
         </div>
+
+        <div class="step-title" id="step-options-title"><span>3. Optional layers</span><span class="step-status" id="step-options-status">○</span></div>
 
         <div class="field" id="field-osm-layers">
           <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
@@ -76,20 +110,23 @@
             <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
           </div>
 
-          <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-            <div class="field" style="margin-bottom:0;">
-              <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
-              <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-                <option value="100" selected>100 m (recommended)</option>
-                <option value="150">150 m</option>
-              </select>
+          <div class="advanced-toggle">
+            <div class="advanced-title">Advanced layer options</div>
+            <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
+              <div class="field" style="margin-bottom:0;">
+                <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
+                <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
+                  <option value="100" selected>100 m (recommended)</option>
+                  <option value="150">150 m</option>
+                </select>
+              </div>
             </div>
-          </div>
 
-          <div id="forest-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-            <div class="field" style="margin-bottom:0;">
-              <label for="forest-buffer-meters" style="font-size:12px;">Forest buffer distance (m)</label>
-              <input id="forest-buffer-meters" type="number" min="1" step="1" value="700" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" />
+            <div id="forest-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
+              <div class="field" style="margin-bottom:0;">
+                <label for="forest-buffer-meters" style="font-size:12px;">Forest buffer distance (m)</label>
+                <input id="forest-buffer-meters" type="number" min="1" step="1" value="700" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" />
+              </div>
             </div>
           </div>
 
@@ -97,10 +134,22 @@
             <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
             <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
           </div>
+          <div class="field-error" id="err-layers"></div>
         </div>
 
-        <div style="margin-top:14px;margin-bottom:0;">
-          <button class="btn btn-primary" id="btn-start" disabled style="padding:12px 48px;font-size:15px;">▶ Start</button>
+        <div class="field" id="field-eland-format-main" style="display:none;">
+          <label>Output format</label>
+          <select id="eland-output-format-main">
+            <option value="xlsx_full">Excel full + Word (.xlsx, .docx)</option>
+            <option value="xlsx_partial" selected>Excel partial + Word (.xlsx, .docx)</option>
+          </select>
+          <div style="font-size:11px;color:#8bb4ff;margin-top:4px;">Both files are generated in one run.</div>
+        </div>
+
+        <div class="step-title"><span>4. Run</span><span class="step-status" id="step-run-status">○</span></div>
+
+        <div style="margin-top:8px;margin-bottom:0;">
+          <button class="btn btn-primary" id="btn-start" disabled style="padding:12px 48px;font-size:15px;">▶ Start boundary + OSM</button>
         </div>
       </div>
 
@@ -126,16 +175,19 @@
             <button class="btn btn-secondary btn-sm" id="btn-offline-download" style="padding:8px 20px;">⬇ Download Offline Data</button>
             <span id="offline-download-status" style="font-size:11px;color:#aaa;">idle</span>
           </div>
-          <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
-            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
-              <input type="checkbox" id="offline-force-update" style="width:14px;height:14px;" />
-              Force update map & wind data (PBF, TIF)
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
-              <input type="checkbox" id="offline-force-update-aws" style="width:14px;height:14px;" />
-              Force update heavy AWS data (WorldCover 1.5GB)
-            </label>
-          </div>
+          <details class="advanced-toggle" style="margin-top:8px;">
+            <summary>Advanced download options</summary>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
+                <input type="checkbox" id="offline-force-update" style="width:14px;height:14px;" />
+                Force update map & wind data (PBF, TIF)
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
+                <input type="checkbox" id="offline-force-update-aws" style="width:14px;height:14px;" />
+                Force update heavy AWS data (WorldCover 1.5GB)
+              </label>
+            </div>
+          </details>
 
           <div class="offline-progress-wrap">
             <div class="offline-progress-bar" id="offline-download-progress"></div>
@@ -157,7 +209,7 @@
           </div>
         </div>
 
-        <div class="tab-section">
+        <div class="tab-section" id="pre-eland-section" style="display:none;">
           <h2>📋 e.land.gov.ua Lookup</h2>
           <p style="font-size:11px;color:#888;margin:0 0 10px;">Batch-fetch ownership data for scraped parcels. Opens a browser window — log in with your digital signature key, then the app will query each parcel automatically.</p>
 
@@ -172,10 +224,10 @@
           <div class="field">
             <label style="font-size:12px;">Output format</label>
             <select id="eland-output-format" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;margin-top:4px;">
-              <option value="xlsx_full" selected>Excel Full (.xlsx)</option>
-              <option value="xlsx_partial">Excel Partial (.xlsx)</option>
+              <option value="xlsx_full">Excel full + Word (.xlsx, .docx)</option>
+              <option value="xlsx_partial" selected>Excel partial + Word (.xlsx, .docx)</option>
             </select>
-            <div style="font-size:11px;color:#8bb4ff;margin-top:4px;">Word (.docx) is generated automatically with Excel output.</div>
+            <div style="font-size:11px;color:#8bb4ff;margin-top:4px;">Both files are generated in one run.</div>
           </div>
 
           <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
@@ -188,12 +240,26 @@
   </div>
 
   <!-- ── Right: log ────────────────────────────────────── -->
-  <div class="log-col">
-    <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
-      <h2>Log</h2>
-      <div class="log-area" id="main-log"></div>
+    <div class="log-col">
+      <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+        <h2>Log</h2>
+        <div class="run-progress" id="run-progress-wrap">
+          <div class="run-progress-head">
+            <span id="run-progress-label">Idle</span>
+            <span id="run-progress-counts">0/0 • ✅0 ❌0</span>
+          </div>
+          <div class="run-progress-track"><div class="run-progress-fill" id="run-progress-bar"></div></div>
+        </div>
+        <div class="results-card">
+          <div class="results-head">
+            <strong>Results</strong>
+            <button class="btn btn-secondary btn-sm" id="btn-results-clear" type="button">Clear</button>
+          </div>
+          <div class="results-list" id="results-list"></div>
+        </div>
+        <div class="log-area" id="main-log"></div>
+      </div>
     </div>
-  </div>
 
 </div>
 

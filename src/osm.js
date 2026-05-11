@@ -2286,10 +2286,22 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
       if (roadBufs.length) layerMap['Road Buffers'] = roadBufs;
     }
 
-    // Power Line Buffers: 250m around power lines
+    // Power Line Buffers: 250m around power lines (exclude "Other" voltage class)
     if (layerMap['Power Lines']) {
+      const isBufferedPowerLine = (feature) => {
+        const rawVoltage = feature?.properties?.voltage;
+        if (!rawVoltage) return false;
+        const valuesKv = String(rawVoltage)
+          .split(/[;,/]/)
+          .map((part) => parseFloat(part.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0)
+          .map((n) => (n > 1000 ? n / 1000 : n));
+        if (!valuesKv.length) return false;
+        const maxKv = Math.max(...valuesKv);
+        return maxKv >= 30;
+      };
       const powerLineBufs = layerMap['Power Lines']
-        .filter(f => f.geometry)
+        .filter(f => f.geometry && isBufferedPowerLine(f))
         .map(f => {
           try {
             const buf = turfBuffer(f, 0.25, { units: 'kilometers' });

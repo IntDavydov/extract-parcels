@@ -55,6 +55,147 @@ function sanitizeFilename(name) {
     .trim() || 'land_management';
 }
 
+const runProgress = {
+  total: 0,
+  current: 0,
+  success: 0,
+  failed: 0,
+  label: 'Idle',
+};
+
+const resultEntries = [];
+const MAX_RESULT_ENTRIES = 30;
+
+function renderRunProgress() {
+  const labelEl = document.getElementById('run-progress-label');
+  const countsEl = document.getElementById('run-progress-counts');
+  const barEl = document.getElementById('run-progress-bar');
+  if (!labelEl || !countsEl || !barEl) return;
+  const pct = runProgress.total > 0 ? Math.max(0, Math.min(100, (runProgress.current / runProgress.total) * 100)) : 0;
+  labelEl.textContent = runProgress.label || 'Idle';
+  countsEl.textContent = `${runProgress.current}/${runProgress.total} • ✅${runProgress.success} ❌${runProgress.failed}`;
+  barEl.style.width = `${pct}%`;
+}
+
+function resetRunProgress(label = 'Idle') {
+  runProgress.total = 0;
+  runProgress.current = 0;
+  runProgress.success = 0;
+  runProgress.failed = 0;
+  runProgress.label = label;
+  renderRunProgress();
+}
+
+function initRunProgress(total, label) {
+  runProgress.total = Math.max(1, Number(total) || 1);
+  runProgress.current = 0;
+  runProgress.success = 0;
+  runProgress.failed = 0;
+  runProgress.label = label || 'Running';
+  renderRunProgress();
+}
+
+function setRunProgressLabel(label) {
+  runProgress.label = label || runProgress.label;
+  renderRunProgress();
+}
+
+function tickRunProgress(success, label) {
+  runProgress.current = Math.min(runProgress.total, runProgress.current + 1);
+  if (success) runProgress.success++;
+  else runProgress.failed++;
+  if (label) runProgress.label = label;
+  renderRunProgress();
+}
+
+function getDirname(filePath) {
+  const p = String(filePath || '');
+  const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return idx >= 0 ? p.slice(0, idx) : p;
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {}
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) {}
+  ta.remove();
+  return ok;
+}
+
+function renderResults() {
+  const list = document.getElementById('results-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!resultEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'result-path';
+    empty.textContent = 'No generated files yet.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const entry of resultEntries) {
+    const item = document.createElement('div');
+    item.className = 'result-item';
+
+    const pathLine = document.createElement('div');
+    pathLine.className = 'result-path';
+    pathLine.textContent = `${entry.label}: ${entry.path}`;
+    item.appendChild(pathLine);
+
+    const actions = document.createElement('div');
+    actions.className = 'result-actions';
+
+    const openFileBtn = document.createElement('button');
+    openFileBtn.className = 'btn btn-secondary btn-sm';
+    openFileBtn.type = 'button';
+    openFileBtn.textContent = 'Open file';
+    openFileBtn.addEventListener('click', () => window.api.openPath(entry.path));
+
+    const openFolderBtn = document.createElement('button');
+    openFolderBtn.className = 'btn btn-secondary btn-sm';
+    openFolderBtn.type = 'button';
+    openFolderBtn.textContent = 'Open folder';
+    openFolderBtn.addEventListener('click', () => window.api.openPath(getDirname(entry.path)));
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn btn-secondary btn-sm';
+    copyBtn.type = 'button';
+    copyBtn.textContent = 'Copy path';
+    copyBtn.addEventListener('click', async () => {
+      const ok = await copyTextToClipboard(entry.path);
+      appendLog(ok ? `📋 Copied path: ${entry.path}` : '⚠ Could not copy path');
+    });
+
+    actions.appendChild(openFileBtn);
+    actions.appendChild(openFolderBtn);
+    actions.appendChild(copyBtn);
+    item.appendChild(actions);
+    list.appendChild(item);
+  }
+}
+
+function addResultEntry(path, label = 'Output') {
+  const p = String(path || '').trim();
+  if (!p) return;
+  const existingIdx = resultEntries.findIndex((x) => x.path === p);
+  if (existingIdx >= 0) resultEntries.splice(existingIdx, 1);
+  resultEntries.unshift({ path: p, label });
+  if (resultEntries.length > MAX_RESULT_ENTRIES) resultEntries.length = MAX_RESULT_ENTRIES;
+  renderResults();
+}
+
 // Forward all main-process log events to the single log area
 window.api.onLog((msg) => appendLog(msg));
 window.api.onDownloadProgress((data) => {
@@ -96,11 +237,128 @@ function initLeftTabs() {
 }
 
 initLeftTabs();
+resetRunProgress();
+renderResults();
+document.getElementById('btn-results-clear')?.addEventListener('click', () => {
+  resultEntries.length = 0;
+  renderResults();
+});
 
 // ── State ──────────────────────────────────────────────────
 let outputFolder   = '';
 let boundaryFiles  = []; // [{path, url, bbox, name}]
 let userStopped    = false;
+let areaNames      = [];
+let preTabOutputFolder = '';
+let elandCsvPath = '';
+let elandBusy    = false;
+let elandOutputFormat = 'xlsx_partial';
+let researchBusy   = false;
+let offlineDownloadBusy = false;
+const MODE_BUTTON_LABELS = {
+  boundary: '▶ Start boundary + OSM',
+  custom: '▶ Start custom settlement fetch',
+  kadastr: '▶ Start Kadastr scraping',
+  cadnum: '▶ Start cadnum lookup',
+  coords: '▶ Extract polygon coordinates',
+  eland: '🔍 Lookup on e.land',
+};
+
+function setFieldError(id, message) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = message || '';
+}
+
+function setStepStatus(id, done) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = done ? '✓' : '○';
+  el.classList.toggle('done', !!done);
+}
+
+function syncModeCards(mode) {
+  document.querySelectorAll('#parcel-mode-cards .mode-card[data-fetch-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.fetchMode === mode);
+  });
+}
+
+function updateStartButtonLabel(mode) {
+  const startBtn = document.getElementById('btn-start');
+  if (!startBtn) return;
+  startBtn.textContent = MODE_BUTTON_LABELS[mode] || MODE_BUTTON_LABELS.boundary;
+}
+
+function setElandFormat(value) {
+  const fmt = String(value || 'xlsx_partial');
+  elandOutputFormat = fmt;
+  const preSel = document.getElementById('eland-output-format');
+  const modeSel = document.getElementById('eland-output-format-main');
+  if (preSel && preSel.value !== fmt) preSel.value = fmt;
+  if (modeSel && modeSel.value !== fmt) modeSel.value = fmt;
+}
+
+function syncAreaNamesValue() {
+  const areaNameEl = document.getElementById('area-name');
+  if (areaNameEl) areaNameEl.value = areaNames.join(' ... ');
+}
+
+function renderAreaChips() {
+  const wrap = document.getElementById('area-chips');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  for (let i = 0; i < areaNames.length; i++) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = areaNames[i];
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'chip-remove';
+    removeBtn.type = 'button';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      areaNames.splice(i, 1);
+      syncAreaNamesValue();
+      renderAreaChips();
+      const isMulti = areaNames.length > 1;
+      document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
+      document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
+      if (isMulti && boundaryFiles.length) {
+        boundaryFiles = [];
+        renderBoundaryList();
+      }
+      checkStartReady();
+    });
+    chip.appendChild(removeBtn);
+    wrap.appendChild(chip);
+  }
+}
+
+function tryAddAreaChip(rawValue) {
+  const values = String(rawValue || '')
+    .split(/\.\.\.|[\n\r]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!values.length) return false;
+  let added = false;
+  for (const value of values) {
+    if (areaNames.includes(value)) continue;
+    areaNames.push(value);
+    added = true;
+  }
+  if (!added) return false;
+  syncAreaNamesValue();
+  renderAreaChips();
+  const isMulti = areaNames.length > 1;
+  document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
+  document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
+  if (isMulti && boundaryFiles.length) {
+    boundaryFiles = [];
+    renderBoundaryList();
+  }
+  checkStartReady();
+  return added;
+}
 
 function getParcelSource() {
   return 'kadastrova_karta';
@@ -153,7 +411,8 @@ function renderBoundaryList() {
     list.textContent = '';
     btn.style.display = 'none';
     hint.style.display = '';
-    document.getElementById('area-name').disabled = false;
+    document.getElementById('area-chip-input').disabled = false;
+    document.getElementById('btn-add-area').disabled = false;
   } else {
     list.textContent = boundaryFiles.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
     btn.style.display = '';
@@ -162,12 +421,19 @@ function renderBoundaryList() {
   // When multiple KMZ: disable area name + OSM layers
   // When exactly one KMZ: disable + clear area name (not needed — folder named by coords)
   const isMultiKmz  = boundaryFiles.length > 1;
-  const areaInput   = document.getElementById('area-name');
+  const areaInput = document.getElementById('area-chip-input');
+  const addAreaBtn = document.getElementById('btn-add-area');
   areaInput.disabled = isMultiKmz;
-  if (isMultiKmz) areaInput.value = '';
+  addAreaBtn.disabled = isMultiKmz;
+  if (isMultiKmz) {
+    areaNames = [];
+    syncAreaNamesValue();
+    renderAreaChips();
+  }
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = isMultiKmz; });
   document.getElementById('btn-select-all').disabled = isMultiKmz;
   document.getElementById('btn-clear-all').disabled  = isMultiKmz;
+  const isKadastrMode = document.getElementById('parcel-fetch-mode').value === 'kadastr';
   if (isKadastrMode && isMultiKmz) {
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
     document.getElementById('wind-settings').style.display = 'none';
@@ -307,7 +573,7 @@ document.getElementById('layer-forests').addEventListener('change', () => {
 
 function applyFullParcelsMode(enabled) {
   const dropZone   = document.getElementById('drop-zone');
-  const areaInput  = document.getElementById('area-name');
+  const areaInput  = document.getElementById('area-chip-input');
   dropZone.style.pointerEvents = enabled ? 'none' : '';
   dropZone.style.opacity       = enabled ? '0.4' : '';
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = enabled; if (enabled) cb.checked = false; });
@@ -315,29 +581,45 @@ function applyFullParcelsMode(enabled) {
   document.getElementById('btn-clear-all').disabled  = enabled;
   if (enabled) updateLayerSettingsVisibility();
   if (enabled && boundaryFiles.length) { boundaryFiles = []; renderBoundaryList(); }
-  // Disable ... multi-area when in full-parcels mode
+  // Keep only first area in full-parcels mode
   if (enabled) {
-    const val = areaInput.value;
-    const dotIdx = val.indexOf('...');
-    if (dotIdx >= 0) areaInput.value = val.slice(0, dotIdx).trim();
+    if (areaNames.length > 1) areaNames = [areaNames[0]];
+    syncAreaNamesValue();
+    renderAreaChips();
   }
+  areaInput.disabled = enabled;
+  document.getElementById('btn-add-area').disabled = enabled;
   updateLayerSettingsVisibility();
   checkStartReady();
 }
 
 // ── Parcel fetch mode switching ─────────────────────────────
+document.querySelectorAll('#parcel-mode-cards .mode-card').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.fetchMode || 'boundary';
+    const modeSelect = document.getElementById('parcel-fetch-mode');
+    modeSelect.value = mode;
+    modeSelect.dispatchEvent(new Event('change'));
+  });
+});
+
 document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
   const mode = e.target.value;
   const isCadnum = mode === 'cadnum';
   const isCustom = mode === 'custom';
   const isKadastr = mode === 'kadastr';
+  const isCoords = mode === 'coords';
+  const isEland = mode === 'eland';
   
   document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
-  document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr) ? 'none' : 'block';
-  document.getElementById('area-name').parentElement.style.display = (isCustom || isCadnum || isKadastr) ? 'none' : 'block';
+  document.getElementById('field-eland-csv').style.display = isEland ? 'block' : 'none';
+  document.getElementById('field-eland-format-main').style.display = isEland ? 'block' : 'none';
+  document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr || isCoords || isEland) ? 'none' : 'block';
+  document.getElementById('field-area-names').style.display = (isCustom || isCadnum || isKadastr || isCoords || isEland) ? 'none' : 'block';
   document.getElementById('field-osm-layers').style.display = mode === 'boundary' ? 'block' : 'none';
+  document.getElementById('step-options-title').style.display = mode === 'boundary' ? 'flex' : 'none';
   
-  // Show boundary file picker for custom/kadastr modes
+  // Show boundary file picker for custom/kadastr/coords modes
   if (isCustom) {
     const boundaryField = document.getElementById('field-boundary');
     boundaryField.style.display = 'block';
@@ -352,33 +634,71 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
     label.innerHTML = 'Boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(parcel scraping; single or multiple files)</span>';
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
     updateLayerSettingsVisibility();
+  } else if (isCoords) {
+    const boundaryField = document.getElementById('field-boundary');
+    boundaryField.style.display = 'block';
+    const label = boundaryField.querySelector('label');
+    label.innerHTML = 'Polygon source KML/KMZ <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(single file; exports latitude,longitude points)</span>';
+    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
+    updateLayerSettingsVisibility();
   } else if (!isCadnum) {
     const boundaryField = document.getElementById('field-boundary');
     const label = boundaryField.querySelector('label');
     label.innerHTML = 'Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span>';
   }
 
+  syncModeCards(mode);
+  updateStartButtonLabel(mode);
   updateLayerSettingsVisibility();
   checkStartReady();
 });
 
+syncModeCards(document.getElementById('parcel-fetch-mode').value);
+updateStartButtonLabel(document.getElementById('parcel-fetch-mode').value);
+setElandFormat(elandOutputFormat);
+syncAreaNamesValue();
+renderAreaChips();
+checkStartReady();
+
 document.getElementById('cadnum-input').addEventListener('input', checkStartReady);
+
+document.getElementById('btn-pick-eland-csv-mode').addEventListener('click', async () => {
+  const result = await window.api.openCsvDialog();
+  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
+    elandCsvPath = result.filePaths[0];
+    const fileName = elandCsvPath.split(/[\\/]/).pop();
+    document.getElementById('eland-csv-display-main').textContent = fileName;
+    const preDisplay = document.getElementById('cadnums-csv-display');
+    if (preDisplay) preDisplay.textContent = fileName;
+    checkElandReady();
+    checkStartReady();
+  }
+});
+
+document.getElementById('eland-output-format-main').addEventListener('change', (e) => {
+  setElandFormat(e.target.value);
+});
+
+document.getElementById('btn-add-area').addEventListener('click', () => {
+  const input = document.getElementById('area-chip-input');
+  if (tryAddAreaChip(input.value)) input.value = '';
+});
+
+document.getElementById('area-chip-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    const input = document.getElementById('area-chip-input');
+    if (tryAddAreaChip(input.value)) input.value = '';
+  }
+});
+
+document.getElementById('area-chip-input').addEventListener('blur', () => {
+  const input = document.getElementById('area-chip-input');
+  if (tryAddAreaChip(input.value)) input.value = '';
+});
 
 document.getElementById('chk-full-parcels').addEventListener('change', (e) => {
   applyFullParcelsMode(e.target.checked);
-});
-
-document.getElementById('area-name').addEventListener('input', () => {
-  const isFullParcels = document.getElementById('chk-full-parcels').checked;
-  const val = document.getElementById('area-name').value;
-  const isMulti = !isFullParcels && val.includes('...');
-  document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
-  document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
-  if (isMulti && boundaryFiles.length) {
-    boundaryFiles = [];
-    renderBoundaryList();
-  }
-  checkStartReady();
 });
 
 // Track every individual checkbox change
@@ -396,6 +716,48 @@ function hasAnything() {
   return hasBoundary || hasLayers;
 }
 
+function updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoundary, boundaryCount, hasLayers, isFullParcels) {
+  setFieldError('err-area-name', '');
+  setFieldError('err-cadnum', '');
+  setFieldError('err-eland-csv', '');
+  setFieldError('err-boundary', '');
+  setFieldError('err-output-folder', hasOutput ? '' : 'Output folder is required.');
+  setFieldError('err-layers', '');
+
+  if (fetchMode === 'eland') {
+    if (!elandCsvPath) setFieldError('err-eland-csv', 'Select cadnums CSV.');
+  } else if (fetchMode === 'cadnum') {
+    if (!cadnum) setFieldError('err-cadnum', 'Enter at least one cadastral number.');
+  } else if (fetchMode === 'coords') {
+    if (!hasBoundary) setFieldError('err-boundary', 'Attach one KML/KMZ polygon file.');
+    else if (boundaryCount > 1) setFieldError('err-boundary', 'Attach only one file for coordinate extraction.');
+  } else if (fetchMode === 'kadastr' || fetchMode === 'custom') {
+    if (!hasBoundary) setFieldError('err-boundary', 'Attach at least one KMZ/KML boundary file.');
+  } else {
+    if (!territory && !hasBoundary && !isFullParcels) {
+      setFieldError('err-area-name', 'Add at least one area name or attach a boundary file.');
+    }
+    if (isFullParcels && !territory) {
+      setFieldError('err-area-name', 'Area name is required in full-area mode.');
+    }
+    if (!hasLayers && !hasBoundary && !isFullParcels && territory) {
+      setFieldError('err-layers', 'Select at least one OSM layer.');
+    }
+  }
+
+  const sourceDone = fetchMode === 'eland'
+    ? !!elandCsvPath
+    : (fetchMode === 'cadnum'
+      ? !!cadnum
+      : ((fetchMode === 'coords') ? boundaryCount === 1 : ((fetchMode === 'kadastr' || fetchMode === 'custom') ? hasBoundary : (!!territory || hasBoundary))));
+  const outputDone = hasOutput;
+  const optionsDone = fetchMode === 'boundary' ? hasLayers || hasBoundary : true;
+  setStepStatus('step-input-status', sourceDone);
+  setStepStatus('step-output-status', outputDone);
+  setStepStatus('step-options-status', optionsDone);
+  return sourceDone && outputDone && optionsDone;
+}
+
 function checkStartReady() {
   const fetchMode     = document.getElementById('parcel-fetch-mode').value;
   const territory     = document.getElementById('area-name').value.trim();
@@ -403,27 +765,40 @@ function checkStartReady() {
   const isMultiKmz    = boundaryFiles.length > 1;
   const isSingleKmz   = boundaryFiles.length === 1;
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  const hasOutput     = !!outputFolder;
+  const hasBoundary   = isSingleKmz || isMultiKmz;
+  const hasLayersChecked = document.querySelectorAll('input[name="layer"]:checked').length > 0;
   
   let ready = false;
-  if (fetchMode === 'cadnum') {
-    ready = !!outputFolder && !!cadnum;
+  if (fetchMode === 'eland') {
+    ready = hasOutput && !!elandCsvPath && !elandBusy;
+  } else if (fetchMode === 'cadnum') {
+    ready = hasOutput && !!cadnum;
+  } else if (fetchMode === 'coords') {
+    ready = hasOutput && boundaryFiles.length === 1;
   } else if (fetchMode === 'kadastr') {
-    ready = !!outputFolder && (isSingleKmz || isMultiKmz);
+    ready = hasOutput && hasBoundary;
   } else if (fetchMode === 'custom') {
-    ready = !!outputFolder && (isSingleKmz || isMultiKmz);
+    ready = hasOutput && hasBoundary;
   } else {
-    ready = !!outputFolder && (
+    ready = hasOutput && (
       isMultiKmz  ? true :
       isSingleKmz ? true :
       isFullParcels ? !!territory :
       (!!territory && hasAnything())
     );
   }
+  const stepperReady = updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoundary, boundaryFiles.length, hasLayersChecked, isFullParcels);
+  setStepStatus('step-run-status', !!stepperReady && ready);
   document.getElementById('btn-start').disabled = !ready;
 }
 
 function setBusy(busy) {
-  document.getElementById('btn-start').disabled = busy;
+  if (busy) {
+    document.getElementById('btn-start').disabled = true;
+    return;
+  }
+  checkStartReady();
 }
 
 
@@ -431,6 +806,62 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (!outputFolder) { appendLog('⚠ Please select an output folder.'); return; }
 
   const fetchMode     = document.getElementById('parcel-fetch-mode').value;
+  resetRunProgress('Idle');
+  if (fetchMode === 'eland') {
+    if (!elandCsvPath) { appendLog('⚠ Please select cadnums CSV.'); return; }
+    if (elandBusy) { appendLog('⚠ e.land lookup is already running.'); return; }
+
+    document.getElementById('main-log').textContent = '';
+    setBusy(true);
+    elandBusy = true;
+    initRunProgress(1, 'e.land lookup');
+
+    const csvName = elandCsvPath.split(/[\\/]/).pop() || 'cadnums.csv';
+    const baseName = csvName.replace(/\.csv$/i, '') || 'cadnums';
+    const sep = outputFolder.endsWith('/') || outputFolder.endsWith('\\') ? '' : '/';
+    const outputPath = `${outputFolder}${sep}${baseName}_eland.xlsx`;
+    const result = await window.api.startElandLookup(elandCsvPath, outputPath, { format: elandOutputFormat });
+    if (result && result.success) {
+      appendLog(`✅ Done → ${result.outputPath}`);
+      addResultEntry(result.outputPath, 'e.land XLSX');
+      if (result.docxOutputPath) addResultEntry(result.docxOutputPath, 'e.land DOCX');
+      window.api.showInFolder(result.outputPath);
+      tickRunProgress(true, 'e.land lookup done');
+    } else {
+      appendLog(`❌ Failed: ${result?.error || 'unknown error'}`);
+      tickRunProgress(false, 'e.land lookup failed');
+    }
+    elandBusy = false;
+    checkElandReady();
+    setBusy(false);
+    return;
+  }
+
+  // ── Polygon coordinates mode ──
+  if (fetchMode === 'coords') {
+    if (boundaryFiles.length !== 1) {
+      appendLog('⚠ Please attach exactly one KML/KMZ file.');
+      return;
+    }
+    const sourceFile = boundaryFiles[0];
+    document.getElementById('main-log').textContent = '';
+    setBusy(true);
+    initRunProgress(1, 'Extract polygon coordinates');
+    appendLog(`📍 Extracting polygon coordinates from: ${sourceFile.name}`);
+    const result = await window.api.extractKmlCoordinates(sourceFile.path, outputFolder);
+    if (result && result.success) {
+      appendLog(`✅ Done → ${result.outputPath}`);
+      appendLog(`   Polygons: ${result.polygonCount}, points: ${result.pointCount}`);
+      addResultEntry(result.outputPath, 'Polygon coordinates CSV');
+      window.api.showInFolder(result.outputPath);
+      tickRunProgress(true, 'Coordinate extraction done');
+    } else {
+      appendLog(`❌ Failed: ${result?.error || 'unknown error'}`);
+      tickRunProgress(false, 'Coordinate extraction failed');
+    }
+    setBusy(false);
+    return;
+  }
   
   // ── Cadastral number mode ──
   if (fetchMode === 'cadnum') {
@@ -448,6 +879,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     document.getElementById('main-log').textContent = '';
     setBusy(true);
     userStopped = false;
+    initRunProgress(cadnums.length, 'Cadnum lookup');
     
     appendLog(`🔍 Looking up ${cadnums.length} cadastral number(s)...`);
     appendLog(`   (Testing network connection to kadastrova-karta.com...)\n`);
@@ -461,6 +893,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
       for (let i = 0; i < cadnums.length; i++) {
         const cadnum = cadnums[i];
+        setRunProgressLabel(`Cadnum ${i + 1}/${cadnums.length}: ${cadnum}`);
         appendLog(`\n[${i + 1}/${cadnums.length}] Processing: ${cadnum}`);
         appendLog(`  🌐 Searching...`);
 
@@ -486,13 +919,16 @@ document.getElementById('btn-start').addEventListener('click', async () => {
             appendLog(`  ✅ Found ${res.parcels} parcel(s)`);
             allResults.push({ cadnum, parcels: res.parcels, success: true });
             await window.api.cadnumBatchFinalizeItem(tempDir, cadnum);
+            tickRunProgress(true, `Processed ${i + 1}/${cadnums.length}`);
           } else {
             appendLog(`  ⚠ No parcel data found`);
             allResults.push({ cadnum, parcels: 0, success: false });
+            tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
           }
         } catch (err) {
           appendLog(`  ❌ Error: ${err.message}`);
           allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
+          tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
         }
 
         if (i < cadnums.length - 1) {
@@ -514,6 +950,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           const finalKmz = `${outputFolder.replace(/[\\\/]+$/, '')}/land_plots.kmz`;
           await window.api.mergeKmzFiles(tempDir, finalKmz);
           appendLog(`✅ Results saved to: ${finalKmz}`);
+          addResultEntry(finalKmz, 'KMZ');
         } catch (err) {
           appendLog(`⚠ Merge error: ${err.message}`);
           appendLog(`  Individual files available in: ${tempDir}`);
@@ -540,6 +977,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     document.getElementById('main-log').textContent = '';
     setBusy(true);
     userStopped = false;
+    initRunProgress(1, 'Custom settlement fetch');
     appendLog('🧭 Custom settlement boundary mode');
     appendLog(`📎 Boundaries: ${boundaryFiles.length}`);
     boundaryFiles.forEach((f, idx) => appendLog(`   ${idx + 1}. ${f.name}`));
@@ -557,10 +995,13 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       });
       if (!osmResult.success) {
         appendLog(`[ERROR] Custom boundary fetch failed: ${osmResult.error}`);
+        tickRunProgress(false, 'Custom settlement fetch failed');
       } else {
         appendLog(`\n✅ Done → ${finalOutput}`);
         window.api.copyIcons(outputFolder);
+        addResultEntry(finalOutput, 'KMZ');
         window.api.showInFolder(finalOutput);
+        tickRunProgress(true, 'Custom settlement fetch done');
       }
     } finally {
       setBusy(false);
@@ -646,19 +1087,21 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
     const kmzPaths = [], folderNames = [];
     const cadCsvPaths = [];
+    initRunProgress(boundaryFiles.length, 'Kadastr multi-KMZ');
 
     for (let i = 0; i < boundaryFiles.length; i++) {
       const bf = boundaryFiles[i];
+      setRunProgressLabel(`Boundary ${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
       const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
       const tempCadCsvPath = `${outputFolder}/_kadastr_temp_${i}_cadnums.csv`;
 
       const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
-      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
+      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); tickRunProgress(false); continue; }
 
       const scraperOut = `${outputFolder}/land_plots.kmz`;
       const fsRename = await window.api.mergeKmz([scraperOut], tempPath, true);
-      if (!fsRename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); continue; }
+      if (!fsRename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); tickRunProgress(false); continue; }
 
       const scraperCadCsv = `${outputFolder}/land_plots_cadnums.csv`;
       const csvCopy = await window.api.mergeCadnumCsvs([scraperCadCsv], tempCadCsvPath, false);
@@ -670,6 +1113,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
       kmzPaths.push(tempPath);
       folderNames.push(folderName);
+      tickRunProgress(true);
     }
 
     if (!kmzPaths.length) { appendLog('❌ All files failed.'); setBusy(false); return; }
@@ -681,10 +1125,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const cadMerge = await window.api.mergeCadnumCsvs(cadCsvPaths, finalCadCsv, true);
       if (cadMerge.success) appendLog(`📊 Cadnums merged → ${finalCadCsv} (${cadMerge.count})`);
       else appendLog(`⚠ Cadnums merge failed: ${cadMerge.error || 'unknown error'}`);
+      if (cadMerge.success) addResultEntry(finalCadCsv, 'Cadnums CSV');
     }
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
+      addResultEntry(finalOutput, 'KMZ');
       window.api.showInFolder(finalOutput);
     } else {
       appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
@@ -695,9 +1141,11 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
   if (isKadastrMode && boundaryFiles.length === 1) {
     const bf = boundaryFiles[0];
+    initRunProgress(1, `Kadastr: ${bf.name}`);
     const scrapeRes = await scrapeOne(bf, bf.name);
     if (scrapeRes.tiles === 0) {
       appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}.`);
+      tickRunProgress(false, 'Kadastr scrape failed');
       setBusy(false); return;
     }
     const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
@@ -706,9 +1154,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
+      addResultEntry(finalOutput, 'KMZ');
       window.api.showInFolder(finalOutput);
+      tickRunProgress(true, 'Kadastr scrape done');
     } else {
       appendLog(`[ERROR] Save failed: ${mergeResult.error}`);
+      tickRunProgress(false, 'Kadastr save failed');
     }
     setBusy(false);
     return;
@@ -718,10 +1169,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // FULL-AREA PARCELS MODE — auto-grid the territory bbox
   // ══════════════════════════════════════════════════════════
   if (isFullParcels) {
+    initRunProgress(1, 'Full-area parcels');
     appendLog(`🗺 Resolving bbox for "${territory}"…`);
     const bboxResult = await window.api.resolveBbox(territory);
     if (!bboxResult.success) {
       appendLog(`❌ Could not resolve area: ${bboxResult.error}`);
+      tickRunProgress(false, 'Bbox resolve failed');
       setBusy(false); return;
     }
     const { bbox, boundaryGeojson } = bboxResult;
@@ -732,6 +1185,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     const bkmzResult = await window.api.createBoundaryKmz(boundaryGeojson, tempBoundaryPath);
     if (!bkmzResult.success) {
       appendLog(`❌ Could not create boundary KMZ: ${bkmzResult.error}`);
+      tickRunProgress(false, 'Boundary prep failed');
       setBusy(false); return;
     }
 
@@ -767,6 +1221,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     if (parcelsGot === 0) {
       appendLog('❌ No parcels found in area.');
+      tickRunProgress(false, 'No parcels found');
       setBusy(false); return;
     }
 
@@ -776,9 +1231,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
+      addResultEntry(finalOutput, 'KMZ');
       window.api.showInFolder(finalOutput);
+      tickRunProgress(true, 'Full-area parcels done');
     } else {
       appendLog(`[ERROR] Rename failed: ${mergeResult.error}`);
+      tickRunProgress(false, 'Full-area save failed');
     }
     setBusy(false);
     return;
@@ -790,23 +1248,26 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (isMultiKmz) {
     const finalOutput = await window.api.resolveOutputPath(outputFolder, 'Parcels');
     const kmzPaths = [], folderNames = [];
+    initRunProgress(boundaryFiles.length, 'Boundary batch');
 
     for (let i = 0; i < boundaryFiles.length; i++) {
       const bf = boundaryFiles[i];
+      setRunProgressLabel(`Boundary ${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       // Folder name = coordinates portion of kadastr URL (after #)
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
       const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
 
       const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
-      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); continue; }
+      if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); tickRunProgress(false); continue; }
 
       // land_plots.kmz is the fixed output of the scraper; rename to temp
       const scraperOut = `${outputFolder}/land_plots.kmz`;
       const fs_rename  = await window.api.mergeKmz([scraperOut], tempPath, true);
-      if (!fs_rename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); continue; }
+      if (!fs_rename.success) { appendLog(`⚠ Could not save temp KMZ for ${bf.name}`); tickRunProgress(false); continue; }
 
       kmzPaths.push(tempPath);
       folderNames.push(folderName);
+      tickRunProgress(true);
     }
 
     if (!kmzPaths.length) { appendLog('❌ All files failed.'); setBusy(false); return; }
@@ -816,6 +1277,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
+      addResultEntry(finalOutput, 'KMZ');
       window.api.showInFolder(finalOutput);
     } else {
       appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
@@ -829,10 +1291,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // ══════════════════════════════════════════════════════════
   if (isMultiArea) {
     if (!layers.length) { appendLog('⚠ Select at least one OSM layer.'); setBusy(false); return; }
+    initRunProgress(areas.length, 'Multi-area OSM');
 
     let successCount = 0;
     for (let i = 0; i < areas.length; i++) {
       const area = areas[i];
+      setRunProgressLabel(`Area ${i + 1}/${areas.length}: ${area}`);
       appendLog(`\n━━━ Area ${i + 1}/${areas.length}: ${area} ━━━`);
       const areaFilename = sanitizeFilename(area);
       const areaOutput   = await window.api.resolveOutputPath(outputFolder, areaFilename);
@@ -840,9 +1304,11 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         territory: area, layers, outputPath: areaOutput,
         format: 'kmz', windOptions: layerOptions, fallbackBbox: null,
       });
-      if (!osmResult.success) { appendLog(`[ERROR] Failed for "${area}": ${osmResult.error}`); continue; }
+      if (!osmResult.success) { appendLog(`[ERROR] Failed for "${area}": ${osmResult.error}`); tickRunProgress(false); continue; }
       appendLog(`✅ ${area} → ${areaOutput}`);
+      addResultEntry(areaOutput, 'KMZ');
       successCount++;
+      tickRunProgress(true);
     }
     if (!successCount) { appendLog('❌ All areas failed.'); setBusy(false); return; }
     appendLog(`\n✅ Done — ${successCount}/${areas.length} areas saved to ${outputFolder}`);
@@ -856,6 +1322,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // SINGLE AREA MODE
   // ══════════════════════════════════════════════════════════
   const safeFilename = sanitizeFilename(territory || 'land_plots');
+  initRunProgress(1, 'Single-area run');
   const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
   const kadastrTemp  = outputFolder + '/land_plots.kmz';
   const osmTemp      = outputFolder + '/_osm_temp.kmz';
@@ -867,6 +1334,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     const scrapeRes = await scrapeOne(bf, territory || bf.name);
     if (scrapeRes.tiles === 0) {
       appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}. Stopping.`);
+      tickRunProgress(false, 'Single-area scrape failed');
       setBusy(false); return;
     }
     hasKadastr = true;
@@ -882,6 +1350,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     if (!osmResult.success) {
       appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);
       if (hasKadastr) appendLog(`ℹ Kadastr data saved as land_plots.kmz`);
+      tickRunProgress(false, 'OSM fetch failed');
       setBusy(false); return;
     }
     const toMerge = hasKadastr ? [kadastrTemp, osmTemp] : [osmTemp];
@@ -890,24 +1359,23 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
+      addResultEntry(finalOutput, 'KMZ');
       window.api.showInFolder(finalOutput);
+      tickRunProgress(true, 'Single-area run done');
     } else { appendLog(`[ERROR] Merge failed: ${mergeResult.error}`); }
+    if (!mergeResult.success) tickRunProgress(false, 'Single-area merge failed');
   } else {
     appendLog(`\n✅ Done → ${kadastrTemp}`);
     window.api.copyIcons(outputFolder);
+    addResultEntry(kadastrTemp, 'KMZ');
     window.api.showInFolder(kadastrTemp);
+    tickRunProgress(true, 'Single-area run done');
   }
 
   setBusy(false);
 });
 
 // ── e.land.gov.ua Lookup ────────────────────────────────────
-let preTabOutputFolder = '';
-let elandCsvPath = '';
-let elandBusy    = false;
-let elandOutputFormat = 'xlsx_full';
-let researchBusy   = false;
-let offlineDownloadBusy = false;
 
 function checkElandReady() {
   const ready = !!elandCsvPath && !!preTabOutputFolder && !elandBusy;
@@ -933,13 +1401,17 @@ document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async 
   const result = await window.api.openCsvDialog();
   if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
     elandCsvPath = result.filePaths[0];
-    document.getElementById('cadnums-csv-display').textContent = elandCsvPath.split(/[\\/]/).pop();
+    const fileName = elandCsvPath.split(/[\\/]/).pop();
+    document.getElementById('cadnums-csv-display').textContent = fileName;
+    const mainDisplay = document.getElementById('eland-csv-display-main');
+    if (mainDisplay) mainDisplay.textContent = fileName;
     checkElandReady();
+    checkStartReady();
   }
 });
 
 document.getElementById('eland-output-format').addEventListener('change', (e) => {
-  elandOutputFormat = String(e.target.value || 'xlsx_full');
+  setElandFormat(e.target.value);
 });
 
 document.getElementById('btn-eland-start').addEventListener('click', async () => {
@@ -952,7 +1424,11 @@ document.getElementById('btn-eland-start').addEventListener('click', async () =>
   const baseName = csvName.replace(/\.csv$/i, '') || 'cadnums';
   const outputPath = preTabOutputFolder + (preTabOutputFolder.endsWith('/') || preTabOutputFolder.endsWith('\\') ? '' : '/') + baseName + `_eland.xlsx`;
   const result = await window.api.startElandLookup(elandCsvPath, outputPath, { format: elandOutputFormat });
-  if (result && result.success) window.api.showInFolder(result.outputPath);
+  if (result && result.success) {
+    addResultEntry(result.outputPath, 'e.land XLSX');
+    if (result.docxOutputPath) addResultEntry(result.docxOutputPath, 'e.land DOCX');
+    window.api.showInFolder(result.outputPath);
+  }
 
   elandBusy = false;
   checkElandReady();
@@ -984,6 +1460,7 @@ document.getElementById('btn-research-start').addEventListener('click', async ()
 
   if (result && result.success) {
     appendLog(`✅ XLSX saved: ${result.outputPath} (${result.count} hromadas)`);
+    addResultEntry(result.outputPath, 'Research XLSX');
     window.api.showInFolder(result.outputPath);
   } else if (result && result.error) {
     appendLog(`❌ Failed: ${result.error}`);
@@ -1023,6 +1500,7 @@ document.getElementById('btn-offline-download').addEventListener('click', async 
     if (result.failed && result.failed.length) {
       appendLog(`⚠ Failed datasets: ${result.failed.map(f => `${f.label} (${f.reason})`).join('; ')}`);
     }
+    addResultEntry(result.cacheDir, 'Offline cache');
     window.api.showInFolder(result.cacheDir);
   } else {
     status.textContent = 'failed';

@@ -292,6 +292,23 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
     if (!parsedKmls.length) throw new Error('No valid KMZ files found to merge');
 
     const escXmlAttr = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const getFolderOwnName = (folderXml) => {
+      const m = folderXml.match(/^<Folder[^>]*>\s*<name>([\s\S]*?)<\/name>/i);
+      return m ? m[1].trim() : null;
+    };
+    const getFolderInnerXml = (folderXml) => folderXml
+      .replace(/^<Folder[^>]*>\s*<name>[\s\S]*?<\/name>/i, '')
+      .replace(/<\/Folder>\s*$/i, '');
+    const flattenParcelsAreaFolders = (areaFolders, areaName) => {
+      if (!areaName || areaFolders.length !== 1) return null;
+      const topFolder = areaFolders[0];
+      if (getFolderOwnName(topFolder) !== 'Parcels') return null;
+      const childFolders = extractElements(getFolderInnerXml(topFolder), 'Folder');
+      if (childFolders.length !== 1) return null;
+      const coordsFolder = childFolders[0];
+      if (getFolderOwnName(coordsFolder) !== areaName) return null;
+      return getFolderInnerXml(coordsFolder);
+    };
     const useAreaFolders = areaNames && areaNames.length > 0;
 
     if (parsedKmls.length === 1 && allZips.length === 1 && !useAreaFolders) {
@@ -320,7 +337,11 @@ ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNam
       if (areaName) {
         const areaGroundOverlays = extractElements(kml, 'GroundOverlay');
         const areaFolders = extractElements(kml, 'Folder');
-        folders.push(`<Folder><name>${escXmlAttr(areaName)}</name>${areaGroundOverlays.join('')}${areaFolders.join('')}</Folder>`);
+        const flattenedAreaContent = flattenParcelsAreaFolders(areaFolders, areaName);
+        const folderContent = flattenedAreaContent !== null
+          ? areaGroundOverlays.join('') + flattenedAreaContent
+          : areaGroundOverlays.join('') + areaFolders.join('');
+        folders.push(`<Folder><name>${escXmlAttr(areaName)}</name>${folderContent}</Folder>`);
       } else {
         overlays.push(...extractElements(kml, 'GroundOverlay'));
         for (const f of extractElements(kml, 'Folder')) {

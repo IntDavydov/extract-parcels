@@ -10,6 +10,13 @@ const LAYER_STYLES = {
   'Territory Boundary': { line: 'ffffffff', width: 4 },
   'Land Parcels':       { poly: '00000000', line: 'ffffffff' },
   'Power Lines':        { line: 'ff00ffff', poly: '4000ffff' },
+  'Power Lines 750kV':  { line: 'ffffff00', width: 3 }, // #00ffff
+  'Power Lines 400kV':  { line: 'ffffaaaa', width: 3 }, // #aaaaff
+  'Power Lines 330kV':  { line: 'ffff00aa', width: 3 }, // #aa00ff
+  'Power Lines 220kV':  { line: 'ff0000ff', width: 3 }, // #ff0000
+  'Power Lines 110kV':  { line: 'ff00ffff', width: 3 }, // #ffff00
+  'Power Lines 35kV':   { line: 'ff00ff00', width: 3 }, // #00ff00
+  'Power Lines Other':  { line: 'ffb4b4b4', width: 3 },
   'Towers':             { point: 'ff00ffff' },         // fallback (unknown voltage)
   'Towers_Low':         { point: 'ff00ff00' },         // < 20 kV  — Green
   'Towers_Medium':      { point: 'ff00ffff' },         // 20–110 kV — Yellow
@@ -149,6 +156,33 @@ function towerStyleId(voltageTag) {
   if (kv < 110) return 'Towers_Medium';
   if (kv < 220) return 'Towers_High';
   return 'Towers_Extra';
+}
+
+function parseVoltageKv(voltageTag) {
+  if (!voltageTag) return null;
+  const values = String(voltageTag)
+    .split(/[;,/]/)
+    .map((part) => parseFloat(part.trim()))
+    .filter((n) => isFinite(n) && n > 0)
+    .map((n) => (n > 1000 ? n / 1000 : n));
+  if (!values.length) return null;
+  return Math.max(...values);
+}
+
+function powerLineBucketName(voltageTag) {
+  const kv = parseVoltageKv(voltageTag);
+  if (kv == null) return 'Other';
+  if (kv >= 700) return '750kV';
+  if (kv >= 360) return '400kV';
+  if (kv >= 300) return '330kV';
+  if (kv >= 200) return '220kV';
+  if (kv >= 90)  return '110kV';
+  if (kv >= 30)  return '35kV';
+  return 'Other';
+}
+
+function powerLineStyleId(voltageTag) {
+  return `Power Lines ${powerLineBucketName(voltageTag)}`.replace(/[^a-zA-Z0-9]/g, '_');
 }
 
 function customIconStyleId(iconName) {
@@ -314,11 +348,24 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       }
       if (layerName === 'Nature Reserve Buffer') continue; // already nested above
       // Nest Power Line Buffers inside the Power Lines folder
-      if (layerName === 'Power Lines' && layerMap['Power Line Buffers']) {
-        const powerLinesFolder = layerFolder(layerName);
-        const bufferFolder     = layerFolder('Power Line Buffers');
-        grouped.add('Power Line Buffers');
-        subFolders.push(`<Folder><name>${escXml('Power Lines')}</name>${powerLinesFolder}${bufferFolder}</Folder>`);
+      if (layerName === 'Power Lines') {
+        const voltageOrder = ['750kV', '400kV', '330kV', '220kV', '110kV', '35kV', 'Other'];
+        const bucketed = Object.fromEntries(voltageOrder.map((bucket) => [bucket, []]));
+        for (const feature of layerMap['Power Lines']) {
+          const bucket = powerLineBucketName(feature?.properties?.voltage);
+          if (!bucketed[bucket]) bucketed[bucket] = [];
+          bucketed[bucket].push(featureToKml(feature, powerLineStyleId(feature?.properties?.voltage)));
+        }
+        const voltageFolders = voltageOrder
+          .filter((bucket) => bucketed[bucket] && bucketed[bucket].length)
+          .map((bucket) => `<Folder><name>${escXml(bucket)}</name>${bucketed[bucket].join('')}</Folder>`);
+
+        let powerLinesContent = voltageFolders.join('');
+        if (layerMap['Power Line Buffers']) {
+          powerLinesContent += layerFolder('Power Line Buffers');
+          grouped.add('Power Line Buffers');
+        }
+        subFolders.push(`<Folder><name>${escXml('Power Lines')}</name>${powerLinesContent}</Folder>`);
         continue;
       }
       if (layerName === 'Power Line Buffers') continue; // already nested above

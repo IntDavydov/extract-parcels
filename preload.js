@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('api', {
   showInFolder: (filePath) =>
     ipcRenderer.invoke('show-in-folder', filePath),
 
+  openPath: (targetPath) =>
+    ipcRenderer.invoke('open-path', targetPath),
+
   copyIcons: (outputFolder) =>
     ipcRenderer.invoke('copy-icons', outputFolder),
 
@@ -63,6 +66,9 @@ contextBridge.exposeInMainWorld('api', {
 
   openCsvDialog: () =>
     ipcRenderer.invoke('open-csv-dialog'),
+
+  extractKmlCoordinates: (sourcePath, outputFolder) =>
+    ipcRenderer.invoke('extract-kml-coordinates', { sourcePath, outputFolder }),
 
   startElandLookup: (csvPath, outputPath, options = {}) =>
     ipcRenderer.invoke('start-eland-lookup', { csvPath, outputPath, ...options }),
