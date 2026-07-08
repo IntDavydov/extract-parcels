@@ -862,59 +862,23 @@ ${allPlacemarks.map(pm => '      ' + pm).join('\n')}
   }
 });
 
-// Search for cadastral number via main process (avoids renderer fetch issues)
-ipcMain.handle('search-cadastral-number', async (_event, cadnum) => {
-  const https = require('https');
-  
-  return new Promise((resolve, reject) => {
-    const timeoutMs = 15000;
-    const url = `https://kadastrova-karta.com/search?q=${encodeURIComponent(cadnum)}`;
-    let req = null;
-    
-    const timer = setTimeout(() => {
-      if (req) req.destroy();
-      reject(new Error('Timeout (15s)'));
-    }, timeoutMs);
-    
-    req = https.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        // Endpoint returns Turbo Stream; without this it may reply HTTP 406.
-        'Accept': 'text/vnd.turbo-stream.html, text/html, application/xhtml+xml',
-        'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7'
-      }
-    }, (res) => {
-      clearTimeout(timer);
-      
-      if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode}`));
-        return;
-      }
-      
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => {
-        const latMatch = data.match(/data-lat="([^"]+)"/);
-        const lngMatch = data.match(/data-lng="([^"]+)"/);
-        
-        if (!latMatch || !lngMatch) {
-          reject(new Error('Not found in registry'));
-          return;
-        }
-        
-        resolve({
-          lat: parseFloat(latMatch[1]),
-          lng: parseFloat(lngMatch[1]),
-          responseSize: data.length
-        });
-      });
-    });
-    
-    req.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
+// Search for cadastral number via selected source
+ipcMain.handle('search-cadastral-number', async (_event, input) => {
+  const { getSource, resolveSourceKey } = require(getUnpackedPath('src', 'cadastral-sources', 'index.js'));
+  const payload = (typeof input === 'string')
+    ? { cadnum: input, source: 'kadastrova_karta' }
+    : (input || {});
+  const cadnum = String(payload.cadnum || '').trim();
+  const sourceKey = resolveSourceKey(payload.source);
+  const source = getSource(sourceKey);
+
+  if (!cadnum) throw new Error('Cadastral number is required');
+
+  try {
+    return await source.lookupByCadnum(cadnum);
+  } catch (err) {
+    throw new Error(`${source.label} lookup failed: ${err.message}`);
+  }
 });
 
 ipcMain.handle('cadnum-batch-init', (_event, outputFolder) => {

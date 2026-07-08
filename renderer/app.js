@@ -255,6 +255,17 @@ let elandBusy    = false;
 let elandOutputFormat = 'xlsx_partial';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
+let parcelSource = 'kadastrova_karta';
+const PARCEL_SOURCE_CONFIG = {
+  kadastrova_karta: {
+    baseUrl: 'https://kadastrova-karta.com',
+    label: 'kadastrova-karta.com',
+  },
+  kadastrova_karta_ua: {
+    baseUrl: 'https://kadastrova-karta.com.ua/kadastr2026',
+    label: 'kadastrova-karta.com.ua',
+  },
+};
 const MODE_BUTTON_LABELS = {
   boundary: '▶ Start boundary + OSM',
   custom: '▶ Start custom settlement fetch',
@@ -361,15 +372,17 @@ function tryAddAreaChip(rawValue) {
 }
 
 function getParcelSource() {
-  return 'kadastrova_karta';
+  return PARCEL_SOURCE_CONFIG[parcelSource] ? parcelSource : 'kadastrova_karta';
 }
 
 function getParcelSourceBaseUrl(source) {
-  return 'https://kadastrova-karta.com';
+  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta';
+  return PARCEL_SOURCE_CONFIG[key].baseUrl;
 }
 
 function getParcelSourceLabel(source) {
-  return 'kadastrova-karta.com';
+  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta';
+  return PARCEL_SOURCE_CONFIG[key].label;
 }
 
 function getFallbackParcelSource(source) {
@@ -612,6 +625,7 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
   const isEland = mode === 'eland';
   
   document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
+  document.getElementById('field-parcel-source').style.display = (isCadnum || isKadastr) ? 'block' : 'none';
   document.getElementById('field-eland-csv').style.display = isEland ? 'block' : 'none';
   document.getElementById('field-eland-format-main').style.display = isEland ? 'block' : 'none';
   document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr || isCoords || isEland) ? 'none' : 'block';
@@ -661,6 +675,10 @@ renderAreaChips();
 checkStartReady();
 
 document.getElementById('cadnum-input').addEventListener('input', checkStartReady);
+document.getElementById('parcel-source-select').addEventListener('change', (e) => {
+  parcelSource = String(e.target.value || 'kadastrova_karta');
+  checkStartReady();
+});
 
 document.getElementById('btn-pick-eland-csv-mode').addEventListener('click', async () => {
   const result = await window.api.openCsvDialog();
@@ -882,7 +900,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     initRunProgress(cadnums.length, 'Cadnum lookup');
     
     appendLog(`🔍 Looking up ${cadnums.length} cadastral number(s)...`);
-    appendLog(`   (Testing network connection to kadastrova-karta.com...)\n`);
+    appendLog(`   (Testing network connection to ${getParcelSourceLabel(parcelSource)}...)\n`);
     
     const allResults = [];
     let tempDir = null;
@@ -900,7 +918,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         let lat, lng;
         try {
           // Search from main process (avoids renderer fetch hang)
-          const result = await window.api.searchCadastralNumber(cadnum);
+          const result = await window.api.searchCadastralNumber(cadnum, parcelSource);
           lat = result.lat;
           lng = result.lng;
           appendLog(`  ✓ Response: ${result.responseSize} bytes`);

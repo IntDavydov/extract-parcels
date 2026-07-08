@@ -22,8 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   mergeKmzFiles: (sourceDir, outputPath) =>
     ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
 
-  searchCadastralNumber: (cadnum) =>
-    ipcRenderer.invoke('search-cadastral-number', cadnum),
+  searchCadastralNumber: (cadnum, source = 'kadastrova_karta') =>
+    ipcRenderer.invoke('search-cadastral-number', { cadnum, source }),
 
   cadnumBatchInit: (outputFolder) =>
     ipcRenderer.invoke('cadnum-batch-init', outputFolder),

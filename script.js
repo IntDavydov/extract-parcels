@@ -132,6 +132,17 @@ const PARCEL_SOURCES = {
   kadastrova_karta: {
     baseUrl: "https://kadastrova-karta.com",
     tileHostHint: "kadastrova-karta.com",
+    directTileTemplates: [
+      "https://kadastrova-karta.com/tiles/maps/kadastr/land_polygons/{z}/{x}/{y}.pbf",
+      "https://kadastrova-karta.com/tiles/maps/kadastr/{z}/{x}/{y}.pbf",
+    ],
+  },
+  kadastrova_karta_ua: {
+    baseUrl: "https://kadastrova-karta.com.ua/kadastr2026",
+    tileHostHint: "tiles-proxy",
+    directTileTemplates: [
+      "https://jdwepohzmflyupbpmxkg.supabase.co/functions/v1/tiles-proxy?z={z}&x={x}&y={y}",
+    ],
   },
 };
 
@@ -261,8 +272,35 @@ async function processTileBuffer(buffer, tileKey, x, y, z) {
   }
 }
 
-async function fetchKadastrovaTilesDirect(onProgress) {
-  if (ACTIVE_SOURCE_KEY !== "kadastrova_karta") return false;
+function shouldProcessTileResponse(url) {
+  if (ACTIVE_SOURCE_KEY === "kadastrova_karta_ua") {
+    return url.includes('/functions/v1/tiles-proxy?');
+  }
+  return url.includes(".pbf") && url.includes(ACTIVE_SOURCE.tileHostHint);
+}
+
+function extractTileCoordsFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const z = Number(parsed.searchParams.get('z'));
+    const x = Number(parsed.searchParams.get('x'));
+    const y = Number(parsed.searchParams.get('y'));
+    if (Number.isFinite(z) && Number.isFinite(x) && Number.isFinite(y)) {
+      return { z, x, y, tileKey: `${z}/${x}/${y}` };
+    }
+  } catch (_) {}
+  const match = url.match(/\/(\d+)\/(\d+)\/(\d+)\.pbf(?:\?|$)/);
+  if (!match) return null;
+  const z = parseInt(match[1], 10);
+  const x = parseInt(match[2], 10);
+  const y = parseInt(match[3], 10);
+  return { z, x, y, tileKey: `${z}/${x}/${y}` };
+}
+
+async function fetchDirectTilesForActiveSource(onProgress) {
+  const source = PARCEL_SOURCES[ACTIVE_SOURCE_KEY];
+  if (!source || !Array.isArray(source.directTileTemplates) || !source.directTileTemplates.length) return false;
+  const sourceName = ACTIVE_SOURCE_KEY === "kadastrova_karta_ua" ? "kadastrova-karta.com.ua" : "kadastrova-karta.com";
   const boundary = await loadBoundary(CONFIG.boundaryFilter);
   
   let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
@@ -293,10 +331,7 @@ async function fetchKadastrovaTilesDirect(onProgress) {
   
   if (!Number.isFinite(west)) return false;
   const zooms = [16, 15, 14];
-  const endpointTemplates = [
-    `${ACTIVE_SOURCE.baseUrl}/tiles/maps/kadastr/land_polygons/{z}/{x}/{y}.pbf`,
-    `${ACTIVE_SOURCE.baseUrl}/tiles/maps/kadastr/{z}/{x}/{y}.pbf`,
-  ];
+  const endpointTemplates = source.directTileTemplates;
   let anyOk = 0;
   let anyNonEmpty = 0;
   let anyParsedLayers = 0;
@@ -339,7 +374,7 @@ async function fetchKadastrovaTilesDirect(onProgress) {
       anyOk += okCount;
       anyNonEmpty += nonEmptyCount;
       anyParsedLayers += parsedLayersCount;
-      onProgress(`    · ${tpl.includes('land_polygons') ? 'land_polygons' : 'kadastr'} endpoint OK tiles: ${okCount}, non-empty: ${nonEmptyCount}, with layers: ${parsedLayersCount}`);
+      onProgress(`    · ${tpl.includes('land_polygons') ? 'land_polygons' : (tpl.includes('tiles-proxy') ? 'tiles-proxy' : 'kadastr')} endpoint OK tiles: ${okCount}, non-empty: ${nonEmptyCount}, with layers: ${parsedLayersCount}`);
       if (parcelFragments.size > beforeParcels) break;
     }
     if (parcelFragments.size > beforeParcels) {
@@ -348,7 +383,7 @@ async function fetchKadastrovaTilesDirect(onProgress) {
     }
   }
   if (anyOk > 0 && anyNonEmpty === 0) {
-    onProgress(`  ⚠ kadastrova-karta.com returned ${anyOk} tile responses but all were empty (0 bytes) for this area.`);
+    onProgress(`  ⚠ ${sourceName} returned ${anyOk} tile responses but all were empty (0 bytes) for this area.`);
     onProgress(`  ⚠ This usually means no cadastral vector coverage at requested tiles (source-side no-data), not a parser failure.`);
   } else if (anyNonEmpty > 0 && anyParsedLayers === 0) {
     onProgress(`  ⚠ Non-empty tiles received (${anyNonEmpty}) but no vector layers decoded.`);
@@ -384,7 +419,7 @@ async function fetchKadastrovaTilesDirect(onProgress) {
 
     page.on("response", async (response) => {
       const url = response.url();
-      if (url.includes(".pbf") && url.includes(ACTIVE_SOURCE.tileHostHint)) {
+      if (shouldProcessTileResponse(url)) {
         await processTileResponse(response, url);
       }
     });
@@ -429,9 +464,9 @@ async function fetchKadastrovaTilesDirect(onProgress) {
         if (state.processedTiles.size === 0) console.log("  ⚠ No tiles arrived in 30s — saving empty result.");
         console.log("  → Tiles arriving, waiting to settle…");
         await waitForTilesToSettle(4000);
-        if (ACTIVE_SOURCE_KEY === "kadastrova_karta" && parcelFragments.size === 0) {
-          console.log("  ⚠ Base tiles loaded but no parcel features captured — switching to direct z14 tile fetch…");
-          await fetchKadastrovaTilesDirect((m) => console.log(m));
+        if (parcelFragments.size === 0) {
+          console.log("  ⚠ Base tiles loaded but no parcel features captured — switching to direct tile fetch…");
+          await fetchDirectTilesForActiveSource((m) => console.log(m));
         }
         console.log(`  → Tiles settled. ${parcelFragments.size} parcels captured.`);
       }
@@ -458,13 +493,9 @@ async function fetchKadastrovaTilesDirect(onProgress) {
 })();
 
 async function processTileResponse(response, url) {
-  const match = url.match(/\/(\d+)\/(\d+)\/(\d+)\.pbf/);
-  if (!match) return;
-
-  const z = parseInt(match[1]);
-  const x = parseInt(match[2]);
-  const y = parseInt(match[3]);
-  const tileKey = `${z}/${x}/${y}`;
+  const coords = extractTileCoordsFromUrl(url);
+  if (!coords) return;
+  const { z, x, y, tileKey } = coords;
 
   if (state.processedTiles.has(tileKey)) return;
   state.processedTiles.add(tileKey);
