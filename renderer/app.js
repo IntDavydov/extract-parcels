@@ -272,8 +272,8 @@ const PARCEL_SOURCE_CONFIG = {
 const MODE_BUTTON_LABELS = {
   boundary: '▶ Start boundary + OSM',
   custom: '▶ Start custom settlement fetch',
-  kadastr: '▶ Start Kadastr scraping',
-  cadnum: '▶ Start cadnum lookup',
+  kadastr: '▶ Start Parcels by KMZ/KML',
+  cadnum: '▶ Start Parcels by cadastral numbers',
   coords: '▶ Extract polygon coordinates',
   eland: '🔍 Lookup on e.land',
 };
@@ -405,6 +405,9 @@ function applyRoleVisibility() {
     const mode = btn.dataset.fetchMode || '';
     btn.style.display = USER_VISIBLE_MODES.has(mode) ? '' : 'none';
     btn.style.order = mode === 'kadastr' ? '1' : mode === 'cadnum' ? '2' : mode === 'eland' ? '3' : '';
+    btn.style.gridColumn = mode === 'eland'
+      ? '1 / -1'
+      : ((mode === 'kadastr' || mode === 'cadnum') ? 'span 3' : '');
   });
 
   const modeSelect = document.getElementById('parcel-fetch-mode');

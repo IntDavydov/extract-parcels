@@ -22,17 +22,17 @@
         <label>Workflow mode</label>
         <div class="mode-cards" id="parcel-mode-cards">
           <button class="mode-card mode-card-half active" type="button" data-fetch-mode="boundary">🧭 Boundary + OSM layers</button>
-          <button class="mode-card mode-card-half" type="button" data-fetch-mode="kadastr">🗺 Kadastr parcel scraping (KMZ/KML)</button>
+          <button class="mode-card mode-card-third" type="button" data-fetch-mode="kadastr">🗺 Parcels by KMZ/KML</button>
           <button class="mode-card mode-card-full mode-card-shortcut" type="button" data-fetch-mode="eland">📋 e.land.gov.ua Lookup</button>
-          <button class="mode-card mode-card-third" type="button" data-fetch-mode="cadnum">🔢 Cadastral number lookup</button>
+          <button class="mode-card mode-card-third" type="button" data-fetch-mode="cadnum">🔢 Parcels by cadastral numbers</button>
           <button class="mode-card mode-card-third" type="button" data-fetch-mode="custom">🏘 Custom settlement boundary</button>
           <button class="mode-card mode-card-third" type="button" data-fetch-mode="coords">📍 Extract polygon coordinates</button>
         </div>
         <select id="parcel-fetch-mode" style="display:none;">
           <option value="boundary" selected>Area boundary (KMZ/KML)</option>
           <option value="custom">Custom settlement boundary (KMZ)</option>
-          <option value="kadastr">Kadastr parcel scraping (KMZ/KML)</option>
-          <option value="cadnum">Cadastr number</option>
+          <option value="kadastr">Parcels by KMZ/KML</option>
+          <option value="cadnum">Parcels by cadastral numbers</option>
           <option value="coords">Extract polygon coordinates</option>
           <option value="eland">e.land.gov.ua Lookup</option>
         </select>
