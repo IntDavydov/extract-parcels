@@ -256,6 +256,9 @@ let elandOutputFormat = 'xlsx_partial';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
 let parcelSource = 'kadastrova_karta';
+const appRole = String(window.api.getAppRole?.() || 'user');
+const isAdminRole = appRole === 'admin';
+const USER_VISIBLE_MODES = new Set(['kadastr', 'cadnum', 'eland']);
 const PARCEL_SOURCE_CONFIG = {
   kadastrova_karta: {
     baseUrl: 'https://kadastrova-karta.com',
@@ -387,6 +390,30 @@ function getParcelSourceLabel(source) {
 
 function getFallbackParcelSource(source) {
   return 'kadastrova_karta';
+}
+
+function applyRoleVisibility() {
+  if (isAdminRole) return;
+
+  const leftTabs = document.querySelector('.left-tabs');
+  if (leftTabs) leftTabs.style.display = 'none';
+
+  const preResearchPanel = document.getElementById('tab-panel-pre-research');
+  if (preResearchPanel) preResearchPanel.style.display = 'none';
+
+  document.querySelectorAll('#parcel-mode-cards .mode-card[data-fetch-mode]').forEach((btn) => {
+    const mode = btn.dataset.fetchMode || '';
+    btn.style.display = USER_VISIBLE_MODES.has(mode) ? '' : 'none';
+    btn.style.order = mode === 'kadastr' ? '1' : mode === 'cadnum' ? '2' : mode === 'eland' ? '3' : '';
+  });
+
+  const modeSelect = document.getElementById('parcel-fetch-mode');
+  if (modeSelect && !USER_VISIBLE_MODES.has(modeSelect.value)) {
+    modeSelect.value = 'kadastr';
+  }
+
+  const parcelPanel = document.getElementById('tab-panel-parcels');
+  if (parcelPanel) parcelPanel.style.display = 'block';
 }
 
 function makeParcelUrlForBbox(bbox, source = getParcelSource()) {
@@ -672,6 +699,12 @@ updateStartButtonLabel(document.getElementById('parcel-fetch-mode').value);
 setElandFormat(elandOutputFormat);
 syncAreaNamesValue();
 renderAreaChips();
+applyRoleVisibility();
+if (!isAdminRole) {
+  const modeSelect = document.getElementById('parcel-fetch-mode');
+  modeSelect.value = 'kadastr';
+  modeSelect.dispatchEvent(new Event('change'));
+}
 checkStartReady();
 
 document.getElementById('cadnum-input').addEventListener('input', checkStartReady);

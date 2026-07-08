@@ -8,6 +8,15 @@ const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
 const { generateResearchXlsx, stopResearch } = require('./src/research');
 
+function getAppRole() {
+  const roleArg = process.argv.find((arg) => arg.startsWith('--role='));
+  const role = roleArg ? roleArg.split('=')[1] : '';
+  return role === 'admin' ? 'admin' : 'user';
+}
+
+const APP_ROLE = getAppRole();
+process.env.APP_ROLE = APP_ROLE;
+
 // Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
 async function ensurePuppeteerChrome() {
   // When packaged, load puppeteer from app.asar.unpacked to avoid asar path issues

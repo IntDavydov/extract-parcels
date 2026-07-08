@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  getAppRole: () => process.env.APP_ROLE || 'user',
   getPathForFile: (file) => webUtils.getPathForFile(file),
   startScraping: (url, outputPath, opts = {}) =>
     ipcRenderer.invoke('start-scraping', { url, outputPath, ...opts }),
