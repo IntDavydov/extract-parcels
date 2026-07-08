@@ -258,7 +258,7 @@ let offlineDownloadBusy = false;
 let parcelSource = 'kadastrova_karta';
 const appRole = String(window.api.getAppRole?.() || 'user');
 const isAdminRole = appRole === 'admin';
-const USER_VISIBLE_MODES = new Set(['kadastr', 'cadnum', 'eland']);
+const USER_VISIBLE_MODES = new Set(['kadastr', 'eland']);
 const PARCEL_SOURCE_CONFIG = {
   kadastrova_karta: {
     baseUrl: 'https://kadastrova-karta.com',
@@ -404,13 +404,18 @@ function applyRoleVisibility() {
   document.querySelectorAll('#parcel-mode-cards .mode-card[data-fetch-mode]').forEach((btn) => {
     const mode = btn.dataset.fetchMode || '';
     btn.style.display = USER_VISIBLE_MODES.has(mode) ? '' : 'none';
-    btn.style.order = mode === 'kadastr' ? '1' : mode === 'cadnum' ? '2' : mode === 'eland' ? '3' : '';
+    btn.style.order = mode === 'kadastr' ? '1' : mode === 'eland' ? '2' : '';
     btn.style.gridColumn = mode === 'eland'
       ? '1 / -1'
-      : ((mode === 'kadastr' || mode === 'cadnum') ? 'span 3' : '');
+      : (mode === 'kadastr' ? 'span 3' : '');
   });
 
   const modeSelect = document.getElementById('parcel-fetch-mode');
+  if (modeSelect) {
+    [...modeSelect.options].forEach((option) => {
+      option.hidden = !USER_VISIBLE_MODES.has(option.value);
+    });
+  }
   if (modeSelect && !USER_VISIBLE_MODES.has(modeSelect.value)) {
     modeSelect.value = 'kadastr';
   }
