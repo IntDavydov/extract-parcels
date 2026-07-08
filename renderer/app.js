@@ -405,9 +405,7 @@ function applyRoleVisibility() {
     const mode = btn.dataset.fetchMode || '';
     btn.style.display = USER_VISIBLE_MODES.has(mode) ? '' : 'none';
     btn.style.order = mode === 'kadastr' ? '1' : mode === 'eland' ? '2' : '';
-    btn.style.gridColumn = mode === 'eland'
-      ? '1 / -1'
-      : (mode === 'kadastr' ? 'span 3' : '');
+    btn.style.gridColumn = (mode === 'kadastr' || mode === 'eland') ? '1 / -1' : '';
   });
 
   const modeSelect = document.getElementById('parcel-fetch-mode');
