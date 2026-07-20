@@ -2,16 +2,30 @@
 
 const https = require('https');
 
-function httpGet(url, headers = {}) {
+function httpGet(url, headers = {}, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers }, (res) => {
+    let settled = false;
+    const done = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(val);
+    };
+    const timer = setTimeout(() => {
+      req.destroy();
+      done(reject, new Error(`Request timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    const req = https.get(url, { headers }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8');
-        resolve({ statusCode: res.statusCode || 0, body });
+        done(resolve, { statusCode: res.statusCode || 0, body });
       });
-    }).on('error', reject);
+      res.on('error', (e) => done(reject, e));
+    });
+    req.on('error', (e) => done(reject, e));
   });
 }
 

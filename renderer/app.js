@@ -924,68 +924,129 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   if (fetchMode === 'cadnum') {
     const cadnumInput = document.getElementById('cadnum-input').value.trim();
     if (!cadnumInput) { appendLog('⚠ Please enter at least one cadastral number.'); return; }
-    
-    // Parse multiple cadastral numbers (space, newline, or comma-separated)
+
     const cadnums = cadnumInput
       .split(/[\s,]+/)
       .map(s => s.trim())
       .filter(Boolean);
-    
+
     if (cadnums.length === 0) { appendLog('⚠ Please enter at least one cadastral number.'); return; }
-    
+
     document.getElementById('main-log').textContent = '';
     setBusy(true);
     userStopped = false;
     initRunProgress(cadnums.length, 'Cadnum lookup');
-    
-    appendLog(`🔍 Looking up ${cadnums.length} cadastral number(s)...`);
-    appendLog(`   (Testing network connection to ${getParcelSourceLabel(parcelSource)}...)\n`);
-    
+
+    const activeSource = getParcelSource();
+    const isUaSource   = activeSource === 'kadastrova_karta_ua';
+    appendLog(`🔍 Fetching ${cadnums.length} cadastral number(s) via ${getParcelSourceLabel(activeSource)}...\n`);
+
     const allResults = [];
-    let tempDir = null;
+    let tempDir   = null;
     let keepTempDir = false;
     try {
-      // Create temp directory for individual parcel files (main process)
-      tempDir = await window.api.cadnumBatchInit(outputFolder);
+      try {
+        tempDir = await window.api.cadnumBatchInit(outputFolder);
+      } catch (err) {
+        appendLog(`❌ Failed to create temp directory: ${err.message}`);
+        setBusy(false);
+        return;
+      }
 
       for (let i = 0; i < cadnums.length; i++) {
         const cadnum = cadnums[i];
         setRunProgressLabel(`Cadnum ${i + 1}/${cadnums.length}: ${cadnum}`);
         appendLog(`\n[${i + 1}/${cadnums.length}] Processing: ${cadnum}`);
-        appendLog(`  🌐 Searching...`);
+        appendLog(`  🌐 Looking up...`);
 
-        let lat, lng;
+        let lookupResult;
         try {
-          // Search from main process (avoids renderer fetch hang)
-          const result = await window.api.searchCadastralNumber(cadnum, parcelSource);
-          lat = result.lat;
-          lng = result.lng;
-          appendLog(`  ✓ Response: ${result.responseSize} bytes`);
-          appendLog(`  ✅ Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          lookupResult = await window.api.searchCadastralNumber(cadnum, activeSource);
+        } catch (searchErr) {
+          appendLog(`  ❌ Lookup failed: ${searchErr.message}`);
+          allResults.push({ cadnum, parcels: 0, success: false, error: searchErr.message });
+          tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+          if (i < cadnums.length - 1) await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
 
-          const startUrl = `https://kadastrova-karta.com/#15/${lat}/${lng}`;
-          const parcelSource = getParcelSource();
-          const res = await window.api.startScraping(startUrl, tempDir, {
-            headless: true,
-            boundaryFilter: null,
-            parcelSource,
-            cadnumFilter: cadnum
-          });
-
-          if (res.parcels > 0) {
-            appendLog(`  ✅ Found ${res.parcels} parcel(s)`);
-            allResults.push({ cadnum, parcels: res.parcels, success: true });
-            await window.api.cadnumBatchFinalizeItem(tempDir, cadnum);
-            tickRunProgress(true, `Processed ${i + 1}/${cadnums.length}`);
-          } else {
-            appendLog(`  ⚠ No parcel data found`);
+        // ── .com.ua path: full geometry returned by API → export directly, no scraping ──
+        if (isUaSource) {
+          const geometry = lookupResult.meta && lookupResult.meta.geometry;
+          if (!geometry) {
+            appendLog(`  ⚠ No geometry in API response`);
             allResults.push({ cadnum, parcels: 0, success: false });
             tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+            if (i < cadnums.length - 1) await new Promise(r => setTimeout(r, 1000));
+            continue;
           }
-        } catch (err) {
-          appendLog(`  ❌ Error: ${err.message}`);
-          allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
-          tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+          try {
+            appendLog(`  ✓ Got geometry from API`);
+            const feature = {
+              type: 'Feature',
+              geometry,
+              properties: {
+                name: cadnum,
+                cadnum: cadnum,
+                ...(lookupResult.meta.area != null    ? { area: lookupResult.meta.area }       : {}),
+                ...(lookupResult.meta.purpose         ? { purpose: lookupResult.meta.purpose } : {}),
+                ...(lookupResult.meta.address         ? { address: lookupResult.meta.address } : {}),
+              },
+            };
+            const namedKmz = `${tempDir}/${String(cadnum).replace(/:/g, '_')}.kmz`;
+            const kmzResult = await window.api.createCadnumKmz([feature], namedKmz, 'Kadastr');
+            if (kmzResult.success) {
+              appendLog(`  ✅ KMZ created`);
+              allResults.push({ cadnum, parcels: 1, success: true });
+              tickRunProgress(true, `Processed ${i + 1}/${cadnums.length}`);
+            } else {
+              appendLog(`  ❌ KMZ export failed: ${kmzResult.error}`);
+              allResults.push({ cadnum, parcels: 0, success: false, error: kmzResult.error });
+              tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+            }
+          } catch (err) {
+            appendLog(`  ❌ Export error: ${err.message}`);
+            allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
+            tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+          }
+
+        } else {
+          // ── .com path: scrape tiles via Puppeteer, up to 3 retries (same as KMZ mode) ──
+          const { lat, lng } = lookupResult;
+          appendLog(`  ✓ Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          const startUrl = `${getParcelSourceBaseUrl(activeSource)}/#15/${lat}/${lng}`;
+          appendLog(`  🗺 Scraping parcel tiles (up to 3 attempts)...`);
+
+          let parcelsGot = 0;
+          try {
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              const res = await window.api.startScraping(startUrl, tempDir, {
+                headless: true,
+                boundaryFilter: null,
+                parcelSource: activeSource,
+                cadnumFilter: cadnum,
+              });
+              parcelsGot = res.parcels || 0;
+              appendLog(`    Attempt ${attempt}: exited (code ${res.code}), parcels: ${parcelsGot}`);
+              if (parcelsGot > 0) break;
+              if (attempt < 3) appendLog(`    ⚠ No parcels — retrying (${attempt + 1}/3)…`);
+            }
+
+            if (parcelsGot > 0) {
+              appendLog(`  ✅ Found ${parcelsGot} parcel(s)`);
+              allResults.push({ cadnum, parcels: parcelsGot, success: true });
+              await window.api.cadnumBatchFinalizeItem(tempDir, cadnum);
+              tickRunProgress(true, `Processed ${i + 1}/${cadnums.length}`);
+            } else {
+              appendLog(`  ⚠ No parcels found after 3 attempts`);
+              allResults.push({ cadnum, parcels: 0, success: false });
+              tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+            }
+          } catch (err) {
+            appendLog(`  ❌ Scraping error: ${err.message}`);
+            allResults.push({ cadnum, parcels: 0, success: false, error: err.message });
+            tickRunProgress(false, `Processed ${i + 1}/${cadnums.length}`);
+          }
         }
 
         if (i < cadnums.length - 1) {
@@ -1008,12 +1069,15 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           await window.api.mergeKmzFiles(tempDir, finalKmz);
           appendLog(`✅ Results saved to: ${finalKmz}`);
           addResultEntry(finalKmz, 'KMZ');
+          window.api.showInFolder(finalKmz);
         } catch (err) {
           appendLog(`⚠ Merge error: ${err.message}`);
           appendLog(`  Individual files available in: ${tempDir}`);
           keepTempDir = true;
         }
       }
+    } catch (outerErr) {
+      appendLog(`❌ Unexpected error: ${outerErr.message}`);
     } finally {
       if (tempDir && !keepTempDir) await window.api.cadnumBatchCleanup(tempDir);
       setBusy(false);

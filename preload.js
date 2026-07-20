@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('api', {
   cadnumBatchCleanup: (tempDir) =>
     ipcRenderer.invoke('cadnum-batch-cleanup', tempDir),
 
+  createCadnumKmz: (features, outputPath, docName) =>
+    ipcRenderer.invoke('create-cadnum-kmz', { features, outputPath, docName }),
+
   saveDialog: (options) =>
     ipcRenderer.invoke('save-dialog', options),
 

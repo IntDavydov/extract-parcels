@@ -2,16 +2,30 @@
 
 const https = require('https');
 
-function httpGet(url, headers = {}) {
+function httpGet(url, headers = {}, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers }, (res) => {
+    let settled = false;
+    const done = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(val);
+    };
+    const timer = setTimeout(() => {
+      req.destroy();
+      done(reject, new Error(`Request timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    const req = https.get(url, { headers }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8');
-        resolve({ statusCode: res.statusCode || 0, body });
+        done(resolve, { statusCode: res.statusCode || 0, body });
       });
-    }).on('error', reject);
+      res.on('error', (e) => done(reject, e));
+    });
+    req.on('error', (e) => done(reject, e));
   });
 }
 
@@ -21,9 +35,10 @@ async function lookupByCadnum(cadnum) {
 
   const url = `https://kadastrova-karta.com/search?q=${encodeURIComponent(query)}`;
   const { statusCode, body } = await httpGet(url, {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/vnd.turbo-stream.html, text/html, application/xhtml+xml',
     'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://kadastrova-karta.com/',
   });
 
   if (statusCode !== 200) throw new Error(`Source responded with HTTP ${statusCode}`);

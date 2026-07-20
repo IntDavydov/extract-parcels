@@ -916,6 +916,18 @@ ipcMain.handle('cadnum-batch-cleanup', (_event, tempDir) => {
   return true;
 });
 
+// Export GeoJSON features directly to a KMZ (used by cadnum .com.ua path — no scraping needed)
+ipcMain.handle('create-cadnum-kmz', async (_event, { features, outputPath, docName }) => {
+  try {
+    const { exportKMZ } = require(getUnpackedPath('src', 'kmz.js'));
+    const layerMap = { 'Land Parcels': features };
+    await exportKMZ(layerMap, outputPath, () => {}, [], docName || 'Kadastr');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('resolve-output-path', (_event, folder, baseName) => {
   const fs   = require('fs');
   const path = require('path');
