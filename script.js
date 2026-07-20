@@ -7,8 +7,73 @@ const Pbf = require("pbf");
 const turfUnion = require("@turf/union");
 const turfBuffer = require("@turf/buffer");
 
+const https = require("https");
+
 const SNAP_BUFFER_KM = 0.000005; // first-pass seam snap (~5mm)
 const SNAP_BUFFER_STEPS_KM = [SNAP_BUFFER_KM, 0.0002, 0.001, 0.002]; // up to 2m for stubborn tile seams
+
+// ── Geoserver enrichment (kadastrova-karta.com.ua source only) ───────────────
+// After tile scraping we only have cadnum + geometry. This fetches rich metadata
+// from the REST API and merges it into each feature's properties.
+async function enrichFeaturesFromGeoserver(features, concurrency = 5, timeoutMs = 15000) {
+  const toEnrich = features.filter(f => {
+    const c = String(f.properties?.cadnum || f.properties?.cad_num || '').trim();
+    return c && !c.startsWith('no-cadnum:');
+  });
+
+  if (toEnrich.length === 0) return features;
+  console.log(`🌐 Enriching ${toEnrich.length} parcel(s) from geoserver API…`);
+
+  let done = 0;
+  let enriched = 0;
+
+  async function fetchMeta(cadnum) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (val) => { if (!settled) { settled = true; clearTimeout(timer); resolve(val); } };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      const url = `https://back.geoserver.click/api/landuse/${encodeURIComponent(cadnum)}`;
+      const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          if (res.statusCode !== 200) return finish(null);
+          try { finish(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+          catch (_) { finish(null); }
+        });
+        res.on('error', () => finish(null));
+      });
+      req.on('error', () => finish(null));
+    });
+  }
+
+  // Run with a concurrency pool
+  async function processFeature(feature) {
+    const cadnum = String(feature.properties?.cadnum || feature.properties?.cad_num || '').trim();
+    const data = await fetchMeta(cadnum);
+    done++;
+    if (data) {
+      const p = feature.properties;
+      if (data.category)    p.category    = data.category;
+      if (data.purpose)     p.purpose     = data.purpose;
+      if (data.area != null) p.area       = `${data.area} ${data.unit_area || ''}`.trim();
+      if (data.ownership)   p.ownership   = data.ownership;
+      if (data.address)     p.address     = data.address;
+      enriched++;
+    }
+    if (done % 10 === 0 || done === toEnrich.length) {
+      console.log(`  Enriched ${done}/${toEnrich.length} (${enriched} successful)`);
+    }
+  }
+
+  // Chunked concurrency pool
+  for (let i = 0; i < toEnrich.length; i += concurrency) {
+    await Promise.all(toEnrich.slice(i, i + concurrency).map(processFeature));
+  }
+
+  console.log(`✅ Geoserver enrichment done: ${enriched}/${toEnrich.length} parcels enriched`);
+  return features;
+}
 
 function exportCadnumsToExcel(features, xlsxPath) {
   const fs = require('fs');
@@ -642,6 +707,11 @@ function setupGracefulShutdown(browser) {
           return cadnum === CONFIG.cadnumFilter;
         });
         console.log(`🔍 Cadnum filter (${CONFIG.cadnumFilter}): ${features.length} of ${before} parcels kept`);
+      }
+
+      // Enrich parcel metadata from geoserver API (kadastrova-karta.com.ua only)
+      if (ACTIVE_SOURCE_KEY === 'kadastrova_karta_ua' && features.length > 0) {
+        features = await enrichFeaturesFromGeoserver(features);
       }
 
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
