@@ -255,7 +255,7 @@ let elandBusy    = false;
 let elandOutputFormat = 'xlsx_partial';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
-let parcelSource = 'kadastrova_karta';
+let parcelSource = 'kadastrova_karta_ua';
 const appRole = String(window.api.getAppRole?.() || 'user');
 const isAdminRole = appRole === 'admin';
 const USER_VISIBLE_MODES = new Set(['kadastr', 'eland']);
@@ -375,21 +375,21 @@ function tryAddAreaChip(rawValue) {
 }
 
 function getParcelSource() {
-  return PARCEL_SOURCE_CONFIG[parcelSource] ? parcelSource : 'kadastrova_karta';
+  return PARCEL_SOURCE_CONFIG[parcelSource] ? parcelSource : 'kadastrova_karta_ua';
 }
 
 function getParcelSourceBaseUrl(source) {
-  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta';
+  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta_ua';
   return PARCEL_SOURCE_CONFIG[key].baseUrl;
 }
 
 function getParcelSourceLabel(source) {
-  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta';
+  const key = PARCEL_SOURCE_CONFIG[source] ? source : 'kadastrova_karta_ua';
   return PARCEL_SOURCE_CONFIG[key].label;
 }
 
 function getFallbackParcelSource(source) {
-  return 'kadastrova_karta';
+  return 'kadastrova_karta_ua';
 }
 
 function applyRoleVisibility() {
@@ -715,7 +715,7 @@ checkStartReady();
 
 document.getElementById('cadnum-input').addEventListener('input', checkStartReady);
 document.getElementById('parcel-source-select').addEventListener('change', (e) => {
-  parcelSource = String(e.target.value || 'kadastrova_karta');
+  parcelSource = String(e.target.value || 'kadastrova_karta_ua');
   checkStartReady();
 });
 

@@ -213,7 +213,7 @@ const PARCEL_SOURCES = {
 
 const ACTIVE_SOURCE_KEY = process.env.PARCEL_SOURCE && PARCEL_SOURCES[process.env.PARCEL_SOURCE]
   ? process.env.PARCEL_SOURCE
-  : "kadastrova_karta";
+  : "kadastrova_karta_ua";
 const ACTIVE_SOURCE = PARCEL_SOURCES[ACTIVE_SOURCE_KEY];
 
 // Configuration

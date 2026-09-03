@@ -875,7 +875,7 @@ ${allPlacemarks.map(pm => '      ' + pm).join('\n')}
 ipcMain.handle('search-cadastral-number', async (_event, input) => {
   const { getSource, resolveSourceKey } = require(getUnpackedPath('src', 'cadastral-sources', 'index.js'));
   const payload = (typeof input === 'string')
-    ? { cadnum: input, source: 'kadastrova_karta' }
+    ? { cadnum: input, source: 'kadastrova_karta_ua' }
     : (input || {});
   const cadnum = String(payload.cadnum || '').trim();
   const sourceKey = resolveSourceKey(payload.source);

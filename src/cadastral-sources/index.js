@@ -17,7 +17,7 @@ const SOURCES = {
 };
 
 function resolveSourceKey(rawKey) {
-  return SOURCES[rawKey] ? rawKey : 'kadastrova_karta';
+  return SOURCES[rawKey] ? rawKey : 'kadastrova_karta_ua';
 }
 
 function getSource(rawKey) {

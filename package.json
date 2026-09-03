@@ -8,7 +8,7 @@
     "electron:wpd": "electron wpd/main.js --no-sandbox",
     "electron:dev": "electron . --no-sandbox --inspect",
     "electron:dev:admin": "electron . --no-sandbox --inspect",
-    "build:electron:win": "electron-builder --win",
+    "build:electron:win": "electron-builder --win --x64",
     "build:electron:wpd:win": "electron-builder --win --config wpd/electron-builder.wpd.json",
     "build:electron:linux": "electron-builder --linux",
     "build:win": "bash build-win.sh"
@@ -44,8 +44,7 @@
       "gui.html",
       "src/**",
       "houses.png",
-      "windmill.png",
-      "node_modules/**"
+      "windmill.png"
     ]
   },
   "keywords": [],
