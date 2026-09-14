@@ -1,0 +1,4 @@
+
+> ostriv@1.0.0 electron:dev:admin
+> electron . --role=admin --no-sandbox --inspect --role=admin
+

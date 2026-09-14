@@ -1,281 +1,359 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Parcels</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Land Management Tool</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="../node_modules/leaflet/dist/leaflet.css" />
+  <script src="../node_modules/leaflet/dist/leaflet.js"></script>
 </head>
 <body>
 
-<div class="main-layout">
-
-  <!-- ── Left: controls ───────────────────────────────── -->
-  <div class="controls-col">
-    <div class="card">
-      <div class="left-tabs" role="tablist" aria-label="Task tabs">
-        <button class="left-tab-btn active" id="tab-btn-parcels" data-tab-target="tab-panel-parcels" role="tab" aria-selected="true">🗺 Parcels</button>
-        <button class="left-tab-btn" id="tab-btn-pre-research" data-tab-target="tab-panel-pre-research" role="tab" aria-selected="false">📊 Pre Research</button>
-      </div>
-
-      <div class="field global-fetch-mode">
-        <label>Workflow mode</label>
-        <div class="mode-cards" id="parcel-mode-cards">
-          <button class="mode-card mode-card-half active" type="button" data-fetch-mode="boundary">🧭 Boundary + OSM layers</button>
-          <button class="mode-card mode-card-third" type="button" data-fetch-mode="kadastr">🗺 Parcels by KMZ/KML</button>
-          <button class="mode-card mode-card-full mode-card-shortcut" type="button" data-fetch-mode="eland">📋 e.land.gov.ua Lookup</button>
-          <button class="mode-card mode-card-third" type="button" data-fetch-mode="cadnum">🔢 Parcels by cadastral numbers</button>
-          <button class="mode-card mode-card-third" type="button" data-fetch-mode="custom">🏘 Custom settlement boundary</button>
-          <button class="mode-card mode-card-third" type="button" data-fetch-mode="coords">📍 Extract polygon coordinates</button>
-        </div>
-        <select id="parcel-fetch-mode" style="display:none;">
-          <option value="boundary" selected>Area boundary (KMZ/KML)</option>
-          <option value="custom">Custom settlement boundary (KMZ)</option>
-          <option value="kadastr">Parcels by KMZ/KML</option>
-          <option value="cadnum">Parcels by cadastral numbers</option>
-          <option value="coords">Extract polygon coordinates</option>
-          <option value="eland">e.land.gov.ua Lookup</option>
-        </select>
-      </div>
-
-      <div class="left-tab-panel active" id="tab-panel-parcels" role="tabpanel">
-        <div class="step-title"><span>1. Source input</span><span class="step-status" id="step-input-status">○</span></div>
-
-        <div class="field" id="field-area-names">
-          <label for="area-chip-input">Area name(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(add one or more)</span></label>
-          <div class="row" style="margin-bottom:6px;">
-            <input type="text" id="area-chip-input" placeholder="e.g. Остерська громада" />
-            <button class="btn btn-secondary btn-sm" id="btn-add-area" type="button">+ Add area</button>
-          </div>
-          <div class="chips-wrap" id="area-chips"></div>
-          <textarea id="area-name" rows="2" style="display:none;"></textarea>
-          <div class="field-error" id="err-area-name"></div>
-        </div>
-
-        <!-- chk-full-parcels checkbox hidden but logic preserved in app.js -->
-        <input type="checkbox" id="chk-full-parcels" style="display:none;" />
-
-        <div class="field" id="field-parcel-source" style="display:none;">
-          <label for="parcel-source-select">Website <span style="color:#888;font-size:11px;">(shared for Kadastr scraping and cadnum lookup)</span></label>
-          <select id="parcel-source-select">
-            <option value="kadastrova_karta">kadastrova-karta.com</option>
-            <option value="kadastrova_karta_ua" selected>kadastrova-karta.com.ua</option>
-          </select>
-        </div>
-
-        <div class="field" id="field-cadnum" style="display:none;">
-          <label for="cadnum-input">Cadastral number(s) <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">— separate with space, comma, or newline</span></label>
-          <textarea id="cadnum-input" rows="4" placeholder="3221486700:02:006:0072 3220489700:06:001:0058&#10;or: 3221486700:02:006:0072, 3220489700:06:001:0058&#10;or one per line" style="resize:vertical;"></textarea>
-          <div class="field-error" id="err-cadnum"></div>
-        </div>
-
-        <div class="field" id="field-eland-csv" style="display:none;">
-          <label>Cadnums CSV <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(from scraper, e.g. *_cadnums.csv)</span></label>
-          <div class="row">
-            <button class="btn btn-secondary btn-sm" id="btn-pick-eland-csv-mode">📎 Choose CSV</button>
-            <span class="path-display" id="eland-csv-display-main">not selected</span>
-          </div>
-          <div class="field-error" id="err-eland-csv"></div>
-        </div>
-
-        <div class="field" id="field-boundary">
-          <label>Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span></label>
-          <div id="drop-zone" style="border:2px dashed #2a4a7f;border-radius:6px;padding:16px 12px;margin-top:4px;cursor:pointer;transition:border-color 0.15s,background 0.15s;text-align:center;min-height:72px;display:flex;flex-direction:column;justify-content:center;">
-            <div id="drop-hint" style="color:#666;font-size:12px;">📎 Click to attach or drop KMZ/KML files here</div>
-            <div id="boundary-list" style="margin-top:4px;font-size:11px;color:#aaa;text-align:left;"></div>
-            <button class="btn btn-secondary btn-sm" id="btn-clear-boundary" style="display:none;margin-top:6px;">✕ Clear all</button>
-          </div>
-          <div class="field-error" id="err-boundary"></div>
-        </div>
-
-        <div class="step-title"><span>2. Output</span><span class="step-status" id="step-output-status">○</span></div>
-
-        <div class="field">
-          <label>Output folder <span style="color:#e05;">*required</span></label>
-          <div class="row" style="margin-top:4px;">
-            <button class="btn btn-secondary btn-sm" id="btn-pick-folder">📁 Choose folder</button>
-            <span class="path-display" id="output-folder-display">not selected</span>
-          </div>
-          <div class="field-error" id="err-output-folder"></div>
-        </div>
-
-        <div class="step-title" id="step-options-title"><span>3. Optional layers</span><span class="step-status" id="step-options-status">○</span></div>
-
-        <div class="field" id="field-osm-layers">
-          <label style="margin-bottom:8px;">OSM layers to fetch (optional)</label>
-          <div class="checkbox-grid">
-            <label><input type="checkbox" name="layer" value="power_lines" /> Power Lines</label>
-            <label><input type="checkbox" name="layer" value="towers" /> Towers</label>
-            <label><input type="checkbox" name="layer" value="substations" /> Substations</label>
-            <label><input type="checkbox" name="layer" value="roads" /> Roads</label>
-            <label><input type="checkbox" name="layer" value="settlements" /> Settlements + 700m buffer</label>
-            <label><input type="checkbox" name="layer" value="water" /> Rivers &amp; Water</label>
-            <label><input type="checkbox" name="layer" value="forests" id="layer-forests" /> Forests</label>
-            <label><input type="checkbox" name="layer" value="emerald" /> Emerald Network</label>
-            <label><input type="checkbox" name="layer" value="airports" /> ✈ Airoports + 45km buffer</label>
-            <label><input type="checkbox" name="layer" value="nuclear_plants" /> ☢ Nuclear Power Plants + 30km buffer</label>
-            <label><input type="checkbox" name="layer" value="nature_reserves" /> 🌿 Nature Reserves (PZF)</label>
-            <label><input type="checkbox" name="layer" value="wind" id="layer-wind" /> 💨 Wind Speed (GWA)</label>
-          </div>
-
-          <div class="advanced-toggle">
-            <div class="advanced-title">Advanced layer options</div>
-            <div id="wind-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-              <div class="field" style="margin-bottom:0;">
-                <label for="wind-hub-height" style="font-size:12px;">Hub height (m) <span style="color:#888;">· Global Wind Atlas (GWA3)</span></label>
-                <select id="wind-hub-height" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;">
-                  <option value="100" selected>100 m (recommended)</option>
-                  <option value="150">150 m</option>
-                </select>
-              </div>
-            </div>
-
-            <div id="forest-settings" style="display:none;margin-top:10px;margin-bottom:10px;padding:10px;background:#0f3460;border-radius:6px;border:1px solid #2a4a7f;">
-              <div class="field" style="margin-bottom:0;">
-                <label for="forest-buffer-meters" style="font-size:12px;">Forest buffer distance (m)</label>
-                <input id="forest-buffer-meters" type="number" min="1" step="1" value="700" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" />
-              </div>
-            </div>
-          </div>
-
-          <div class="row" style="margin-bottom:0;">
-            <button class="btn btn-secondary btn-sm" id="btn-select-all">Select All</button>
-            <button class="btn btn-secondary btn-sm" id="btn-clear-all">Clear All</button>
-          </div>
-          <div class="field-error" id="err-layers"></div>
-        </div>
-
-        <div class="field" id="field-kadastr-options" style="display:none; margin-top:10px;">
-          <label style="margin-bottom:8px;">Kadastr Options</label>
-          <div class="checkbox-grid">
-            <label><input type="checkbox" id="chk-detailed-registry" /> Fetch Detailed Registry Data (Slow) <br/><span style="color:#888;font-size:11px;">Scrapes owner name, EDRPOU, dates from e.land.gov.ua for each parcel</span></label>
-          </div>
-        </div>
-
-        <div class="field" id="field-eland-format-main" style="display:none;">
-          <label>Output format</label>
-          <select id="eland-output-format-main">
-            <option value="xlsx_full">Excel full + Word (.xlsx, .docx)</option>
-            <option value="xlsx_partial" selected>Excel partial + Word (.xlsx, .docx)</option>
-          </select>
-          <div style="font-size:11px;color:#8bb4ff;margin-top:4px;">Both files are generated in one run.</div>
-        </div>
-
-        <div class="step-title"><span>4. Run</span><span class="step-status" id="step-run-status">○</span></div>
-
-        <div style="margin-top:8px;margin-bottom:0;">
-          <button class="btn btn-primary" id="btn-start" disabled style="padding:12px 48px;font-size:15px;">▶ Start boundary + OSM</button>
-        </div>
-      </div>
-
-      <div class="left-tab-panel" id="tab-panel-pre-research" role="tabpanel">
-        <div class="field">
-          <label style="font-size:12px;">Output folder for this tab <span style="color:#e05;">*required</span></label>
-          <div class="row" style="margin-top:4px;">
-            <button class="btn btn-secondary btn-sm" id="btn-pre-tab-folder">📁 Choose folder</button>
-            <span class="path-display" id="pre-tab-folder-display">not selected</span>
-          </div>
-        </div>
-
-        <div class="tab-section">
-          <h2>⬇ Offline Data Installer</h2>
-          <p style="font-size:11px;color:#888;margin:0 0 10px;">Downloads large datasets into your local cache folder (<code style="background:#0f3460;padding:1px 4px;border-radius:3px;">~/.land-management-cache</code> or Windows equivalent).</p>
-
-          <div class="field">
-            <label style="font-size:12px;">Geology/Karst GeoJSON URL <span style="color:#888;font-size:11px;">(optional)</span></label>
-            <input type="text" id="offline-geology-url" placeholder="https://.../geology-karst.geojson" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;margin-top:4px;" />
-          </div>
-
-          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-            <button class="btn btn-secondary btn-sm" id="btn-offline-download" style="padding:8px 20px;">⬇ Download Offline Data</button>
-            <span id="offline-download-status" style="font-size:11px;color:#aaa;">idle</span>
-          </div>
-          <details class="advanced-toggle" style="margin-top:8px;">
-            <summary>Advanced download options</summary>
-            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
-                <input type="checkbox" id="offline-force-update" style="width:14px;height:14px;" />
-                Force update map & wind data (PBF, TIF)
-              </label>
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa;">
-                <input type="checkbox" id="offline-force-update-aws" style="width:14px;height:14px;" />
-                Force update heavy AWS data (WorldCover 1.5GB)
-              </label>
-            </div>
-          </details>
-
-          <div class="offline-progress-wrap">
-            <div class="offline-progress-bar" id="offline-download-progress"></div>
-          </div>
-        </div>
-
-        <div class="tab-section">
-          <h2>📊 Pre-Research XLSX</h2>
-          <p style="font-size:11px;color:#888;margin:0 0 10px;">Generate a pre-research spreadsheet for all hromadas in an oblast. Fetches forest cover, wind speed, Emerald Network, nature reserves, power lines, substations, gas pipelines and contacts from multiple sources.</p>
-
-          <div class="field">
-            <label style="font-size:12px;">Oblast name <span style="color:#888;font-size:11px;">(e.g. Рівненська область)</span></label>
-            <input type="text" id="research-oblast" placeholder="Рівненська область" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:13px;width:100%;box-sizing:border-box;margin-top:4px;" />
-          </div>
-
-          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-            <button class="btn btn-primary btn-sm" id="btn-research-start" disabled style="padding:8px 24px;">📊 Generate XLSX</button>
-            <button class="btn btn-secondary btn-sm" id="btn-research-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
-          </div>
-        </div>
-
-        <div class="tab-section" id="pre-eland-section" style="display:none;">
-          <h2>📋 e.land.gov.ua Lookup</h2>
-          <p style="font-size:11px;color:#888;margin:0 0 10px;">Batch-fetch ownership data for scraped parcels. Opens a browser window — log in with your digital signature key, then the app will query each parcel automatically.</p>
-
-          <div class="field">
-            <label style="font-size:12px;">Cadnums CSV <span style="color:#888;font-size:11px;">(exported by scraper as <code style="background:#0f3460;padding:1px 4px;border-radius:3px;">*_cadnums.csv</code>)</span></label>
-            <div class="row" style="margin-top:4px;">
-              <button class="btn btn-secondary btn-sm" id="btn-pick-cadnums-csv">📎 Choose CSV</button>
-              <span class="path-display" id="cadnums-csv-display">not selected</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <label style="font-size:12px;">Output format</label>
-            <select id="eland-output-format" style="background:#16213e;color:#e0e0e0;border:1px solid #2a4a7f;border-radius:4px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;margin-top:4px;">
-              <option value="xlsx_full">Excel full + Word (.xlsx, .docx)</option>
-              <option value="xlsx_partial" selected>Excel partial + Word (.xlsx, .docx)</option>
-            </select>
-            <div style="font-size:11px;color:#8bb4ff;margin-top:4px;">Both files are generated in one run.</div>
-          </div>
-
-          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-            <button class="btn btn-primary btn-sm" id="btn-eland-start" disabled style="padding:8px 24px;">🔍 Lookup on e.land</button>
-            <button class="btn btn-secondary btn-sm" id="btn-eland-stop" style="display:none;padding:8px 16px;">⛔ Stop</button>
-          </div>
-        </div>
+<div class="app">
+  <header style="height:52px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--color-divider);background:var(--color-neutral-100);">
+    <div style="width:216px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;border-right:1px solid var(--color-divider);">
+      <div class="blueprint" style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:var(--color-accent-900);color:var(--color-neutral-100);font-family:var(--font-heading);font-size:13px;letter-spacing:0.04em;">LM</div>
+      <div style="line-height:1.1;">
+        <div style="font-family:var(--font-heading);font-size:16px;letter-spacing:0.01em;">Land Management</div>
+        <div style="font-size:10.5px;color:var(--color-neutral-700);letter-spacing:0.06em;text-transform:uppercase;">Землеустрій · v1.0.0</div>
       </div>
     </div>
+
+    <div style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;padding:0 16px;">
+      <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+        <span style="font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-neutral-700);">Workflow</span>
+        <span style="width:1px;height:18px;background:var(--color-divider);"></span>
+        <span id="header-title" style="font-family:var(--font-heading);font-size:18px;line-height:1;">Boundary + OSM</span>
+        <span id="header-title-ua" style="font-size:11.5px;color:var(--color-neutral-700);">Межа + шари OSM</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="admin-badge" class="tag tag-outline" style="font-size:10.5px;color:var(--color-accent-700);display:none;">ADMIN</span>
+        <button id="btn-top-offline" class="btn btn-secondary" type="button" style="height:32px;gap:7px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></svg>
+          Offline data
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div style="flex:1;min-height:0;display:flex;align-items:stretch;">
+    <!-- Left Navigation -->
+    <nav style="width:216px;flex:none;border-right:1px solid var(--color-divider);background:var(--color-neutral-100);display:flex;flex-direction:column;overflow-y:auto;padding:12px 10px;gap:2px;">
+      <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);padding:6px 6px 8px;">Primary · Основні</div>
+
+      <button id="mode-boundary" class="nav-link active" type="button">
+        <span class="active-bg"></span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;margin-top:1px;flex:none;color:var(--color-accent-700);"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z" /><path d="M15 5.764v15" /><path d="M9 3.236v15" /></svg>
+        <span style="position:relative;line-height:1.15;">
+          <span style="display:block;font-family:var(--font-heading);font-size:14.5px;">Boundary + OSM</span>
+          <span style="display:block;font-size:10.5px;color:var(--color-neutral-700);">Межа + шари OSM</span>
+        </span>
+      </button>
+
+      <button id="mode-kadastr" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;margin-top:1px;flex:none;color:var(--color-accent-700);"><rect x="3" y="3" width="18" height="18" rx="1" /><path d="M3 9h18" /><path d="M3 15h18" /><path d="M9 3v18" /><path d="M15 3v18" /></svg>
+        <span style="position:relative;line-height:1.15;">
+          <span style="display:block;font-family:var(--font-heading);font-size:14.5px;">Parcels by KMZ/KML</span>
+          <span style="display:block;font-size:10.5px;color:var(--color-neutral-700);">Ділянки за KMZ/KML</span>
+        </span>
+      </button>
+
+      <button id="mode-eland" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;margin-top:1px;flex:none;color:var(--color-accent-700);"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
+        <span style="position:relative;line-height:1.15;">
+          <span style="display:block;font-family:var(--font-heading);font-size:14.5px;">e.land Lookup</span>
+          <span style="display:block;font-size:10.5px;color:var(--color-neutral-700);">Пошук в e.land.gov.ua</span>
+        </span>
+      </button>
+
+      <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);padding:16px 6px 8px;">More · Інші</div>
+
+      <button id="mode-cadnum" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;flex:none;color:var(--color-neutral-700);"><path d="M4 9h16" /><path d="M4 15h16" /><path d="M10 3 8 21" /><path d="M16 3l-2 18" /></svg>
+        <span style="position:relative;line-height:1.2;">
+          <span style="display:block;font-size:12.5px;">By cadastral numbers</span>
+          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700);">За кадастровими номерами</span>
+        </span>
+      </button>
+
+      <button id="mode-custom" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;flex:none;color:var(--color-neutral-700);"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+        <span style="position:relative;line-height:1.2;">
+          <span style="display:block;font-size:12.5px;">Settlement boundary</span>
+          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700);">Межа населеного пункту</span>
+        </span>
+      </button>
+
+      <button id="mode-coords" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;flex:none;color:var(--color-neutral-700);"><circle cx="12" cy="12" r="9" /><path d="M22 12h-4" /><path d="M6 12H2" /><path d="M12 6V2" /><path d="M12 22v-4" /></svg>
+        <span style="position:relative;line-height:1.2;">
+          <span style="display:block;font-size:12.5px;">Polygon coordinates</span>
+          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700);">Координати полігону</span>
+        </span>
+      </button>
+
+      <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);padding:16px 6px 8px;">Tools · Інструменти</div>
+
+      <button id="mode-research" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;flex:none;color:var(--color-neutral-700);"><path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M7 16v-5" /><path d="M12 16V8" /><path d="M17 16v-3" /></svg>
+        <span style="position:relative;line-height:1.2;">
+          <span style="display:block;font-size:12.5px;">Pre-Research XLSX</span>
+          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700);">Перед-дослідження</span>
+        </span>
+      </button>
+
+      <button id="mode-offline" class="nav-link" type="button">
+        <span class="active-bg"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="position:relative;flex:none;color:var(--color-neutral-700);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></svg>
+        <span style="position:relative;line-height:1.2;">
+          <span style="display:block;font-size:12.5px;">Offline data</span>
+          <span style="display:block;font-size:11.5px;color:var(--color-neutral-700);">Офлайн-дані</span>
+        </span>
+      </button>
+    </nav>
+
+    <!-- Center Content -->
+    <main style="flex:1;min-width:0;display:flex;flex-direction:column;">
+      <section style="flex:1;min-height:0;position:relative;display:flex;flex-direction:column;background:var(--color-neutral-200);">
+        <div style="height:34px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--color-divider);background:var(--color-neutral-100);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);">Preview · Перегляд</span>
+            <span style="width:1px;height:14px;background:var(--color-divider);"></span>
+            <span id="map-summary" style="font-size:11.5px;color:var(--color-neutral-700);">no geometry loaded</span>
+          </div>
+        </div>
+
+        <div style="flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;padding:14px;">
+          <div id="map-container" class="blueprint" style="position:relative;width:100%;height:100%;background:var(--color-neutral-100);overflow:hidden;">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div id="preview-layer-control" style="display:none;position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.95);border:1px solid var(--color-divider);border-radius:2px;padding:8px;z-index:1000;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-height:80%;overflow-y:auto;min-width:140px;">
+              <div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:6px;border-bottom:1px solid var(--color-divider);padding-bottom:4px;">Map Layers</div>
+              <div id="preview-layer-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section style="height:246px;flex:none;border-top:1px solid var(--color-divider);background:var(--color-neutral-100);display:flex;flex-direction:column;min-height:0;">
+        <div style="height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 0;border-bottom:1px solid var(--color-divider);">
+          <div style="display:flex;align-items:stretch;height:100%;">
+            <button id="tab-btn-log" type="button" style="position:relative;display:flex;align-items:center;gap:7px;padding:0 14px;border:0;background:transparent;cursor:pointer;font-family:var(--font-heading);font-size:13.5px;letter-spacing:0.04em;text-transform:uppercase;color:inherit;">
+              <span class="active-bg" style="position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--color-accent);"></span>
+              Log · Журнал
+            </button>
+            <button id="tab-btn-results" type="button" style="position:relative;display:flex;align-items:center;gap:7px;padding:0 14px;border:0;background:transparent;cursor:pointer;font-family:var(--font-heading);font-size:13.5px;letter-spacing:0.04em;text-transform:uppercase;color:var(--color-neutral-600);">
+              <span class="active-bg" style="display:none;position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--color-accent);"></span>
+              Files · Файли
+              <span id="result-count" class="tag tag-neutral" style="font-size:10px;padding:1px 6px;">0</span>
+            </button>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="run-progress-counts" style="font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums;">0/0</span>
+            <div style="width:180px;height:6px;background:var(--color-neutral-200);border:1px solid var(--color-divider);overflow:hidden;">
+              <div id="run-progress-bar" style="height:100%;background:var(--color-accent);width:0%;"></div>
+            </div>
+            <span id="run-progress-label" style="font-family:var(--font-heading);font-size:12.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-accent-700);min-width:62px;">Idle</span>
+            <button id="btn-results-clear" class="btn btn-secondary" type="button" style="height:26px;padding:0 9px;font-size:11.5px;gap:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div id="tab-log" class="log-area" style="display:block;"></div>
+        
+        <div id="tab-results" class="results-area" style="display:none;">
+          <div id="results-list" style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;flex-direction:column;gap:2px;color:var(--color-neutral-700);font-size:12.5px;">
+              <span>No generated files yet.</span>
+              <span style="font-size:11.5px;">Файлів ще немає.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Right Sidebar -->
+    <aside style="width:352px;flex:none;border-left:1px solid var(--color-divider);background:var(--color-neutral-100);display:flex;flex-direction:column;min-height:0;">
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:14px 16px 18px;">
+        
+        <div id="sect-parcel-flow">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <span style="font-family:var(--font-heading);font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);">Step 1</span>
+            <span style="font-family:var(--font-heading);font-size:16px;">Source · Вхідні дані</span>
+          </div>
+
+          <div id="sect-area" style="margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Territory name <span class="tag tag-accent" style="font-size:10px;padding:1px 5px;color:var(--color-accent-700);">REQUIRED</span></label>
+            <input id="area-name" class="input" type="text" list="territories-list" placeholder="Остерська громада" style="width:100%;height:34px;" />
+            <datalist id="territories-list"></datalist>
+          </div>
+
+          <div id="sect-cadnum" style="margin-bottom:14px;display:none;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Cadastral numbers <span class="tag tag-accent" style="font-size:10px;padding:1px 5px;color:var(--color-accent-700);">REQUIRED</span></label>
+            <textarea id="cadnums-text" class="input" rows="4" placeholder="3221486700:02:006:0072&#10;3220489700:06:001:0058" style="width:100%;font-family:ui-monospace, Menlo, monospace;font-size:12px;resize:vertical;"></textarea>
+            <div style="font-size:11px;color:var(--color-neutral-700);margin-top:4px;">Separate with space, comma or newline.</div>
+          </div>
+
+          <div id="sect-csv" style="margin-bottom:14px;display:none;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Cadnums CSV <span class="tag tag-accent" style="font-size:10px;padding:1px 5px;color:var(--color-accent-700);">REQUIRED</span></label>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="btn-pick-cadnums-csv" class="btn btn-secondary" type="button" style="height:34px;gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                Choose CSV
+              </button>
+              <span id="cadnums-csv-display" style="font-size:11.5px;color:var(--color-neutral-700);word-break:break-all;font-family:ui-monospace, Menlo, monospace;">not selected</span>
+            </div>
+          </div>
+
+          <div id="sect-boundary" style="margin-bottom:14px;display:none;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">
+              <span id="lbl-boundary">Boundary KMZ/KML</span>
+              <span id="req-boundary" class="tag tag-accent" style="font-size:10px;padding:1px 5px;display:none;">REQUIRED</span>
+            </label>
+            <button id="btn-pick-boundary" type="button" class="blueprint" style="width:100%;min-height:74px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:var(--color-neutral-200);cursor:pointer;padding:10px;color:inherit;font-family:var(--font-body);">
+              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-accent-700);"><path d="M12 13v8" /><path d="m8 17 4 4 4-4" /><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25" /></svg>
+              <span style="font-size:12.5px;">Choose KMZ/KML files</span>
+            </button>
+            <span id="boundary-file-display" style="display:block;margin-top:4px;font-size:11.5px;color:var(--color-neutral-700);">not selected</span>
+          </div>
+
+          <div id="sect-source" style="margin-bottom:14px;display:none;">
+            <label style="display:block;font-size:12px;margin-bottom:5px;">Registry website · Джерело</label>
+            <div class="seg" style="width:100%;">
+              <button id="btn-source-org" class="seg-opt" type="button" aria-pressed="true">.org.ua</button>
+              <button id="btn-source-comua" class="seg-opt" type="button" aria-pressed="false">.com.ua</button>
+            </div>
+          </div>
+
+          <div style="height:1px;background:var(--color-divider);margin:16px 0 14px;"></div>
+
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <span style="font-family:var(--font-heading);font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);">Step 2</span>
+            <span style="font-family:var(--font-heading);font-size:16px;">Output · Результат</span>
+          </div>
+
+          <div id="sect-folder" style="margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Output folder · Тека <span class="tag tag-accent" style="font-size:10px;padding:1px 5px;color:var(--color-accent-700);">REQUIRED</span></label>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <button id="btn-pick-folder" class="btn btn-secondary" type="button" style="height:34px;gap:6px;flex:none;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" /></svg>
+                Choose
+              </button>
+              <span id="output-folder-display" style="font-size:11.5px;color:var(--color-neutral-700);word-break:break-all;font-family:ui-monospace, Menlo, monospace;">not selected</span>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+              <input id="chk-auto-open" type="checkbox" style="width:14px;height:14px;accent-color:#5980a6;flex:none;" />
+              Auto-open files when generation completes
+            </label>
+          </div>
+
+          <div id="sect-format" style="margin-bottom:14px;display:none;">
+            <label style="display:block;font-size:12px;margin-bottom:5px;">Output format · Формат</label>
+            <select id="eland-output-format" class="input" style="width:100%;height:34px;">
+              <option value="xlsx_partial">Excel partial + Word (.xlsx, .docx)</option>
+              <option value="xlsx_full">Excel full + Word (.xlsx, .docx)</option>
+            </select>
+          </div>
+
+          <div id="sect-layers" style="margin-bottom:14px;">
+            <div style="height:1px;background:var(--color-divider);margin:16px 0 14px;"></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span style="font-family:var(--font-heading);font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-700);">Step 3</span>
+              <span style="font-family:var(--font-heading);font-size:16px;">Layers · Шари</span>
+              <span class="tag tag-outline" style="font-size:10px;padding:1px 5px;color:var(--color-neutral-800);">OPTIONAL</span>
+              <div style="margin-left:auto;display:flex;gap:4px;">
+                <button type="button" id="btn-layers-all" style="font-size:11px;padding:2px 6px;border:1px solid var(--color-divider);background:var(--color-neutral-100);cursor:pointer;border-radius:2px;">All</button>
+                <button type="button" id="btn-layers-none" style="font-size:11px;padding:2px 6px;border:1px solid var(--color-divider);background:var(--color-neutral-100);cursor:pointer;border-radius:2px;">None</button>
+              </div>
+            </div>
+            
+            <div id="layers-container" style="display:grid;grid-template-columns:1fr;gap:1px;background:var(--color-divider);border:1px solid var(--color-divider);margin-top:8px;">
+              <!-- Checkboxes will be injected here via app.js -->
+            </div>
+            
+            <div id="wind-settings" style="display:none;margin-top:8px;padding:10px;background:var(--color-neutral-200);border:1px solid var(--color-divider);">
+              <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin-bottom:5px;">Wind hub height (m)</label>
+              <input id="wind-hub-height" class="input" type="number" value="150" style="width:100%;height:30px;" />
+            </div>
+            
+            <div id="forest-settings" style="display:none;margin-top:8px;padding:10px;background:var(--color-neutral-200);border:1px solid var(--color-divider);">
+              <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin-bottom:5px;">Forest buffer (m)</label>
+              <input id="forest-buffer-meters" class="input" type="number" value="700" style="width:100%;height:30px;" />
+            </div>
+          </div>
+
+          <div id="sect-kadastropts" style="margin-top:14px;">
+            <label style="display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1px solid var(--color-divider);background:var(--color-neutral-200);cursor:pointer;">
+              <input id="chk-detailed-registry" type="checkbox" style="margin-top:2px;width:14px;height:14px;accent-color:#5980a6;flex:none;" />
+              <span style="line-height:1.25;">
+                <span style="display:block;font-size:12.5px;">Detailed registry data <span style="color:var(--color-neutral-700);">(slow)</span></span>
+                <span style="display:block;font-size:10.5px;color:var(--color-neutral-700);">Owner, EDRPOU and dates from e.land.gov.ua for every parcel.</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div id="sect-research" style="display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-family:var(--font-heading);font-size:16px;">Pre-Research XLSX</span>
+          </div>
+          <p style="font-size:12px;color:var(--color-neutral-700);margin-bottom:14px;">One spreadsheet per oblast: forest cover, wind speed, Emerald Network, reserves, power lines, substations, gas pipelines and contacts.</p>
+          
+          <div style="margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Oblast · Область <span class="tag tag-accent" style="font-size:10px;padding:1px 5px;color:var(--color-accent-700);">REQUIRED</span></label>
+            <input id="research-oblast" class="input" type="text" placeholder="Рівненська область" style="width:100%;height:34px;" />
+          </div>
+        </div>
+
+        <div id="sect-offline" style="display:none;">
+          <div style="font-family:var(--font-heading);font-size:16px;margin-bottom:6px;">Offline data · Офлайн-дані</div>
+          <p style="font-size:12px;color:var(--color-neutral-700);margin-bottom:14px;">Large datasets are cached locally so runs work without the network.</p>
+          
+          <div style="margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:5px;">Geology/Karst GeoJSON URL <span class="tag tag-outline" style="font-size:10px;padding:1px 5px;color:var(--color-neutral-800);">OPTIONAL</span></label>
+            <input id="offline-geology-url" class="input" type="text" placeholder="https://…/geology-karst.geojson" style="width:100%;height:34px;font-size:12px;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;"><input id="offline-force-update" type="checkbox" style="width:14px;height:14px;accent-color:#5980a6;" /> Force update map &amp; wind data (PBF, TIF)</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;"><input id="offline-force-update-aws" type="checkbox" style="width:14px;height:14px;accent-color:#5980a6;" /> Force update heavy AWS data (WorldCover)</label>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="flex:none;border-top:1px solid var(--color-divider);padding:12px 16px;background:var(--color-neutral-200);">
+        <div style="display:flex;gap:8px;">
+          <button id="btn-start" class="btn btn-primary blueprint" type="button" style="flex:1;height:44px;font-size:16px;gap:8px;">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21" /></svg>
+            <span id="start-btn-label">Start</span>
+          </button>
+          <button id="btn-stop" class="btn btn-secondary" type="button" style="display:none;height:44px;padding:0 14px;gap:7px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1" /></svg>
+            Stop
+          </button>
+        </div>
+      </div>
+    </aside>
   </div>
 
-  <!-- ── Right: log ────────────────────────────────────── -->
-    <div class="log-col">
-      <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column;">
-        <h2>Log</h2>
-        <div class="run-progress" id="run-progress-wrap">
-          <div class="run-progress-head">
-            <span id="run-progress-label">Idle</span>
-            <span id="run-progress-counts">0/0 • ✅0 ❌0</span>
-          </div>
-          <div class="run-progress-track"><div class="run-progress-fill" id="run-progress-bar"></div></div>
-        </div>
-        <div class="results-card">
-          <div class="results-head">
-            <strong>Results</strong>
-            <button class="btn btn-secondary btn-sm" id="btn-results-clear" type="button">Clear</button>
-          </div>
-          <div class="results-list" id="results-list"></div>
-        </div>
-        <div class="log-area" id="main-log"></div>
-      </div>
+  <footer style="height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-top:1px solid var(--color-divider);background:var(--color-neutral-200);font-size:10.5px;color:var(--color-neutral-700);">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <span id="footer-status-left">Idle</span>
     </div>
-
+    <div style="display:flex;align-items:center;gap:14px;font-variant-numeric:tabular-nums;">
+      <span>Land Management Tool</span>
+    </div>
+  </footer>
 </div>
 
 <script src="app.js"></script>

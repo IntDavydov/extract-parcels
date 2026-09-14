@@ -18,8 +18,11 @@ function getAppRole() {
   return role === 'admin' ? 'admin' : 'user';
 }
 
-const APP_ROLE = getAppRole();
+const APP_ROLE = getAppRole(); console.log('PROCESS ARGV:', process.argv);
 process.env.APP_ROLE = APP_ROLE;
+ipcMain.on('get-app-role', (event) => {
+  event.returnValue = APP_ROLE;
+});
 
 // Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
 async function ensurePuppeteerChrome() {
@@ -303,6 +306,70 @@ app.whenReady().then(() => {
   });
 });
 
+ipcMain.handle('get-territories', async () => {
+  try {
+    const territoriesPath = getUnpackedPath('src', 'territories.json');
+    if (fs.existsSync(territoriesPath)) {
+      const data = fs.readFileSync(territoriesPath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Failed to read territories.json', err);
+  }
+  return [];
+});
+
+ipcMain.handle('parse-kmz', async (event, kmzPath) => {
+  try {
+    const JSZip = require('jszip');
+    const toGeoJSON = require('@mapbox/togeojson');
+    const { DOMParser } = require('@xmldom/xmldom');
+    
+    if (!fs.existsSync(kmzPath)) throw new Error('File not found');
+    
+    const kmzData = fs.readFileSync(kmzPath);
+    const unzipped = await JSZip.loadAsync(kmzData);
+    const kmlFile = unzipped.file('doc.kml') || unzipped.file('doc.kml'.toLowerCase());
+    
+    if (!kmlFile) throw new Error('No doc.kml found inside KMZ');
+    
+    const kmlText = await kmlFile.async('string');
+    const { XMLSerializer } = require('@xmldom/xmldom');
+    const dom = new DOMParser().parseFromString(kmlText, 'text/xml');
+    
+    const folders = Array.from(dom.getElementsByTagName('Folder'));
+    const layers = [];
+    
+    if (folders.length === 0) {
+      // No folders, just parse the whole thing as one layer
+      layers.push({ name: 'Default', geojson: toGeoJSON.kml(dom) });
+    } else {
+      // Remove all folders from the document to keep styles intact but isolate features
+      folders.forEach(f => f.parentNode && f.parentNode.removeChild(f));
+      
+      for (const folder of folders) {
+        const nameNode = folder.getElementsByTagName('name')[0];
+        const folderName = nameNode ? nameNode.textContent : 'Unnamed Layer';
+        
+        // Clone the document without any folders, then append this specific folder
+        const tempDom = new DOMParser().parseFromString(new XMLSerializer().serializeToString(dom), 'text/xml');
+        const tempDoc = tempDom.getElementsByTagName('Document')[0] || tempDom.documentElement;
+        tempDoc.appendChild(tempDom.importNode(folder, true));
+        
+        const geojson = toGeoJSON.kml(tempDom);
+        if (geojson.features && geojson.features.length > 0) {
+          layers.push({ name: folderName, geojson });
+        }
+      }
+    }
+    
+    return { success: true, layers };
+  } catch (err) {
+    console.error('parse-kmz failed', err);
+    return { success: false, error: err.message };
+  }
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -321,6 +388,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   const env = Object.assign({}, process.env, {
     ELECTRON_RUN_AS_NODE: '1',
     NODE_PATH: nodeModulesPath,
+    NODE_OPTIONS: '--max-old-space-size=8192',
   });
   if (outputPath) env.OUTPUT_PATH = outputPath;
   if (headless)        env.HEADLESS = '1';

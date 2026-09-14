@@ -8,7 +8,7 @@ let logFlushScheduled = false;
 let logDropNoticeShown = false;
 
 function flushLog() {
-  const el = document.getElementById('main-log');
+  const el = document.getElementById('tab-log');
   if (!el) {
     logFlushScheduled = false;
     return;
@@ -43,6 +43,12 @@ function scheduleLogFlush() {
   requestAnimationFrame(flushLog);
 }
 
+function clearLogs() {
+  logLines = [];
+  const el = document.getElementById('tab-log');
+  if (el) el.textContent = '';
+}
+
 function appendLog(msg) {
   const formatted = String(msg || '').replace(/^\[ERR(?:OR)?\]\s*/i, '❌ ');
   logLines.push(formatted);
@@ -73,7 +79,7 @@ function renderRunProgress() {
   if (!labelEl || !countsEl || !barEl) return;
   const pct = runProgress.total > 0 ? Math.max(0, Math.min(100, (runProgress.current / runProgress.total) * 100)) : 0;
   labelEl.textContent = runProgress.label || 'Idle';
-  countsEl.textContent = `${runProgress.current}/${runProgress.total} • ✅${runProgress.success} ❌${runProgress.failed}`;
+  countsEl.textContent = `${runProgress.current}/${runProgress.total} · ok ${runProgress.success} · fail ${runProgress.failed}`;
   barEl.style.width = `${pct}%`;
 }
 
@@ -134,53 +140,168 @@ async function copyTextToClipboard(text) {
   return ok;
 }
 
+let previewMap = null;
+let previewLayer = null;
+
+async function showMapPreview(kmzPath) {
+  document.getElementById('map-summary').textContent = kmzPath.split(/[\\/\\\\]/).pop();
+  
+  if (!previewMap) {
+    const container = document.getElementById('map-container');
+    container.innerHTML = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><div id="leaflet-map" style="width:100%;height:100%"></div><div id="preview-layer-control" style="display:none;position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.95);border:1px solid var(--color-divider);border-radius:2px;padding:8px;z-index:1000;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-height:80%;overflow-y:auto;min-width:140px;"><div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:6px;border-bottom:1px solid var(--color-divider);padding-bottom:4px;">Map Layers</div><div id="preview-layer-list" style="display:flex;flex-direction:column;gap:4px;"></div></div>';
+    previewMap = L.map('leaflet-map', { zoomControl: false }).setView([48.3794, 31.1656], 6);
+    L.control.zoom({ position: 'bottomright' }).addTo(previewMap);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(previewMap);
+  }
+  
+  setTimeout(() => previewMap.invalidateSize(), 100);
+
+  if (previewLayer) {
+    if (Array.isArray(previewLayer)) {
+      previewLayer.forEach(l => previewMap.removeLayer(l));
+    } else {
+      previewMap.removeLayer(previewLayer);
+    }
+    previewLayer = null;
+  }
+  
+  const layerControl = document.getElementById('preview-layer-control');
+  const layerList = document.getElementById('preview-layer-list');
+  if (layerControl) layerControl.style.display = 'none';
+  if (layerList) layerList.innerHTML = '';
+
+  const res = await window.api.parseKmz(kmzPath);
+  
+  if (res && res.success) {
+    let layersData = res.layers;
+    // Fallback for older parse-kmz that returns a single geojson
+    if (!layersData && res.geojson) {
+      layersData = [{ name: 'Data', geojson: res.geojson }];
+    }
+    
+    if (layersData && layersData.length > 0) {
+      previewLayer = [];
+      const allBounds = L.latLngBounds();
+      
+      layersData.forEach((layerInfo, idx) => {
+        const leafletLayer = L.geoJSON(layerInfo.geojson, {
+          style: function(feature) {
+            return {
+              color: feature.properties.stroke || '#e05',
+              weight: feature.properties['stroke-width'] || 2,
+              fillColor: feature.properties.fill || feature.properties.stroke || '#e05',
+              fillOpacity: feature.properties['fill-opacity'] !== undefined ? feature.properties['fill-opacity'] : 0.2
+            };
+          },
+          pointToLayer: function (feature, latlng) {
+            return L.circleMarker(latlng, {
+              radius: 4,
+              fillColor: feature.properties.fill || feature.properties.stroke || "#e05",
+              color: feature.properties.stroke || "#fff",
+              weight: 1,
+              opacity: 1,
+              fillOpacity: feature.properties['fill-opacity'] !== undefined ? feature.properties['fill-opacity'] : 0.8
+            });
+          }
+        }).addTo(previewMap);
+        
+        previewLayer.push(leafletLayer);
+        
+        const bounds = leafletLayer.getBounds();
+        if (bounds.isValid()) {
+          allBounds.extend(bounds);
+        }
+        
+        // Add to layer control
+        if (layerList) {
+          const lbl = document.createElement('label');
+          lbl.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;word-break:break-word;';
+          
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = true;
+          cb.style.cssText = 'width:12px;height:12px;accent-color:#5980a6;flex:none;';
+          cb.addEventListener('change', (e) => {
+            if (e.target.checked) previewMap.addLayer(leafletLayer);
+            else previewMap.removeLayer(leafletLayer);
+          });
+          
+          const text = document.createElement('span');
+          text.textContent = layerInfo.name || `Layer ${idx + 1}`;
+          
+          lbl.appendChild(cb);
+          lbl.appendChild(text);
+          layerList.appendChild(lbl);
+        }
+      });
+      
+      if (layerControl && layersData.length > 0) {
+        layerControl.style.display = 'block';
+      }
+      
+      if (allBounds.isValid()) {
+        previewMap.fitBounds(allBounds, { maxZoom: 16, padding: [20, 20] });
+      }
+    } else {
+      appendLog(`❌ Map Preview: No features found in KMZ`);
+    }
+  } else {
+    appendLog(`❌ Map Preview failed: ${res ? res.error : 'Unknown error'}`);
+  }
+}
+
 function renderResults() {
   const list = document.getElementById('results-list');
+  const countEl = document.getElementById('result-count');
+  if(countEl) countEl.textContent = resultEntries.length;
   if (!list) return;
   list.innerHTML = '';
   if (!resultEntries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'result-path';
-    empty.textContent = 'No generated files yet.';
-    list.appendChild(empty);
+    list.innerHTML = '<div style="display:flex;flex-direction:column;gap:2px;color:var(--color-neutral-700);font-size:12.5px;"><span>No generated files yet.</span><span style="font-size:11.5px;">Файлів ще немає.</span></div>';
     return;
   }
   for (const entry of resultEntries) {
     const item = document.createElement('div');
-    item.className = 'result-item';
+    item.className = 'blueprint';
+    item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;background:var(--color-neutral-200);';
 
-    const pathLine = document.createElement('div');
-    pathLine.className = 'result-path';
-    pathLine.textContent = `${entry.label}: ${entry.path}`;
+    const pathLine = document.createElement('span');
+    pathLine.style.cssText = 'min-width:0;line-height:1.3;';
+    pathLine.innerHTML = `<span style="display:block;font-family:var(--font-heading);font-size:13.5px;">${entry.label}</span><span style="display:block;font-size:11px;color:var(--color-neutral-700);word-break:break-all;font-family:ui-monospace, Menlo, monospace;">${entry.path}</span>`;
     item.appendChild(pathLine);
 
-    const actions = document.createElement('div');
-    actions.className = 'result-actions';
+    const actions = document.createElement('span');
+    actions.style.cssText = 'display:flex;gap:6px;flex:none;';
 
     const openFileBtn = document.createElement('button');
-    openFileBtn.className = 'btn btn-secondary btn-sm';
+    openFileBtn.className = 'btn btn-secondary';
     openFileBtn.type = 'button';
+    openFileBtn.style.cssText = 'height:26px;padding:0 9px;font-size:11.5px;';
     openFileBtn.textContent = 'Open file';
     openFileBtn.addEventListener('click', () => window.api.openPath(entry.path));
 
     const openFolderBtn = document.createElement('button');
-    openFolderBtn.className = 'btn btn-secondary btn-sm';
+    openFolderBtn.className = 'btn btn-secondary';
     openFolderBtn.type = 'button';
-    openFolderBtn.textContent = 'Open folder';
+    openFolderBtn.style.cssText = 'height:26px;padding:0 9px;font-size:11.5px;';
+    openFolderBtn.textContent = 'Folder';
     openFolderBtn.addEventListener('click', () => window.api.openPath(getDirname(entry.path)));
-
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'btn btn-secondary btn-sm';
-    copyBtn.type = 'button';
-    copyBtn.textContent = 'Copy path';
-    copyBtn.addEventListener('click', async () => {
-      const ok = await copyTextToClipboard(entry.path);
-      appendLog(ok ? `📋 Copied path: ${entry.path}` : '⚠ Could not copy path');
-    });
 
     actions.appendChild(openFileBtn);
     actions.appendChild(openFolderBtn);
-    actions.appendChild(copyBtn);
+    
+    if (entry.path.toLowerCase().endsWith('.kmz')) {
+      const previewBtn = document.createElement('button');
+      previewBtn.className = 'btn btn-secondary';
+      previewBtn.type = 'button';
+      previewBtn.style.cssText = 'height:26px;padding:0 9px;font-size:11.5px;';
+      previewBtn.textContent = 'Preview';
+      previewBtn.addEventListener('click', () => showMapPreview(entry.path));
+      actions.appendChild(previewBtn);
+    }
+    
     item.appendChild(actions);
     list.appendChild(item);
   }
@@ -194,6 +315,14 @@ function addResultEntry(path, label = 'Output') {
   resultEntries.unshift({ path: p, label });
   if (resultEntries.length > MAX_RESULT_ENTRIES) resultEntries.length = MAX_RESULT_ENTRIES;
   renderResults();
+  
+  const chkAutoOpen = document.getElementById('chk-auto-open');
+  if (chkAutoOpen && chkAutoOpen.checked) {
+    // Only auto-open actual result files, not caches
+    if (label.includes('KMZ') || label.includes('KML') || label.includes('XLSX') || label.includes('DOCX') || label.includes('CSV')) {
+      window.api.openPath(p);
+    }
+  }
 }
 
 // Forward all main-process log events to the single log area
@@ -212,31 +341,24 @@ window.api.onDownloadProgress((data) => {
   status.textContent = `${data.file || 'Downloading'}: ${perFile} (overall ${overall}%)`;
 });
 
-function initLeftTabs() {
-  const tabButtons = [...document.querySelectorAll('.left-tab-btn')];
-  const tabPanels = [...document.querySelectorAll('.left-tab-panel')];
-  const fetchModeField = document.querySelector('.global-fetch-mode');
-  function syncFetchModeVisibility(activePanelId) {
-    if (!fetchModeField) return;
-    fetchModeField.style.display = activePanelId === 'tab-panel-parcels' ? 'block' : 'none';
-  }
-  tabButtons.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const targetId = btn.dataset.tabTarget;
-      tabButtons.forEach((b) => {
-        const isActive = b === btn;
-        b.classList.toggle('active', isActive);
-        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
-      });
-      tabPanels.forEach((panel) => panel.classList.toggle('active', panel.id === targetId));
-      syncFetchModeVisibility(targetId);
-    });
-  });
-  const initiallyActive = tabPanels.find((p) => p.classList.contains('active'));
-  syncFetchModeVisibility(initiallyActive ? initiallyActive.id : 'tab-panel-parcels');
-}
+document.getElementById('tab-btn-log').addEventListener('click', () => {
+  document.getElementById('tab-log').style.display = 'block';
+  document.getElementById('tab-results').style.display = 'none';
+  document.getElementById('tab-btn-log').querySelector('.active-bg').style.display = 'block';
+  document.getElementById('tab-btn-log').style.color = 'inherit';
+  document.getElementById('tab-btn-results').querySelector('.active-bg').style.display = 'none';
+  document.getElementById('tab-btn-results').style.color = 'var(--color-neutral-600)';
+  setTimeout(() => { const el = document.getElementById('tab-log'); el.scrollTop = el.scrollHeight; }, 10);
+});
 
-initLeftTabs();
+document.getElementById('tab-btn-results').addEventListener('click', () => {
+  document.getElementById('tab-log').style.display = 'none';
+  document.getElementById('tab-results').style.display = 'flex';
+  document.getElementById('tab-btn-log').querySelector('.active-bg').style.display = 'none';
+  document.getElementById('tab-btn-log').style.color = 'var(--color-neutral-600)';
+  document.getElementById('tab-btn-results').querySelector('.active-bg').style.display = 'block';
+  document.getElementById('tab-btn-results').style.color = 'inherit';
+});
 resetRunProgress();
 renderResults();
 document.getElementById('btn-results-clear')?.addEventListener('click', () => {
@@ -291,27 +413,6 @@ function setStepStatus(id, done) {
   el.classList.toggle('done', !!done);
 }
 
-function syncModeCards(mode) {
-  document.querySelectorAll('#parcel-mode-cards .mode-card[data-fetch-mode]').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.fetchMode === mode);
-  });
-}
-
-function updateStartButtonLabel(mode) {
-  const startBtn = document.getElementById('btn-start');
-  if (!startBtn) return;
-  startBtn.textContent = MODE_BUTTON_LABELS[mode] || MODE_BUTTON_LABELS.boundary;
-}
-
-function setElandFormat(value) {
-  const fmt = String(value || 'xlsx_partial');
-  elandOutputFormat = fmt;
-  const preSel = document.getElementById('eland-output-format');
-  const modeSel = document.getElementById('eland-output-format-main');
-  if (preSel && preSel.value !== fmt) preSel.value = fmt;
-  if (modeSel && modeSel.value !== fmt) modeSel.value = fmt;
-}
-
 function syncAreaNamesValue() {
   const areaNameEl = document.getElementById('area-name');
   if (areaNameEl) areaNameEl.value = areaNames.join(' ... ');
@@ -335,8 +436,10 @@ function renderAreaChips() {
       syncAreaNamesValue();
       renderAreaChips();
       const isMulti = areaNames.length > 1;
-      document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
-      document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
+      if (document.getElementById('btn-pick-boundary')) {
+        document.getElementById('btn-pick-boundary').style.pointerEvents = isMulti ? 'none' : '';
+        document.getElementById('btn-pick-boundary').style.opacity = isMulti ? '0.4' : '';
+      }
       if (isMulti && boundaryFiles.length) {
         boundaryFiles = [];
         renderBoundaryList();
@@ -364,8 +467,10 @@ function tryAddAreaChip(rawValue) {
   syncAreaNamesValue();
   renderAreaChips();
   const isMulti = areaNames.length > 1;
-  document.getElementById('drop-zone').style.pointerEvents = isMulti ? 'none' : '';
-  document.getElementById('drop-zone').style.opacity = isMulti ? '0.4' : '';
+  if (document.getElementById('btn-pick-boundary')) {
+    document.getElementById('btn-pick-boundary').style.pointerEvents = isMulti ? 'none' : '';
+    document.getElementById('btn-pick-boundary').style.opacity = isMulti ? '0.4' : '';
+  }
   if (isMulti && boundaryFiles.length) {
     boundaryFiles = [];
     renderBoundaryList();
@@ -395,31 +500,16 @@ function getFallbackParcelSource(source) {
 function applyRoleVisibility() {
   if (isAdminRole) return;
 
-  const leftTabs = document.querySelector('.left-tabs');
-  if (leftTabs) leftTabs.style.display = 'none';
-
-  const preResearchPanel = document.getElementById('tab-panel-pre-research');
-  if (preResearchPanel) preResearchPanel.style.display = 'none';
-
-  document.querySelectorAll('#parcel-mode-cards .mode-card[data-fetch-mode]').forEach((btn) => {
-    const mode = btn.dataset.fetchMode || '';
-    btn.style.display = USER_VISIBLE_MODES.has(mode) ? '' : 'none';
-    btn.style.order = mode === 'kadastr' ? '1' : mode === 'eland' ? '2' : '';
-    btn.style.gridColumn = (mode === 'kadastr' || mode === 'eland') ? '1 / -1' : '';
+  document.querySelectorAll('.nav-link').forEach((btn) => {
+    const mode = btn.id.replace('mode-', '');
+    if (!USER_VISIBLE_MODES.has(mode)) {
+      btn.style.display = 'none';
+    }
   });
 
-  const modeSelect = document.getElementById('parcel-fetch-mode');
-  if (modeSelect) {
-    [...modeSelect.options].forEach((option) => {
-      option.hidden = !USER_VISIBLE_MODES.has(option.value);
-    });
+  if (!USER_VISIBLE_MODES.has(currentMode)) {
+    setMode('kadastr');
   }
-  if (modeSelect && !USER_VISIBLE_MODES.has(modeSelect.value)) {
-    modeSelect.value = 'kadastr';
-  }
-
-  const parcelPanel = document.getElementById('tab-panel-parcels');
-  if (parcelPanel) parcelPanel.style.display = 'block';
 }
 
 function makeParcelUrlForBbox(bbox, source = getParcelSource()) {
@@ -450,44 +540,29 @@ function makeParcelUrlForBoundary(boundaryFile, source = getParcelSource()) {
 }
 
 function renderBoundaryList() {
-  const list = document.getElementById('boundary-list');
-  const btn  = document.getElementById('btn-clear-boundary');
-  const hint = document.getElementById('drop-hint');
-  if (!boundaryFiles.length) {
-    list.textContent = '';
-    btn.style.display = 'none';
-    hint.style.display = '';
-    document.getElementById('area-chip-input').disabled = false;
-    document.getElementById('btn-add-area').disabled = false;
+  const display = document.getElementById('boundary-file-display');
+  const btnClear = document.getElementById('btn-clear-boundary');
+  if (!display) return;
+  if (boundaryFiles.length === 0) {
+    display.textContent = 'not selected';
+    if(btnClear) btnClear.style.display = 'none';
+  } else if (boundaryFiles.length === 1) {
+    display.textContent = boundaryFiles[0].name;
+    if(btnClear) btnClear.style.display = '';
   } else {
-    list.textContent = boundaryFiles.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-    btn.style.display = '';
-    hint.style.display = 'none';
+    display.textContent = boundaryFiles.length + ' files selected';
+    if(btnClear) btnClear.style.display = '';
   }
-  // When multiple KMZ: disable area name + OSM layers
-  // When exactly one KMZ: disable + clear area name (not needed — folder named by coords)
+  
   const isMultiKmz  = boundaryFiles.length > 1;
-  const areaInput = document.getElementById('area-chip-input');
-  const addAreaBtn = document.getElementById('btn-add-area');
-  areaInput.disabled = isMultiKmz;
-  addAreaBtn.disabled = isMultiKmz;
-  if (isMultiKmz) {
-    areaNames = [];
-    syncAreaNamesValue();
-    renderAreaChips();
-  }
-  document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = isMultiKmz; });
-  document.getElementById('btn-select-all').disabled = isMultiKmz;
-  document.getElementById('btn-clear-all').disabled  = isMultiKmz;
-  const isKadastrMode = document.getElementById('parcel-fetch-mode').value === 'kadastr';
+  const isKadastrMode = currentMode === 'kadastr';
   if (isKadastrMode && isMultiKmz) {
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    document.getElementById('wind-settings').style.display = 'none';
   }
 }
 
 // ── Boundary picker ────────────────────────────────────────
-document.getElementById('drop-zone').addEventListener('click', async (e) => {
+document.getElementById('btn-pick-boundary')?.addEventListener('click', async (e) => {
   if (e.target.id === 'btn-clear-boundary') return; // let clear handle itself
   const result = await window.api.openKmlDialog();
   if (!result.canceled && result.filePaths.length) {
@@ -515,7 +590,7 @@ document.getElementById('drop-zone').addEventListener('click', async (e) => {
   }
 });
 
-document.getElementById('btn-clear-boundary').addEventListener('click', () => {
+document.getElementById('btn-clear-boundary')?.addEventListener('click', () => {
   boundaryFiles = [];
   renderBoundaryList();
   checkStartReady();
@@ -552,7 +627,7 @@ async function addDroppedFiles(filePaths) {
   checkStartReady();
 }
 
-const dropZone = document.getElementById('drop-zone');
+const dropZone = document.body;
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
   e.stopPropagation();
@@ -590,41 +665,42 @@ document.getElementById('btn-pick-folder').addEventListener('click', async () =>
 
 // ── Layer checkboxes ───────────────────────────────────────
 function updateLayerSettingsVisibility() {
-  const windChecked = !!document.getElementById('layer-wind')?.checked;
-  const forestsChecked = !!document.getElementById('layer-forests')?.checked;
+  const windChecked = !!document.querySelector('input[name="layer"][value="wind"]')?.checked;
+  const forestsChecked = !!document.querySelector('input[name="layer"][value="forests"]')?.checked;
   const windSettings = document.getElementById('wind-settings');
   const forestSettings = document.getElementById('forest-settings');
   if (windSettings) windSettings.style.display = windChecked ? 'block' : 'none';
   if (forestSettings) forestSettings.style.display = forestsChecked ? 'block' : 'none';
 }
 
-document.getElementById('btn-select-all').addEventListener('click', () => {
+document.getElementById('btn-select-all')?.addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = true);
   updateLayerSettingsVisibility();
   checkStartReady();
 });
 
-document.getElementById('btn-clear-all').addEventListener('click', () => {
+document.getElementById('btn-clear-all')?.addEventListener('click', () => {
   document.querySelectorAll('input[name="layer"]').forEach(cb => cb.checked = false);
   updateLayerSettingsVisibility();
   checkStartReady();
 });
 
-document.getElementById('layer-wind').addEventListener('change', (e) => {
-  updateLayerSettingsVisibility();
-});
-document.getElementById('layer-forests').addEventListener('change', () => {
-  updateLayerSettingsVisibility();
-});
+// Since checkboxes are dynamically injected, we rely on event delegation or attach it during creation.
+// In the injection loop, we already call checkStartReady(), let's make sure updateLayerSettingsVisibility is called there.
 
 function applyFullParcelsMode(enabled) {
-  const dropZone   = document.getElementById('drop-zone');
-  const areaInput  = document.getElementById('area-chip-input');
-  dropZone.style.pointerEvents = enabled ? 'none' : '';
-  dropZone.style.opacity       = enabled ? '0.4' : '';
+  const dropZone   = document.getElementById('btn-pick-boundary');
+  const areaInput  = document.getElementById('area-name');
+  
+  if (dropZone) { dropZone.style.pointerEvents = enabled ? 'none' : ''; dropZone.style.opacity = enabled ? '0.5' : ''; }
+  if (areaInput) { areaInput.disabled = enabled; }
+  
+  const btnSelectAll = document.getElementById('btn-select-all');
+  const btnClearAll = document.getElementById('btn-clear-all');
+  if (btnSelectAll) btnSelectAll.disabled = enabled;
+  if (btnClearAll) btnClearAll.disabled = enabled;
+
   document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.disabled = enabled; if (enabled) cb.checked = false; });
-  document.getElementById('btn-select-all').disabled = enabled;
-  document.getElementById('btn-clear-all').disabled  = enabled;
   if (enabled) updateLayerSettingsVisibility();
   if (enabled && boundaryFiles.length) { boundaryFiles = []; renderBoundaryList(); }
   // Keep only first area in full-parcels mode
@@ -633,134 +709,185 @@ function applyFullParcelsMode(enabled) {
     syncAreaNamesValue();
     renderAreaChips();
   }
-  areaInput.disabled = enabled;
-  document.getElementById('btn-add-area').disabled = enabled;
+  // btn-add-area does not exist in new UI, safely ignore
+  const btnAddArea = document.getElementById('btn-add-area');
+  if (btnAddArea) btnAddArea.disabled = enabled;
   updateLayerSettingsVisibility();
   checkStartReady();
 }
 
-// ── Parcel fetch mode switching ─────────────────────────────
-document.querySelectorAll('#parcel-mode-cards .mode-card').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const mode = btn.dataset.fetchMode || 'boundary';
-    const modeSelect = document.getElementById('parcel-fetch-mode');
-    modeSelect.value = mode;
-    modeSelect.dispatchEvent(new Event('change'));
+const MODES = {
+  boundary: { title: 'Boundary + OSM', ua: 'Межа + шари OSM', show: ['sect-parcel-flow', 'sect-area', 'sect-boundary', 'sect-layers', 'sect-folder'], optBoundary: true },
+  kadastr: { title: 'Parcels by KMZ/KML', ua: 'Ділянки за KMZ/KML', show: ['sect-parcel-flow', 'sect-boundary', 'sect-source', 'sect-kadastropts', 'sect-folder'], reqBoundary: true },
+  eland: { title: 'e.land Lookup', ua: 'Пошук в e.land.gov.ua', show: ['sect-parcel-flow', 'sect-csv', 'sect-format', 'sect-folder'] },
+  cadnum: { title: 'By cadastral numbers', ua: 'За кадастровими номерами', show: ['sect-parcel-flow', 'sect-cadnum', 'sect-source', 'sect-folder'] },
+  custom: { title: 'Settlement boundary', ua: 'Межа населеного пункту', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
+  coords: { title: 'Polygon coordinates', ua: 'Координати полігону', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
+  research: { title: 'Pre-Research XLSX', ua: 'Перед-дослідження', show: ['sect-research', 'sect-folder'] },
+  offline: { title: 'Offline data', ua: 'Офлайн-дані', show: ['sect-offline'] }
+};
+
+let currentMode = 'boundary';
+
+function setElandFormat(value) {
+  const fmt = String(value || 'xlsx_partial');
+  elandOutputFormat = fmt;
+  const modeSel = document.getElementById('eland-output-format-main');
+  if (modeSel && modeSel.value !== fmt) modeSel.value = fmt;
+}
+
+function updateStartButtonLabel(mode) {
+  const startBtn = document.getElementById('start-btn-label');
+  if (!startBtn) return;
+  startBtn.textContent = MODE_BUTTON_LABELS[mode] ? MODE_BUTTON_LABELS[mode].replace('▶ Start ', '').replace('▶ ', '').replace('🔍 ', '') : 'Start';
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  const m = MODES[mode];
+  
+  const headerTitle = document.getElementById('header-title');
+  if (headerTitle) headerTitle.textContent = m.title;
+  const headerUa = document.getElementById('header-title-ua');
+  if (headerUa) headerUa.textContent = m.ua;
+  
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.toggle('active', link.id === 'mode-' + mode);
+  });
+  
+  // Hide all sections first
+  ['sect-parcel-flow', 'sect-area', 'sect-cadnum', 'sect-csv', 'sect-boundary', 'sect-source', 'sect-folder', 'sect-format', 'sect-layers', 'sect-kadastropts', 'sect-research', 'sect-offline'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.style.display = 'none';
+  });
+  
+  // Show active sections
+  m.show.forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.style.display = '';
+  });
+  
+  // Boundary labels
+  const lbl = document.getElementById('lbl-boundary');
+  const req = document.getElementById('req-boundary');
+  if(lbl && req) {
+    if(m.reqBoundary) {
+      req.style.display = 'inline-block';
+      req.textContent = 'REQUIRED';
+      req.className = 'tag tag-accent';
+    } else if(m.optBoundary) {
+      req.style.display = 'inline-block';
+      req.textContent = 'OPTIONAL';
+      req.className = 'tag tag-outline';
+    } else {
+      req.style.display = 'none';
+    }
+    
+    if(mode === 'custom') lbl.textContent = 'Settlement KMZ/KML · Межа НП';
+    else if(mode === 'coords') lbl.textContent = 'Polygon source KML/KMZ';
+    else lbl.textContent = 'Boundary KMZ/KML · Межа';
+  }
+  
+  updateStartButtonLabel(mode);
+  checkStartReady();
+}
+
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', () => {
+    setMode(link.id.replace('mode-', ''));
   });
 });
 
-document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
-  const mode = e.target.value;
-  const isCadnum = mode === 'cadnum';
-  const isCustom = mode === 'custom';
-  const isKadastr = mode === 'kadastr';
-  const isCoords = mode === 'coords';
-  const isEland = mode === 'eland';
-  
-  document.getElementById('field-cadnum').style.display = isCadnum ? 'block' : 'none';
-  document.getElementById('field-parcel-source').style.display = (isCadnum || isKadastr) ? 'block' : 'none';
-  document.getElementById('field-eland-csv').style.display = isEland ? 'block' : 'none';
-  document.getElementById('field-eland-format-main').style.display = isEland ? 'block' : 'none';
-  document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr || isCoords || isEland) ? 'none' : 'block';
-  document.getElementById('field-area-names').style.display = (isCustom || isCadnum || isKadastr || isCoords || isEland) ? 'none' : 'block';
-  document.getElementById('field-osm-layers').style.display = mode === 'boundary' ? 'block' : 'none';
-  document.getElementById('field-kadastr-options').style.display = (mode === 'boundary' || isKadastr || isCadnum) ? 'block' : 'none';
-  document.getElementById('step-options-title').style.display = (mode === 'boundary' || isKadastr || isCadnum) ? 'flex' : 'none';
-  if (isKadastr || isCadnum) {
-    document.getElementById('step-options-title').querySelector('span').textContent = '3. Kadastr Options';
-  } else if (mode === 'boundary') {
-    document.getElementById('step-options-title').querySelector('span').textContent = '3. Optional layers';
-  }
-  
-  // Show boundary file picker for custom/kadastr/coords modes
-  if (isCustom) {
-    const boundaryField = document.getElementById('field-boundary');
-    boundaryField.style.display = 'block';
-    const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Custom settlement boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(one or multiple files; polygons/closed paths are supported)</span>';
-    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    updateLayerSettingsVisibility();
-  } else if (isKadastr) {
-    const boundaryField = document.getElementById('field-boundary');
-    boundaryField.style.display = 'block';
-    const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Boundary KMZ/KML <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(parcel scraping; single or multiple files)</span>';
-    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    updateLayerSettingsVisibility();
-  } else if (isCoords) {
-    const boundaryField = document.getElementById('field-boundary');
-    boundaryField.style.display = 'block';
-    const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Polygon source KML/KMZ <span style="color:#e05;">*required</span> <span style="color:#888;font-size:11px;">(single file; exports latitude,longitude points)</span>';
-    document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
-    updateLayerSettingsVisibility();
-  } else if (!isCadnum) {
-    const boundaryField = document.getElementById('field-boundary');
-    const label = boundaryField.querySelector('label');
-    label.innerHTML = 'Boundary KMZ/KML <span style="color:#888;font-size:11px;">(optional — helps constrain area lookup)</span>';
-  }
+const topOffline = document.getElementById('btn-top-offline');
+if(topOffline) {
+  topOffline.addEventListener('click', () => {
+    setMode('offline');
+  });
+}
 
-  syncModeCards(mode);
-  updateStartButtonLabel(mode);
-  updateLayerSettingsVisibility();
-  checkStartReady();
+const LAYERS = [
+  ['power_lines', 'Power lines', 'Лінії електропередач', false],
+  ['towers', 'Towers', 'Опори', false],
+  ['substations', 'Substations', 'Підстанції', false],
+  ['roads', 'Roads', 'Дороги', false],
+  ['settlements', 'Settlements +700 m', 'Населені пункти +700 м', false],
+  ['water', 'Rivers & water', 'Річки та водойми', false],
+  ['forests', 'Forests', 'Ліси', false],
+  ['emerald', 'Emerald Network', 'Смарагдова мережа', false],
+  ['airports', 'Airports +45 km', 'Аеропорти +45 км', false],
+  ['nuclear_plants', 'Nuclear plants +30 km', 'АЕС +30 км', false],
+  ['nature_reserves', 'Nature reserves (PZF)', 'ПЗФ', false],
+  ['wind', 'Wind speed (GWA)', 'Швидкість вітру', false],
+];
+
+setTimeout(() => {
+  const container = document.getElementById('layers-container');
+  if(container) {
+    LAYERS.forEach(l => {
+      const lbl = document.createElement('label');
+      lbl.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 9px;background:#f5f5f8;cursor:pointer;min-height:30px;';
+      lbl.innerHTML = `<input type="checkbox" name="layer" value="${l[0]}" ${l[3] ? 'checked' : ''} style="width:14px;height:14px;accent-color:#5980a6;flex:none;" />
+                      <span style="font-size:12.5px;flex:none;">${l[1]}</span>
+                      <span style="font-size:11.5px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">· ${l[2]}</span>`;
+      lbl.querySelector('input').addEventListener('change', (e) => {
+        lbl.style.background = e.target.checked ? '#eef6ff' : '#f5f5f8';
+        updateLayerSettingsVisibility();
+        checkStartReady();
+      });
+      if(l[3]) lbl.style.background = '#eef6ff';
+      container.appendChild(lbl);
+    });
+    updateLayerSettingsVisibility();
+    
+    const btnAll = document.getElementById('btn-layers-all');
+    if (btnAll) {
+      btnAll.addEventListener('click', () => {
+        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          if (!cb.checked) {
+            cb.checked = true;
+            cb.dispatchEvent(new Event('change'));
+          }
+        });
+      });
+    }
+    
+    const btnNone = document.getElementById('btn-layers-none');
+    if (btnNone) {
+      btnNone.addEventListener('click', () => {
+        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          if (cb.checked) {
+            cb.checked = false;
+            cb.dispatchEvent(new Event('change'));
+          }
+        });
+      });
+    }
+  }
+}, 100);
+
+document.getElementById('btn-source-org')?.addEventListener('click', (e) => {
+  e.target.setAttribute('aria-pressed', 'true');
+  document.getElementById('btn-source-comua')?.setAttribute('aria-pressed', 'false');
+  parcelSource = 'kadastrova_karta';
+});
+document.getElementById('btn-source-comua')?.addEventListener('click', (e) => {
+  e.target.setAttribute('aria-pressed', 'true');
+  document.getElementById('btn-source-org')?.setAttribute('aria-pressed', 'false');
+  parcelSource = 'kadastrova_karta_ua';
 });
 
-syncModeCards(document.getElementById('parcel-fetch-mode').value);
-updateStartButtonLabel(document.getElementById('parcel-fetch-mode').value);
+
+setMode('boundary');
 setElandFormat(elandOutputFormat);
 syncAreaNamesValue();
 renderAreaChips();
-applyRoleVisibility();
-if (!isAdminRole) {
-  const modeSelect = document.getElementById('parcel-fetch-mode');
-  modeSelect.value = 'kadastr';
-  modeSelect.dispatchEvent(new Event('change'));
-}
-checkStartReady();
 
-document.getElementById('cadnum-input').addEventListener('input', checkStartReady);
-document.getElementById('parcel-source-select').addEventListener('change', (e) => {
-  parcelSource = String(e.target.value || 'kadastrova_karta_ua');
-  checkStartReady();
-});
+document.getElementById('cadnums-text')?.addEventListener('input', checkStartReady);
+document.getElementById('area-name')?.addEventListener('input', checkStartReady);
 
-document.getElementById('btn-pick-eland-csv-mode').addEventListener('click', async () => {
-  const result = await window.api.openCsvDialog();
-  if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
-    elandCsvPath = result.filePaths[0];
-    const fileName = elandCsvPath.split(/[\\/]/).pop();
-    document.getElementById('eland-csv-display-main').textContent = fileName;
-    const preDisplay = document.getElementById('cadnums-csv-display');
-    if (preDisplay) preDisplay.textContent = fileName;
-    checkElandReady();
-    checkStartReady();
-  }
-});
+// Legacy mode switch elements have been removed
 
-document.getElementById('eland-output-format-main').addEventListener('change', (e) => {
-  setElandFormat(e.target.value);
-});
-
-document.getElementById('btn-add-area').addEventListener('click', () => {
-  const input = document.getElementById('area-chip-input');
-  if (tryAddAreaChip(input.value)) input.value = '';
-});
-
-document.getElementById('area-chip-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ',') {
-    e.preventDefault();
-    const input = document.getElementById('area-chip-input');
-    if (tryAddAreaChip(input.value)) input.value = '';
-  }
-});
-
-document.getElementById('area-chip-input').addEventListener('blur', () => {
-  const input = document.getElementById('area-chip-input');
-  if (tryAddAreaChip(input.value)) input.value = '';
-});
-
-document.getElementById('chk-full-parcels').addEventListener('change', (e) => {
+document.getElementById('chk-full-parcels')?.addEventListener('change', (e) => {
   applyFullParcelsMode(e.target.checked);
 });
 
@@ -822,12 +949,12 @@ function updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoun
 }
 
 function checkStartReady() {
-  const fetchMode     = document.getElementById('parcel-fetch-mode').value;
-  const territory     = document.getElementById('area-name').value.trim();
-  const cadnum        = document.getElementById('cadnum-input').value.trim();
+  const fetchMode     = currentMode;
+  const territory     = document.getElementById('area-name')?.value.trim() || '';
+  const cadnum        = document.getElementById('cadnums-text')?.value.trim() || '';
   const isMultiKmz    = boundaryFiles.length > 1;
   const isSingleKmz   = boundaryFiles.length === 1;
-  const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  const isFullParcels = !!document.getElementById('chk-full-parcels')?.checked;
   const hasOutput     = !!outputFolder;
   const hasBoundary   = isSingleKmz || isMultiKmz;
   const hasLayersChecked = document.querySelectorAll('input[name="layer"]:checked').length > 0;
@@ -853,7 +980,8 @@ function checkStartReady() {
   }
   const stepperReady = updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoundary, boundaryFiles.length, hasLayersChecked, isFullParcels);
   setStepStatus('step-run-status', !!stepperReady && ready);
-  document.getElementById('btn-start').disabled = !ready;
+  console.log('[checkStartReady]', { fetchMode, territory, cadnum, isMultiKmz, isSingleKmz, isFullParcels, hasOutput, hasBoundary, hasLayersChecked, ready });
+document.getElementById('btn-start').disabled = !ready;
 }
 
 function setBusy(busy) {
@@ -866,15 +994,16 @@ function setBusy(busy) {
 
 
 document.getElementById('btn-start').addEventListener('click', async () => {
+  document.getElementById('tab-btn-log')?.click();
   if (!outputFolder) { appendLog('⚠ Please select an output folder.'); return; }
 
-  const fetchMode     = document.getElementById('parcel-fetch-mode').value;
+  const fetchMode     = currentMode;
   resetRunProgress('Idle');
   if (fetchMode === 'eland') {
     if (!elandCsvPath) { appendLog('⚠ Please select cadnums CSV.'); return; }
     if (elandBusy) { appendLog('⚠ e.land lookup is already running.'); return; }
 
-    document.getElementById('main-log').textContent = '';
+    clearLogs();
     setBusy(true);
     elandBusy = true;
     initRunProgress(1, 'e.land lookup');
@@ -907,7 +1036,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       return;
     }
     const sourceFile = boundaryFiles[0];
-    document.getElementById('main-log').textContent = '';
+    clearLogs();
     setBusy(true);
     initRunProgress(1, 'Extract polygon coordinates');
     appendLog(`📍 Extracting polygon coordinates from: ${sourceFile.name}`);
@@ -928,7 +1057,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   
   // ── Cadastral number mode ──
   if (fetchMode === 'cadnum') {
-    const cadnumInput = document.getElementById('cadnum-input').value.trim();
+    const cadnumInput = document.getElementById('cadnums-text').value.trim();
     if (!cadnumInput) { appendLog('⚠ Please enter at least one cadastral number.'); return; }
 
     const cadnums = cadnumInput
@@ -938,7 +1067,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     if (cadnums.length === 0) { appendLog('⚠ Please enter at least one cadastral number.'); return; }
 
-    document.getElementById('main-log').textContent = '';
+    clearLogs();
     setBusy(true);
     userStopped = false;
     initRunProgress(cadnums.length, 'Cadnum lookup');
@@ -1101,7 +1230,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       : 'custom_settlements';
     const finalOutput = await window.api.resolveOutputPath(outputFolder, `${customName}_settlements`);
 
-    document.getElementById('main-log').textContent = '';
+    clearLogs();
     setBusy(true);
     userStopped = false;
     initRunProgress(1, 'Custom settlement fetch');
@@ -1140,8 +1269,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const isKadastrMode = fetchMode === 'kadastr';
   const rawInput      = document.getElementById('area-name').value.trim();
   const parcelSource  = getParcelSource();
-  const isFullParcels = document.getElementById('chk-full-parcels').checked;
-  const fetchDetailedRegistry = document.getElementById('chk-detailed-registry').checked;
+  const isFullParcels = document.getElementById('chk-full-parcels')?.checked;
+  const fetchDetailedRegistry = !!document.getElementById('chk-detailed-registry')?.checked;
   const areas         = rawInput.split('...').map(s => s.trim()).filter(Boolean);
   const territory     = areas[0] || '';
   const isMultiArea   = !isFullParcels && areas.length > 1;
@@ -1173,7 +1302,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   }
   const layerOptions = Object.keys(windOptions).length ? windOptions : null;
 
-  document.getElementById('main-log').textContent = '';
+  clearLogs();
   setBusy(true);
   userStopped = false;
 
@@ -1525,7 +1654,7 @@ function checkResearchReady() {
   document.getElementById('btn-research-start').disabled = !oblastVal || !preTabOutputFolder || researchBusy;
 }
 
-document.getElementById('btn-pre-tab-folder').addEventListener('click', async () => {
+document.getElementById('btn-pre-tab-folder')?.addEventListener('click', async () => {
   const result = await window.api.openFolderDialog();
   if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
     preTabOutputFolder = result.filePaths[0];
@@ -1535,7 +1664,7 @@ document.getElementById('btn-pre-tab-folder').addEventListener('click', async ()
   }
 });
 
-document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async () => {
+document.getElementById('btn-pick-cadnums-csv')?.addEventListener('click', async () => {
   const result = await window.api.openCsvDialog();
   if (result && !result.canceled && result.filePaths && result.filePaths[0]) {
     elandCsvPath = result.filePaths[0];
@@ -1548,11 +1677,11 @@ document.getElementById('btn-pick-cadnums-csv').addEventListener('click', async 
   }
 });
 
-document.getElementById('eland-output-format').addEventListener('change', (e) => {
+document.getElementById('eland-output-format')?.addEventListener('change', (e) => {
   setElandFormat(e.target.value);
 });
 
-document.getElementById('btn-eland-start').addEventListener('click', async () => {
+document.getElementById('btn-eland-start')?.addEventListener('click', async () => {
   if (!elandCsvPath || !preTabOutputFolder || elandBusy) return;
   elandBusy = true;
   checkElandReady();
@@ -1573,15 +1702,15 @@ document.getElementById('btn-eland-start').addEventListener('click', async () =>
   document.getElementById('btn-eland-stop').style.display = 'none';
 });
 
-document.getElementById('btn-eland-stop').addEventListener('click', () => {
+document.getElementById('btn-eland-stop')?.addEventListener('click', () => {
   window.api.stopElandLookup();
 });
 
 // ── Pre-Research XLSX ───────────────────────────────────────
 
-document.getElementById('research-oblast').addEventListener('input', checkResearchReady);
+document.getElementById('research-oblast')?.addEventListener('input', checkResearchReady);
 
-document.getElementById('btn-research-start').addEventListener('click', async () => {
+document.getElementById('btn-research-start')?.addEventListener('click', async () => {
   const oblastName = document.getElementById('research-oblast').value.trim();
   if (!oblastName || !preTabOutputFolder || researchBusy) return;
 
@@ -1609,12 +1738,12 @@ document.getElementById('btn-research-start').addEventListener('click', async ()
   document.getElementById('btn-research-stop').style.display = 'none';
 });
 
-document.getElementById('btn-research-stop').addEventListener('click', () => {
+document.getElementById('btn-research-stop')?.addEventListener('click', () => {
   window.api.stopResearch();
   appendLog('⛔ Stop requested…');
 });
 
-document.getElementById('btn-offline-download').addEventListener('click', async () => {
+document.getElementById('btn-offline-download')?.addEventListener('click', async () => {
   if (offlineDownloadBusy) return;
   offlineDownloadBusy = true;
   const btn = document.getElementById('btn-offline-download');
@@ -1650,3 +1779,24 @@ document.getElementById('btn-offline-download').addEventListener('click', async 
   btn.disabled = false;
   offlineDownloadBusy = false;
 });
+
+// ── Initialization ─────────────────────────────────────────
+(async function initTerritories() {
+  try {
+    const territories = await window.api.getTerritories();
+    if (territories && territories.length > 0) {
+      const datalist = document.getElementById('territories-list');
+      if (datalist) {
+        const fragment = document.createDocumentFragment();
+        territories.forEach(name => {
+          const option = document.createElement('option');
+          option.value = name;
+          fragment.appendChild(option);
+        });
+        datalist.appendChild(fragment);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load territories for autocomplete', err);
+  }
+})();

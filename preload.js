@@ -3,7 +3,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  getAppRole: () => process.env.APP_ROLE || 'user',
+  getAppRole: () => ipcRenderer.sendSync('get-app-role'),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   startScraping: (url, outputPath, opts = {}) =>
     ipcRenderer.invoke('start-scraping', { url, outputPath, ...opts }),
@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('api', {
 
   mergeKmzFiles: (sourceDir, outputPath) =>
     ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
+
+  getTerritories: () => ipcRenderer.invoke('get-territories'),
+  parseKmz: (path) => ipcRenderer.invoke('parse-kmz', path),
 
   searchCadastralNumber: (cadnum, source = 'kadastrova_karta_ua') =>
     ipcRenderer.invoke('search-cadastral-number', { cadnum, source }),

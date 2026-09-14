@@ -1,0 +1,12 @@
+
+> ostriv@1.0.0 electron:dev:admin
+> electron . --role=admin --no-sandbox --inspect
+
+Starting inspector on 127.0.0.1:9229 failed: address already in use
+PROCESS ARGV: [
+  '/Users/davydov/Work/github.com/IntDavydov/extract-parcels/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+  '.',
+  '--role=admin',
+  '--no-sandbox',
+  '--inspect'
+]
