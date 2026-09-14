@@ -253,8 +253,14 @@ function findTemplatePoint(layerMap) {
   return [30.5234, 50.4501]; // fallback: Kyiv
 }
 
+
 async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], docName = 'Kadastr') {
   onProgress('🗺 Building KML…');
+  const os = require('os');
+  const tmpKmlPath = path.join(os.tmpdir(), `doc-${Date.now()}.kml`);
+  const ws = fs.createWriteStream(tmpKmlPath, { encoding: 'utf8' });
+
+  try {
   const isPackaged = __dirname.includes('app.asar');
   const appRoot = isPackaged
     ? path.join(process.resourcesPath, 'app.asar.unpacked')
@@ -298,76 +304,99 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   }
   const customIconNames = [...bundledIcons].filter(n => !['houses.png', 'windmill.png'].includes(n)).sort();
   const styles = buildStyles(runtimeStyles, customIconNames);
-  const folders = [];
 
-  function layerFolder(layerName) {
-    // For dynamically-named parcel layers (coords-based), fall back to Land Parcels style
+  ws.write(`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n  <name>${escXml(docName)}</name>\n  ${styles}\n`);
+
+  function writeLayerFolder(layerName) {
     const styleId = LAYER_STYLES[layerName]
       ? layerName.replace(/[^a-zA-Z0-9]/g, '_')
       : 'Land_Parcels';
-    const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
-    onProgress(`  ${layerName}: ${placemarks.length} placemarks`);
-    return `<Folder><name>${escXml(layerName)}</name>${placemarks.join('')}</Folder>`;
+    const features = layerMap[layerName];
+    if (!features || features.length === 0) return;
+    
+    ws.write(`  <Folder><name>${escXml(layerName)}</name>\n`);
+    let count = 0;
+    for (const f of features) {
+      const p = featureToKml(f, styleId);
+      if (p) {
+        ws.write(p + '\n');
+        count++;
+      }
+    }
+    ws.write(`  </Folder>\n`);
+    onProgress(`  ${layerName}: ${count} placemarks`);
   }
 
-  // Build grouped folders
+  // To support streaming safely, we'll stream grouped folders sequentially
   const grouped = new Set();
   for (const { folder, layers } of LAYER_GROUPS) {
-    const subFolders = [];
+    let hasContent = false;
     for (const layerName of layers) {
-      if (!layerMap[layerName]) continue;
+      if (layerMap[layerName] && layerMap[layerName].length > 0) hasContent = true;
+    }
+    if (!hasContent) continue;
+    ws.write(`  <Folder><name>${escXml(folder)}</name>\n`);
+    
+    for (const layerName of layers) {
+      if (!layerMap[layerName] || layerMap[layerName].length === 0) continue;
       grouped.add(layerName);
-      // Nest Emerald Buffer inside the Emerald Network folder
+      
+      // Nesting logic
       if (layerName === 'Emerald Network' && layerMap['Emerald Buffer']) {
-        const emeraldFolder  = layerFolder(layerName);
-        const bufferFolder   = layerFolder('Emerald Buffer');
+        ws.write(`  <Folder><name>${escXml('Emerald Network')}</name>\n`);
+        writeLayerFolder('Emerald Network');
+        writeLayerFolder('Emerald Buffer');
         grouped.add('Emerald Buffer');
-        // Wrap both inside a parent "Emerald Network" folder
-        subFolders.push(`<Folder><name>${escXml('Emerald Network')}</name>${emeraldFolder}${bufferFolder}</Folder>`);
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      if (layerName === 'Emerald Buffer') continue; // already nested above
-      // Nest Water Buffers inside the Water folder
+      if (layerName === 'Emerald Buffer') continue;
+      
       if (layerName === 'Water' && layerMap['Water Buffers']) {
-        const waterFolder  = layerFolder(layerName);
-        const bufferFolder = layerFolder('Water Buffers');
+        ws.write(`  <Folder><name>${escXml('Water')}</name>\n`);
+        writeLayerFolder('Water');
+        writeLayerFolder('Water Buffers');
         grouped.add('Water Buffers');
-        subFolders.push(`<Folder><name>${escXml('Water')}</name>${waterFolder}${bufferFolder}</Folder>`);
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      if (layerName === 'Water Buffers') continue; // already nested above
-      // Nest Forest Buffers inside the Forests folder
+      if (layerName === 'Water Buffers') continue;
+      
       if (layerName === 'Forests' && layerMap['Forest Buffers']) {
-        const forestFolder = layerFolder(layerName);
-        const bufferFolder = layerFolder('Forest Buffers');
+        ws.write(`  <Folder><name>${escXml('Forests')}</name>\n`);
+        writeLayerFolder('Forests');
+        writeLayerFolder('Forest Buffers');
         grouped.add('Forest Buffers');
-        subFolders.push(`<Folder><name>${escXml('Forests')}</name>${forestFolder}${bufferFolder}</Folder>`);
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      if (layerName === 'Forest Buffers') continue; // already nested above
-      // Nature Reserves: group by subcategory (_subtype), nest Nature Reserve Buffer inside
+      if (layerName === 'Forest Buffers') continue;
+      
       if (layerName === 'Nature Reserves') {
         const styleId = 'Nature_Reserves';
+        ws.write(`  <Folder><name>${escXml('Nature Reserves')}</name>\n`);
         const byCategory = {};
         for (const f of layerMap['Nature Reserves']) {
           const cat = f.properties._subtype || 'Інше';
           if (!byCategory[cat]) byCategory[cat] = [];
           byCategory[cat].push(featureToKml(f, styleId));
         }
-        const catFolders = Object.entries(byCategory)
-          .map(([cat, pms]) => `<Folder><name>${escXml(cat)}</name>${pms.join('')}</Folder>`)
-          .join('');
-        let natContent = catFolders;
+        for (const [cat, pms] of Object.entries(byCategory)) {
+          ws.write(`    <Folder><name>${escXml(cat)}</name>\n`);
+          ws.write(pms.join('\n'));
+          ws.write(`    </Folder>\n`);
+        }
         if (layerMap['Nature Reserve Buffer']) {
-          natContent += layerFolder('Nature Reserve Buffer');
+          writeLayerFolder('Nature Reserve Buffer');
           grouped.add('Nature Reserve Buffer');
         }
-        subFolders.push(`<Folder><name>${escXml('Nature Reserves')}</name>${natContent}</Folder>`);
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      if (layerName === 'Nature Reserve Buffer') continue; // already nested above
-      // Nest Power Line Buffers inside the Power Lines folder
+      if (layerName === 'Nature Reserve Buffer') continue;
+      
       if (layerName === 'Power Lines') {
+        ws.write(`  <Folder><name>${escXml('Power Lines')}</name>\n`);
         const voltageOrder = ['750kV', '400kV', '330kV', '220kV', '110kV', '35kV', 'Other'];
         const bucketed = Object.fromEntries(voltageOrder.map((bucket) => [bucket, []]));
         for (const feature of layerMap['Power Lines']) {
@@ -375,137 +404,131 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
           if (!bucketed[bucket]) bucketed[bucket] = [];
           bucketed[bucket].push(featureToKml(feature, powerLineStyleId(feature?.properties?.voltage)));
         }
-        const voltageFolders = voltageOrder
-          .filter((bucket) => bucketed[bucket] && bucketed[bucket].length)
-          .map((bucket) => `<Folder><name>${escXml(bucket)}</name>${bucketed[bucket].join('')}</Folder>`);
-
-        let powerLinesContent = voltageFolders.join('');
+        for (const bucket of voltageOrder) {
+          if (bucketed[bucket] && bucketed[bucket].length) {
+            ws.write(`    <Folder><name>${escXml(bucket)}</name>\n`);
+            ws.write(bucketed[bucket].join('\n'));
+            ws.write(`    </Folder>\n`);
+          }
+        }
         if (layerMap['Power Line Buffers']) {
-          powerLinesContent += layerFolder('Power Line Buffers');
+          writeLayerFolder('Power Line Buffers');
           grouped.add('Power Line Buffers');
         }
-        subFolders.push(`<Folder><name>${escXml('Power Lines')}</name>${powerLinesContent}</Folder>`);
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      if (layerName === 'Power Line Buffers') continue; // already nested above
-      // Towers: color-coded by voltage tier
+      if (layerName === 'Power Line Buffers') continue;
+      
       if (layerName === 'Towers') {
-        const towerPms = layerMap['Towers'].map(f =>
-          featureToKml(f, towerStyleId(f.properties && f.properties.voltage))
-        ).filter(Boolean);
-        subFolders.push(`<Folder><name>Towers</name>${towerPms.join('')}</Folder>`);
+        ws.write(`  <Folder><name>Towers</name>\n`);
+        for (const f of layerMap['Towers']) {
+          const p = featureToKml(f, towerStyleId(f.properties && f.properties.voltage));
+          if (p) ws.write(p + '\n');
+        }
+        ws.write(`  </Folder>\n`);
         continue;
       }
-      // Default: add layer as a plain folder
-      subFolders.push(layerFolder(layerName));
+      
+      writeLayerFolder(layerName);
     }
-    if (subFolders.length) {
-      folders.push(`<Folder><name>${escXml(folder)}</name>${subFolders.join('')}</Folder>`);
-    }
+    ws.write(`  </Folder>\n`);
   }
 
-  // Root-level layers (not in any group)
+  // Root-level layers
   const allGrouped = LAYER_GROUPS.flatMap(g => g.layers);
   const rootOrder = [
     ...ROOT_ORDER.filter(k => layerMap[k] && !grouped.has(k)),
-    // Coords-named parcel layers before 'Parcel Boundaries' so nesting logic fires correctly
     ...Object.keys(layerMap).filter(k => !allGrouped.includes(k) && !grouped.has(k) && !ROOT_ORDER.includes(k) && k !== 'Parcel Boundaries' && k !== 'Wind Speed'),
-    // 'Parcel Boundaries' last — will be nested inside the coords folder above
     ...( layerMap['Parcel Boundaries'] ? ['Parcel Boundaries'] : [] ),
   ];
   const addedRoot = new Set();
   for (const layerName of rootOrder) {
     if (!layerMap[layerName] || addedRoot.has(layerName)) continue;
     addedRoot.add(layerName);
-    // Roads: nest Road Buffers inside Roads folder
+    
     if (layerName === 'Roads' && layerMap['Road Buffers']) {
-      const roadsFolder  = layerFolder('Roads');
-      const bufferFolder = layerFolder('Road Buffers');
+      ws.write(`  <Folder><name>${escXml('Roads')}</name>\n`);
+      writeLayerFolder('Roads');
+      writeLayerFolder('Road Buffers');
       addedRoot.add('Road Buffers');
-      folders.push(`<Folder><name>${escXml('Roads')}</name>${roadsFolder}${bufferFolder}</Folder>`);
+      ws.write(`  </Folder>\n`);
       continue;
     }
-    if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue; // already nested above
-    // Airoports: nest 45km buffer inside the Airoports folder
+    if (layerName === 'Road Buffers' && addedRoot.has('Road Buffers')) continue;
+    
     if (layerName === 'Airoports' && layerMap['Airoports Buffer']) {
-      const airportsFolder = layerFolder('Airoports');
-      const bufferFolder = layerFolder('Airoports Buffer');
+      ws.write(`  <Folder><name>${escXml('Airoports')}</name>\n`);
+      writeLayerFolder('Airoports');
+      writeLayerFolder('Airoports Buffer');
       addedRoot.add('Airoports Buffer');
-      folders.push(`<Folder><name>${escXml('Airoports')}</name>${airportsFolder}${bufferFolder}</Folder>`);
+      ws.write(`  </Folder>\n`);
       continue;
     }
     if (layerName === 'Airoports Buffer' && addedRoot.has('Airoports Buffer')) continue;
-    // Nuclear Power Plants: nest 30km buffer inside the Nuclear Power Plants folder
+    
     if (layerName === 'Nuclear Power Plants' && layerMap['Nuclear Power Plants Buffer']) {
-      const nppFolder = layerFolder('Nuclear Power Plants');
-      const bufferFolder = layerFolder('Nuclear Power Plants Buffer');
+      ws.write(`  <Folder><name>${escXml('Nuclear Power Plants')}</name>\n`);
+      writeLayerFolder('Nuclear Power Plants');
+      writeLayerFolder('Nuclear Power Plants Buffer');
       addedRoot.add('Nuclear Power Plants Buffer');
-      folders.push(`<Folder><name>${escXml('Nuclear Power Plants')}</name>${nppFolder}${bufferFolder}</Folder>`);
+      ws.write(`  </Folder>\n`);
       continue;
     }
     if (layerName === 'Nuclear Power Plants Buffer' && addedRoot.has('Nuclear Power Plants Buffer')) continue;
-    // Coords-named parcel layer: wrap in Parcels > coords/folder > Boundary + Parcels subfolder
+    
     if (!LAYER_STYLES[layerName] && !addedRoot.has('Parcel Boundaries')) {
       addedRoot.add('Parcel Boundaries');
-      const styleId    = 'Land_Parcels';
-      const placemarks = layerMap[layerName].map(f => featureToKml(f, styleId)).filter(Boolean);
-      const boundaryFolder = layerMap['Parcel Boundaries'] ? layerFolder('Parcel Boundaries') : '';
-      const parcelsSubFolder = `<Folder><name>Parcels</name>${placemarks.join('')}</Folder>`;
-      const coordsFolder = `<Folder><name>${escXml(layerName)}</name>${boundaryFolder}${parcelsSubFolder}</Folder>`;
-      folders.push(`<Folder><name>Parcels</name>${coordsFolder}</Folder>`);
+      ws.write(`  <Folder><name>Parcels</name>\n  <Folder><name>${escXml(layerName)}</name>\n`);
+      if (layerMap['Parcel Boundaries']) writeLayerFolder('Parcel Boundaries');
+      ws.write(`    <Folder><name>Parcels</name>\n`);
+      writeLayerFolder(layerName);
+      ws.write(`    </Folder>\n  </Folder>\n  </Folder>\n`);
       continue;
     }
-    if (layerName === 'Parcel Boundaries' && addedRoot.has('Parcel Boundaries')) continue; // already nested above
-    folders.push(layerFolder(layerName));
+    if (layerName === 'Parcel Boundaries' && addedRoot.has('Parcel Boundaries')) continue;
+    writeLayerFolder(layerName);
   }
 
-  // Build Wind Speed folder: "Average Pins" sub-folder + heatmap overlay
-  const hasWindPoints   = !!(layerMap['Wind Speed'] && layerMap['Wind Speed'].length);
+  const hasWindPoints = !!(layerMap['Wind Speed'] && layerMap['Wind Speed'].length);
   const hasWindOverlays = groundOverlays.length > 0;
   if (hasWindPoints || hasWindOverlays) {
     const hubHeight = hasWindOverlays ? (groundOverlays[0].hubHeight || '') : '';
-    const parts = [];
-
+    ws.write(`  <Folder><name>Wind Speed${hubHeight ? ` ${hubHeight}m` : ''}</name>\n`);
+    
     if (hasWindPoints) {
-      const styleId = 'Wind_Speed';
-      const pms = layerMap['Wind Speed'].map(f => featureToKml(f, styleId)).filter(Boolean);
-      parts.push(`<Folder><name>Average Pins</name>${pms.join('')}</Folder>`);
+      ws.write(`    <Folder><name>Average Pins</name>\n`);
+      writeLayerFolder('Wind Speed');
+      ws.write(`    </Folder>\n`);
     }
 
     if (hasWindOverlays) {
-      const overlayItems = groundOverlays.map((ov) => {
+      for (const ov of groundOverlays) {
         const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
-        return `<GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>`;
-      });
-      parts.push(...overlayItems);
+        ws.write(`    <GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>\n`);
+      }
     }
-
-    folders.push(`<Folder><name>Wind Speed${hubHeight ? ` ${hubHeight}m` : ''}</name>${parts.join('')}</Folder>`);
+    ws.write(`  </Folder>\n`);
   }
 
   if (customIconNames.length) {
     const [tplLon, tplLat] = findTemplatePoint(layerMap);
-    const templatePlacemarks = customIconNames.map((iconName) => {
+    ws.write(`  <Folder><name>Custom Icon Templates</name><visibility>0</visibility>\n`);
+    for (const iconName of customIconNames) {
       const id = customIconStyleId(iconName);
-      return `<Placemark><name>${escXml(`Template: ${iconName}`)}</name><styleUrl>#${id}</styleUrl><Point><coordinates>${tplLon},${tplLat},0</coordinates></Point></Placemark>`;
-    }).join('');
-    folders.push(`<Folder><name>Custom Icon Templates</name><visibility>0</visibility>${templatePlacemarks}</Folder>`);
+      ws.write(`    <Placemark><name>${escXml(`Template: ${iconName}`)}</name><styleUrl>#${id}</styleUrl><Point><coordinates>${tplLon},${tplLat},0</coordinates></Point></Placemark>\n`);
+    }
+    ws.write(`  </Folder>\n`);
   }
 
-  const kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-<Document>
-  <name>${escXml(docName)}</name>
-  ${styles}
-  ${folders.join('\n  ')}
-</Document>
-</kml>`;
+  ws.write(`</Document>\n</kml>`);
+  
+  await new Promise(resolve => ws.end(resolve));
 
   onProgress('📦 Zipping into KMZ…');
   const zip = new JSZip();
-  zip.file('doc.kml', kml);
+  zip.file('doc.kml', fs.createReadStream(tmpKmlPath));
 
-  // Bundle icon files into files/ so they're available for use in Google Earth
   const zippedIcons = new Set();
   for (const icon of bundledIcons) {
     const src = findIconSource(icon);
@@ -515,15 +538,12 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     }
   }
 
-  // Auto-bundle user custom icons from icons/*.png into files/
   for (const iconDir of iconDirs) {
     if (!fs.existsSync(iconDir)) continue;
     let entries = [];
     try {
       entries = fs.readdirSync(iconDir, { withFileTypes: true });
-    } catch (_) {
-      continue;
-    }
+    } catch (_) { continue; }
     for (const ent of entries) {
       if (!ent.isFile()) continue;
       if (!/\.png$/i.test(ent.name)) continue;
@@ -533,7 +553,6 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
       zippedIcons.add(ent.name);
     }
   }
-  // Also bundle any additional icons referenced in layer styles
   for (const colors of Object.values(runtimeStyles)) {
     if (colors.icon) {
       const iconName = path.basename(colors.icon);
@@ -544,14 +563,23 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     }
   }
 
-  // Bundle ground overlay images
   for (const ov of groundOverlays) {
     zip.file(`files/wind_tile_${ov.tileKey || '0'}.png`, ov.imageBuffer);
   }
 
-  const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  fs.writeFileSync(outputPath, buffer);
+  await new Promise((resolve, reject) => {
+    zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true, compression: 'DEFLATE' })
+      .pipe(fs.createWriteStream(outputPath))
+      .on('finish', resolve)
+      .on('error', reject);
+  });
   onProgress(`💾 Saved KMZ → ${outputPath}`);
+  } finally {
+    // Always clean up the temp KML, whether we succeeded or blew up partway
+    // through (bad geometry, disk full, zip stream error, etc).
+    try { ws.destroy(); } catch (_) {}
+    try { fs.unlinkSync(tmpKmlPath); } catch (_) {}
+  }
 }
 
 module.exports = { exportKMZ };
