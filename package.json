@@ -7,7 +7,7 @@
     "electron": "electron . --no-sandbox",
     "electron:wpd": "electron wpd/main.js --no-sandbox",
     "electron:dev": "electron . --no-sandbox --inspect",
-    "electron:dev:admin": "electron . --no-sandbox --inspect",
+    "electron:dev:admin": "electron . --role=admin --no-sandbox --inspect",
     "build:electron:win": "electron-builder --win --x64",
     "build:electron:wpd:win": "electron-builder --win --config wpd/electron-builder.wpd.json",
     "build:electron:linux": "electron-builder --linux",
@@ -39,13 +39,7 @@
     "linux": {
       "target": "AppImage"
     },
-    "asarUnpack": [
-      "script.js",
-      "gui.html",
-      "src/**",
-      "houses.png",
-      "windmill.png"
-    ]
+    "asar": false
   },
   "keywords": [],
   "author": "",

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a Windows .exe from Linux.
+# Build a Windows .exe from Linux/macOS.
 # Avoids the Windows symlink privilege error by installing with --no-bin-links.
 set -e
 
@@ -17,7 +17,16 @@ rsync -a \
 # Install without creating ANY symlinks (fixes Windows extraction error)
 cd "$BUILD_DIR"
 echo "→ Running npm install --no-bin-links ..."
+export PUPPETEER_SKIP_DOWNLOAD=true
 npm install --no-bin-links --prefer-offline 2>&1 | tail -5
+
+# Download windows node.exe if not present in the staging folder
+if [ ! -f "win-node/node.exe" ]; then
+  echo "→ Downloading Windows node.exe..."
+  mkdir -p win-node
+  NODE_VERSION=$(node -v)
+  curl -sSL -o win-node/node.exe "https://nodejs.org/dist/${NODE_VERSION}/win-x64/node.exe"
+fi
 
 # Build using caxa from the original project (it stays in main node_modules)
 echo "→ Running caxa ..."

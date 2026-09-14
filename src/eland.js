@@ -520,7 +520,7 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
     }
     onProgress('✅ Logged in. Starting batch lookup…');
 
-    const cadnums = readCadnums(csvPath);
+    const cadnums = Array.isArray(csvPath) ? csvPath : readCadnums(csvPath);
     onProgress(`📋 ${cadnums.length} cadastral numbers to look up`);
 
     const ensureLookupPage = async () => {
@@ -647,6 +647,11 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
       }
 
       await new Promise(r => setTimeout(r, 200));
+    }
+
+    if (outputFormat === 'json') {
+      await browser.close();
+      return { success: true, count: results.length, data: results };
     }
 
     if (outputFormat === 'docx') {

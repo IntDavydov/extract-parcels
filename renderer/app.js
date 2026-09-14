@@ -664,7 +664,13 @@ document.getElementById('parcel-fetch-mode').addEventListener('change', (e) => {
   document.getElementById('field-boundary').style.display = (isCadnum || isCustom || isKadastr || isCoords || isEland) ? 'none' : 'block';
   document.getElementById('field-area-names').style.display = (isCustom || isCadnum || isKadastr || isCoords || isEland) ? 'none' : 'block';
   document.getElementById('field-osm-layers').style.display = mode === 'boundary' ? 'block' : 'none';
-  document.getElementById('step-options-title').style.display = mode === 'boundary' ? 'flex' : 'none';
+  document.getElementById('field-kadastr-options').style.display = (mode === 'boundary' || isKadastr || isCadnum) ? 'block' : 'none';
+  document.getElementById('step-options-title').style.display = (mode === 'boundary' || isKadastr || isCadnum) ? 'flex' : 'none';
+  if (isKadastr || isCadnum) {
+    document.getElementById('step-options-title').querySelector('span').textContent = '3. Kadastr Options';
+  } else if (mode === 'boundary') {
+    document.getElementById('step-options-title').querySelector('span').textContent = '3. Optional layers';
+  }
   
   // Show boundary file picker for custom/kadastr/coords modes
   if (isCustom) {
@@ -1135,6 +1141,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   const rawInput      = document.getElementById('area-name').value.trim();
   const parcelSource  = getParcelSource();
   const isFullParcels = document.getElementById('chk-full-parcels').checked;
+  const fetchDetailedRegistry = document.getElementById('chk-detailed-registry').checked;
   const areas         = rawInput.split('...').map(s => s.trim()).filter(Boolean);
   const territory     = areas[0] || '';
   const isMultiArea   = !isFullParcels && areas.length > 1;
@@ -1177,7 +1184,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const res = await window.api.startScraping(startUrl, outputFolder,
-          { headless: true, boundaryFilter: boundaryPath, parcelSource: source });
+          { headless: true, boundaryFilter: boundaryPath, parcelSource: source, fetchDetailedRegistry });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         parcelsGot = res.parcels || 0;
@@ -1442,58 +1449,68 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   // ══════════════════════════════════════════════════════════
   // SINGLE AREA MODE
   // ══════════════════════════════════════════════════════════
-  const safeFilename = sanitizeFilename(territory || 'land_plots');
-  initRunProgress(1, 'Single-area run');
-  const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
-  const kadastrTemp  = outputFolder + '/land_plots.kmz';
-  const osmTemp      = outputFolder + '/_osm_temp.kmz';
-  const boundaryBbox = boundaryFiles[0] || null;
-  const bf           = null;
-  let hasKadastr     = false;
+  try {
+    const safeFilename = sanitizeFilename(territory || 'land_plots');
+    initRunProgress(1, 'Single-area run');
+    const finalOutput  = await window.api.resolveOutputPath(outputFolder, safeFilename);
+    const kadastrTemp  = outputFolder + '/land_plots.kmz';
+    const osmTemp      = outputFolder + '/_osm_temp.kmz';
+    const boundaryBbox = boundaryFiles[0] || null;
+    const bf           = fetchMode === 'both' ? boundaryBbox : null;
+    let hasKadastr     = false;
 
-  if (bf) {
-    const scrapeRes = await scrapeOne(bf, territory || bf.name);
-    if (scrapeRes.tiles === 0) {
-      appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}. Stopping.`);
-      tickRunProgress(false, 'Single-area scrape failed');
-      setBusy(false); return;
+    if (bf) {
+      const scrapeRes = await scrapeOne(bf, territory || bf.name);
+      if (scrapeRes.tiles === 0) {
+        appendLog(`❌ No tiles/parcels after retries on ${getParcelSourceLabel(parcelSource)}. Stopping.`);
+        tickRunProgress(false, 'Single-area scrape failed');
+        setBusy(false); return;
+      }
+      hasKadastr = true;
+      if (userStopped) { appendLog('ℹ Stopped — saved as land_plots.kmz'); setBusy(false); return; }
     }
-    hasKadastr = true;
-    if (userStopped) { appendLog('ℹ Stopped — saved as land_plots.kmz'); setBusy(false); return; }
-  }
 
-  if (layers.length > 0) {
-    appendLog(`\n━━━ Phase 2: OSM layers [${layers.join(', ')}] ━━━`);
-    const osmResult = await window.api.fetchOSM({
-      territory, layers, outputPath: osmTemp, format: 'kmz',
-      windOptions: layerOptions, fallbackBbox: boundaryBbox?.bbox || null,
-    });
-    if (!osmResult.success) {
-      appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);
-      if (hasKadastr) appendLog(`ℹ Kadastr data saved as land_plots.kmz`);
-      tickRunProgress(false, 'OSM fetch failed');
-      setBusy(false); return;
-    }
-    const toMerge = hasKadastr ? [kadastrTemp, osmTemp] : [osmTemp];
-    appendLog(hasKadastr ? '\n📦 Merging KMZ files…' : '');
-    const mergeResult = await window.api.mergeKmz(toMerge, finalOutput, true, undefined, 'Analytics');
-    if (mergeResult.success) {
-      appendLog(`\n✅ Done → ${finalOutput}`);
+    if (layers.length > 0) {
+      appendLog(`\n━━━ Phase 2: OSM layers [${layers.join(', ')}] ━━━`);
+      const osmResult = await window.api.fetchOSM({
+        territory,
+        layers,
+        outputPath: osmTemp,
+        format: 'kmz',
+        windOptions: layerOptions,
+        fallbackBbox: boundaryBbox?.bbox || null,
+        customBoundaryPaths: boundaryFiles.length ? boundaryFiles.map(bf => bf.path) : null,
+      });
+      if (!osmResult.success) {
+        appendLog(`[ERROR] OSM fetch failed: ${osmResult.error}`);
+        if (hasKadastr) appendLog(`ℹ Kadastr data saved as land_plots.kmz`);
+        tickRunProgress(false, 'OSM fetch failed');
+        setBusy(false); return;
+      }
+      const toMerge = hasKadastr ? [kadastrTemp, osmTemp] : [osmTemp];
+      appendLog(hasKadastr ? '\n📦 Merging KMZ files…' : '');
+      const mergeResult = await window.api.mergeKmz(toMerge, finalOutput, true, undefined, 'Analytics');
+      if (mergeResult.success) {
+        appendLog(`\n✅ Done → ${finalOutput}`);
+        window.api.copyIcons(outputFolder);
+        addResultEntry(finalOutput, 'KMZ');
+        window.api.showInFolder(finalOutput);
+        tickRunProgress(true, 'Single-area run done');
+      } else { appendLog(`[ERROR] Merge failed: ${mergeResult.error}`); }
+      if (!mergeResult.success) tickRunProgress(false, 'Single-area merge failed');
+    } else {
+      appendLog(`\n✅ Done → ${kadastrTemp}`);
       window.api.copyIcons(outputFolder);
-      addResultEntry(finalOutput, 'KMZ');
-      window.api.showInFolder(finalOutput);
+      addResultEntry(kadastrTemp, 'KMZ');
+      window.api.showInFolder(kadastrTemp);
       tickRunProgress(true, 'Single-area run done');
-    } else { appendLog(`[ERROR] Merge failed: ${mergeResult.error}`); }
-    if (!mergeResult.success) tickRunProgress(false, 'Single-area merge failed');
-  } else {
-    appendLog(`\n✅ Done → ${kadastrTemp}`);
-    window.api.copyIcons(outputFolder);
-    addResultEntry(kadastrTemp, 'KMZ');
-    window.api.showInFolder(kadastrTemp);
-    tickRunProgress(true, 'Single-area run done');
+    }
+  } catch (err) {
+    appendLog(`[ERROR] Unexpected error: ${err.message}`);
+    console.error(err);
+  } finally {
+    setBusy(false);
   }
-
-  setBusy(false);
 });
 
 // ── e.land.gov.ua Lookup ────────────────────────────────────

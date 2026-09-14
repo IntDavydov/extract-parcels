@@ -96,10 +96,29 @@ function featureToKml(f, styleId) {
   const geom = f.geometry;
   if (!geom) return '';
   const name = f.properties?.name || f.properties?.ref || '';
-  const desc = Object.entries(f.properties || {})
-    .filter(([k]) => !k.startsWith('_') && k !== 'name')
-    .map(([k, v]) => `${escXml(String(k))}: ${escXml(String(v))}`)
-    .join('&#10;');
+  
+  let desc = '';
+  if (f.properties?.sections && Array.isArray(f.properties.sections)) {
+    const cadnum = f.properties['Кадастровий номер земельної ділянки'] || f.properties.cadnum || '';
+    let html = `<table style="font-family:Arial,sans-serif;font-size:12px;border-collapse:collapse;width:100%;">`;
+    html += `<tr><td colspan="2" style="font-weight:bold;font-size:14px;padding-bottom:10px;">Кадастровий номер: ${escXml(String(cadnum))}</td></tr>`;
+    for (const section of f.properties.sections) {
+      for (const row of section.rows) {
+        if (row.label.toLowerCase().includes('кадастровий номер')) continue;
+        html += `<tr>`;
+        html += `<td style="padding:4px;border-bottom:1px solid #ccc;color:#555;width:40%;">[${escXml(String(section.title))}] ${escXml(String(row.label))}</td>`;
+        html += `<td style="padding:4px;border-bottom:1px solid #ccc;font-weight:bold;">${escXml(String(row.value))}</td>`;
+        html += `</tr>`;
+      }
+    }
+    html += `</table>`;
+    desc = `<![CDATA[${html}]]>`;
+  } else {
+    desc = Object.entries(f.properties || {})
+      .filter(([k]) => !k.startsWith('_') && k !== 'name' && k !== 'sections' && k !== 'fieldOrder' && k !== 'error')
+      .map(([k, v]) => `${escXml(String(k))}: ${escXml(String(v))}`)
+      .join('&#10;');
+  }
 
   let geomKml = '';
 

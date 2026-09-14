@@ -8,6 +8,10 @@ const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
 const { generateResearchXlsx, stopResearch } = require('./src/research');
 
+function getUnpackedPath(...parts) {
+  return path.join(__dirname, ...parts);
+}
+
 function getAppRole() {
   const roleArg = process.argv.find((arg) => arg.startsWith('--role='));
   const role = roleArg ? roleArg.split('=')[1] : '';
@@ -19,11 +23,7 @@ process.env.APP_ROLE = APP_ROLE;
 
 // Ensure Puppeteer's bundled Chrome is downloaded (runs once, ~100 MB)
 async function ensurePuppeteerChrome() {
-  // When packaged, load puppeteer from app.asar.unpacked to avoid asar path issues
   function loadPuppeteer() {
-    if (app.isPackaged) {
-      return require(path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer'));
-    }
     return require('puppeteer');
   }
 
@@ -35,9 +35,7 @@ async function ensurePuppeteerChrome() {
 
   // Chrome missing — download it via puppeteer's CJS install API
   try {
-    const installPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'puppeteer', 'lib', 'cjs', 'puppeteer', 'node', 'install.js')
-      : path.join(__dirname, 'node_modules', 'puppeteer', 'lib', 'cjs', 'puppeteer', 'node', 'install.js');
+    const installPath = path.join(__dirname, 'node_modules', 'puppeteer', 'lib', 'cjs', 'puppeteer', 'node', 'install.js');
     const installMod = require(installPath);
     await installMod.downloadBrowsers();
   } catch (e) {
@@ -310,7 +308,7 @@ app.on('window-all-closed', () => {
 });
 
 // IPC: start parcel scraping (kadastrova-karta.com)
-ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, cadnumFilter, gridCells, parcelSource }) => {
+ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boundaryFilter, cadnumFilter, gridCells, parcelSource, fetchDetailedRegistry }) => {
   if (scrapingProcess) {
     try { scrapingProcess.kill('SIGINT'); } catch (_) {}
     scrapingProcess = null;
@@ -330,6 +328,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   if (cadnumFilter)    env.CADNUM_FILTER = cadnumFilter;
   if (gridCells && gridCells.length) env.GRID_CELLS = JSON.stringify(gridCells);
   if (parcelSource) env.PARCEL_SOURCE = String(parcelSource);
+  if (fetchDetailedRegistry) env.FETCH_DETAILED_REGISTRY = '1';
 
   // Ensure Chrome is available (downloads on first run if needed)
   event.sender.send('log', '🔍 Checking Chrome availability...');

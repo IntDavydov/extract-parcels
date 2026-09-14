@@ -714,6 +714,32 @@ function setupGracefulShutdown(browser) {
         features = await enrichFeaturesFromGeoserver(features);
       }
 
+      // Fetch detailed registry data if requested
+      if (process.env.FETCH_DETAILED_REGISTRY === '1' && features.length > 0) {
+        console.log(`\n========================================`);
+        console.log(`Fetching Detailed Registry Data for ${features.length} parcels...`);
+        console.log(`========================================\n`);
+        const { lookupEland } = require(path.join(__dirname, 'src', 'eland.js'));
+        const cadnums = features.map(f => String(f.properties?.cadnum || f.properties?.cad_num || f.properties?.cadastral_number || '').trim()).filter(Boolean);
+        try {
+          const elandResult = await lookupEland(cadnums, '', 'json', (msg) => console.log(msg), {});
+          if (elandResult && elandResult.data) {
+            const elandMap = new Map();
+            for (const row of elandResult.data) {
+              if (row.cadnum) elandMap.set(row.cadnum, row);
+            }
+            for (const f of features) {
+              const c = String(f.properties?.cadnum || f.properties?.cad_num || f.properties?.cadastral_number || '').trim();
+              if (elandMap.has(c)) {
+                f.properties = { ...f.properties, ...elandMap.get(c) };
+              }
+            }
+          }
+        } catch (e) {
+          console.error(`Error fetching detailed registry data: ${e.message}`);
+        }
+      }
+
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
       console.log(`\nFinal stats:`);
       console.log(`  Tiles processed: ${state.processedTiles.size}`);

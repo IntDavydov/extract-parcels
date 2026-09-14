@@ -1,0 +1,286 @@
+{
+  "cambridge_fce": {
+    "exam_centers": [
+      {
+        "name": "Englisches Institut Köln",
+        "address": "Gertrudenstr. 24–28, 50667 Köln",
+        "phone": "+49 221 50 99 100 (estimated; not confirmed from pages)",
+        "booking_url": "https://englisches-institut-koeln.de/de/b2-first-cambridge-english-qualifikation/",
+        "exam_fee_eur": "275 (digital, early registration); 305 (late registration, incl. 30 EUR late fee)",
+        "2025_2026_dates": [
+          "12 Sep 2026 (digital, late)",
+          "18 Sep 2026 (digital, late)",
+          "01 Oct 2026 (digital)",
+          "05 Nov 2026 (digital)",
+          "21 Nov 2026 (digital)",
+          "24 Nov 2026 (paper-based)",
+          "05 Dec 2026 (digital)",
+          "18 Dec 2026 (digital)"
+        ],
+        "results_turnaround": "5–10 working days (digital); up to 4 weeks (paper-based)",
+        "notes": "Primary Cambridge exam center in Cologne. Exam center also may use external location if participant numbers are high. Minimum 3 candidates required."
+      },
+      {
+        "name": "VHS Düsseldorf (subcentre of VHS NRW Landesverband)",
+        "address": "Yorckstr. 23, 40476 Düsseldorf",
+        "booking_url": "https://vhs.duesseldorf.de/programm/sprachen/englisch/pruefungsangebote-cambridge-englisch-qualifications",
+        "exam_fee_eur": "259 (B2 First, via VHS NRW pricing valid from Aug 2026)",
+        "2025_2026_dates": [
+          "07 Oct 2026 (digital)",
+          "09 Dec 2026 (digital)",
+          "21 Nov 2026 (paper-based)"
+        ],
+        "notes": "~35 km from Cologne. Part of VHS NRW Landesverband Maincentre network. Also offers C1 Advanced, C2 Proficiency."
+      },
+      {
+        "name": "VHS NRW Landesverband (Maincentre with sub-centers)",
+        "address": "Landesverband der Volkshochschulen von NRW e.V., Friedrich-Ebert-Straße 45, 40213 Düsseldorf",
+        "booking_url": "https://www.vhs-nrw.de/sprachenzertifikate/cambridge-english-zertifikate/",
+        "exam_fee_eur": "259 (B2 First standard); 211 (school project discounted rate)",
+        "sub_centers": [
+          "VHS Bielefeld – Ravensberger Park 1, 33607 Bielefeld",
+          "VHS Münster – Aegidiistr. 70, 48143 Münster",
+          "VHS Wuppertal (Bergische VHS) – Auer Schulstr. 20, 42103 Wuppertal"
+        ],
+        "notes": "VHS NRW is a Cambridge Maincentre. Sub-centers offer B2 First. Contact respective centers for exam dates."
+      },
+      {
+        "name": "Stevens English Training (Essen)",
+        "address": "Essen, NRW",
+        "booking_url": "mailto:office@stevens-english.de",
+        "exam_fee_eur": "Not confirmed from pages; contact directly",
+        "notes": "Listed on Cambridge official site as exam center in NRW. Offers B1 Preliminary paper-based (Nov 2026). Likely offers B2 First too."
+      }
+    ],
+    "prep_courses_cologne": {
+      "englisches_institut_koeln": {
+        "url": "https://englisches-institut-koeln.de/de/vorbereitungskurse-cambridge-english-qualifikationen/b2-first/",
+        "address": "Gertrudenstr. 24–28, 50667 Köln (Neumarkt area)",
+        "courses": [
+          {
+            "type": "Crash-Kurs (intensive)",
+            "schedule": "6 sessions, 1×/week, 3 Unterrichtsstunden each = 18 UE total",
+            "price_eur": "Not explicitly listed per course; monthly rate applies",
+            "intensity": "Low (1×/week)"
+          },
+          {
+            "type": "Last-Minute-Workshop",
+            "schedule": "4 sessions, 2×/week, 2 UE each = 8 UE total",
+            "price_eur": "Not explicitly listed",
+            "intensity": "Medium (2×/week)"
+          },
+          {
+            "type": "Fortlaufende Kurse (ongoing) – B2 level Monday+Wednesday evening",
+            "schedule": "Mon+Wed, 19:30–21:00, ongoing, entry anytime",
+            "price_eur": "159/month",
+            "intensity": "2×/week, 1.5h each = 3h/week"
+          },
+          {
+            "type": "Fortlaufende Kurse (ongoing) – B2 level Monday evening",
+            "schedule": "Mon, 18:00–20:30, ongoing, entry anytime",
+            "price_eur": "297/month",
+            "intensity": "1×/week, 2.5h = 2.5h/week"
+          }
+        ],
+        "notes": "Courses are online/live-online or in-person. Einstieg jederzeit möglich (entry anytime). Includes exam format training, practice tests, strategies."
+      },
+      "vhs_koeln": {
+        "url": "https://www.koelner-vhs.de/kurse/sprachen/englisch/pruefungsvorbereitung",
+        "address": "Various locations in Cologne",
+        "courses": "VHS Köln offers English B2 courses and exam preparation category, but no specific B2 First prep course was found on their current program page. VHS Köln course pricing: ~1.20 EUR/lesson with integration permit; ~3.00 EUR/lesson without. Standard VHS English evening courses (B2): typically 10-12 sessions × 2-2.5h, approx. 120-180 EUR total.",
+        "notes": "VHS Köln does not appear to be a direct Cambridge exam center (the exam is administered by the VHS NRW Landesverband from Düsseldorf). VHS Köln offers preparation courses for Cambridge exams but candidates must travel to Düsseldorf or other exam centers for the actual test. Check VHS Köln course finder for current B2 First prep course offerings."
+      },
+      "ils": {
+        "url": "https://www.ils.de/fernkurse/cambridge-first-certificate-english-2/",
+        "address": "ILS – Deutschland's größte Fernschule, headquartered in Hamburg (distance learning)",
+        "courses": [
+          {
+            "type": "Fernstudium Cambridge FCE – 2. Einstieg (distance learning)",
+            "schedule": "Start jederzeit; 15 months at ~10h/week; free 9-month extension; 4-week free trial",
+            "price_eur": "Price not publicly listed – must request free info package (kostenlos anfordern). Likely several hundred EUR for full course. 100% förderungsfähig with Bildungsgutschein (AZAV).",
+            "intensity": "Self-paced, ~10h/week recommended"
+          }
+        ],
+        "notes": "ILS is a distance learning provider, not an exam center. The course prepares you for the exam but you still need to book and take the exam at a Cambridge center (e.g., Englisches Institut Köln, VHS Düsseldorf). Statelich zugelassen (Zentralstelle für Fernunterricht Köln, Nr. 4108025). Includes KILEA AI learning assistant."
+      },
+      "berlitz_cologne": {
+        "url": "https://www.berlitz.com/en-de/language-centers/cologne",
+        "address": "Schildergasse 72–74, 50667 Köln (near Neumarkt/Hauptbahnhof)",
+        "phone": "+49 221 277 39 0",
+        "courses": "Berlitz Cologne offers English group and individual courses, exam preparation for Cambridge, IELTS, TOEFL. Specific B2 First prep course pricing not publicly listed – must request quote. Group course pricing in Germany: B1/B2 level group courses typically ~1,025 EUR per level (per Reddit report). Individual instruction (1-on-1) significantly more expensive. Berlitz Total Immersion: 60 lessons over 5 days (12 lessons/day). Berlitz is also an official test center for telc, TOEFL, and Cambridge exams.",
+        "notes": "Berlitz Cologne is an authorized exam center for multiple certifications (telc, TOEFL iBT, Cambridge). They can both prep you AND administer the exam, but Cambridge B2 First exam administration at Berlitz Cologne is not confirmed on their site – they list it as a certified partner but exam dates must be confirmed. Expensive compared to VHS and Englisches Institut."
+      }
+    },
+    "summary": "Cambridge B2 First FCE in Cologne region: Primary exam center is Englisches Institut Köln (Gertrudenstr. 24-28). Exam fee €275 (digital). Multiple exam dates throughout 2026. VHS Düsseldorf is closest alternative (~35km). No exam centers confirmed in Bonn or Aachen for Cambridge B2 First. Prep courses: Englisches Institut offers ongoing B2 prep courses from €159/month; VHS (Düsseldorf/Köln) offers prep; ILS offers distance learning; Berlitz offers premium in-person prep. Total cost for exam + 1 month prep: approx. €275 + €159 (EI) to €275 + €258+ (VHS)."
+  },
+  "ielts": {
+    "test_centers_cologne": [
+      {
+        "name": "British Council Germany – Englisches Institut Köln",
+        "address": "Gertrudenstr. 24–28, 50667 Köln",
+        "booking_url": "https://ielts.org/test-centres/british-council-englisches-institut-koln",
+        "cost_eur": "276 (computer-based, Academic and General Training)",
+        "notes": "This is the primary IELTS test center in Cologne. Computer-based tests available. Speaking test slot can be chosen. Results: 3-5 working days for computer-based."
+      },
+      {
+        "name": "British Council – Aachen",
+        "address": "Aachen, NRW",
+        "booking_url": "https://ieltsregistration.britishcouncil.org/ors/book-test?country=DE&location=1101",
+        "cost_eur": "286 (computer-based, as of Sep 2026 date listed)",
+        "notes": "IELTS available in Aachen. Alternative if Cologne dates are full."
+      }
+    ],
+    "other_nrw_test_centers": [
+      "Dortmund (British Council)",
+      "Duisburg (British Council – Communikation Akoun & Scholten GmbH, ~57km from Cologne)",
+      "Düsseldorf (British Council – Communikation Akoun & Scholten GmbH Campus, ~34km from Cologne)"
+    ],
+    "uni_koeln_cs_requirements": {
+      "phil_fak_bachelor": "B2 CEFR required: TOEFL iBT 72, IELTS 5.5, Cambridge B2 First (FCE) accepted",
+      "management_economics_social_sciences_bsc": "B2 CEFR required: TOEFL iBT 72, IELTS 5.5, Cambridge B2 First/FCE/BEC Vantage/CAE/CPE, telc B2, TOEIC minimum scores",
+      "english_studies_ba": "B2 CEFR required at start of program",
+      "computational_sciences": "B2 CEFR: TOEFL iBT 72, IELTS 5.5 minimum",
+      "general_note": "Many Uni Köln English-taught programs accept IELTS 5.5 as minimum. Some Master programs may require IELTS 6.5. Always check specific program page."
+    },
+    "th_koeln_cs_requirements": {
+      "international_business_bachelor": "B2 CEFR required: IELTS 6.0, TOEFL iBT 80 (before Jan 2026) or 4.0 (after Jan 2026 – new scoring), Cambridge FCE accepted, TELC 73 points, PTE Academic 66, Trinity ISE II Merit, UNIcert II",
+      "digital_sciences_master": "B2 CEFR: IELTS 6.0, TOEFL iBT 80 (before Jan 2026) or 4.0 (after Jan 2026), TOEFL paper 550, TOEFL computer 213",
+      "automation_it_master": "B2 CEFR: IELTS 6.0, TOEFL iBT 80 (before Jan 2026) or 4.0 (after)",
+      "general_cs_bachelor_note": "TH Köln does not have a standalone 'Computer Science' Bachelor. CS-related programs (e.g., Wirtschaftsinformatik, IT-Management, Digital Sciences Master) require B2 with IELTS 6.0 typically. Check specific program 'How to Apply' page.",
+      "important_note": "TH Köln uses a new TOEFL scoring system from January 21, 2026: TOEFL iBT 4.0 (not the old 80/100 scale). This reflects the updated TOEFL test format."
+    },
+    "summary": "IELTS in Cologne: British Council / Englisches Institut Köln at Gertrudenstr. 24-28. Cost €276 (computer-based). Uni Köln CS-related programs: IELTS 5.5 minimum (B2 CEFR). TH Köln CS-related programs: IELTS 6.0 typically (B2 CEFR). Both universities also accept Cambridge B2 First and TOEFL iBT. IELTS results in 3-5 days (computer-based) – fastest of all options."
+  },
+  "toefl": {
+    "test_centers_near_cologne": {
+      "cologne_itself": "No TOEFL iBT test center in Cologne city",
+      "nearest": [
+        {
+          "city": "Düsseldorf",
+          "distance_from_cologne": "~34 km",
+          "notes": "TOEFL iBT test center available (ETS-authorized)"
+        },
+        {
+          "city": "Dortmund",
+          "distance_from_cologne": "~70 km",
+          "notes": "TOEFL iBT test center available"
+        },
+        {
+          "city": "Oestrich-Winkel",
+          "distance_from_cologne": "~120 km",
+          "notes": "TOEFL iBT test center (near Wiesbaden/Rheingau)"
+        }
+      ],
+      "toefl_itp_in_cologne": {
+        "center": "inlingua Köln",
+        "address": "inlingua Köln (exact address not captured)",
+        "notes": "TOEFL ITP (Institutional Testing Program) available at inlingua Köln. HOWEVER: TOEFL ITP is NOT accepted for university admission – it's an institutional practice test, not the iBT. Only TOEFL iBT is accepted by German universities."
+      }
+    },
+    "cost": {
+      "toefl_ibt_germany": "US$280 (approx. €243–280 depending on exchange rate; ETS lists $280 for Germany)",
+      "late_registration": "US$40 additional (register within 7 days of test date)",
+      "reschedule_fee": "US$60",
+      "currency_note": "Paid in USD via ETS website; EUR equivalent varies with exchange rate"
+    },
+    "results_turnaround": "4-8 days (iBT); official score reports sent within 2-3 weeks"
+  },
+  "duolingo_accepted": "Duolingo English Test (DET) is NOT accepted by University of Cologne (Uni Köln) or TH Köln for standard admission to English-taught programs. DET is accepted at approximately 50 programs in Germany, mostly private universities (IU Internationale Hochschule, Constructor University, GISMA Business School, Munich Business School, Bard College Berlin, Berlin School of Business and Innovation, University of Europe for Applied Sciences, Technische Universität Berlin – some programs). There is unconfirmed information suggesting University of Cologne 'might' accept DET score 105+, but this is NOT listed on official Uni Köln admission pages. For public universities (Uni Köln, TH Köln), stick to IELTS, TOEFL iBT, or Cambridge B2 First. DET is fast (results in 2 days) and cheap (~$59 USD) but carries recognition risk in Germany.",
+  "fastest_path": "Fastest path from zero certificate to valid certificate for German university admission in Cologne region:\n\nPHASE 1 – Assess current level (Day 1-2):\n- Take free Cambridge online level test (cambridgeenglish.org/de/test-your-english) or VHS placement test\n- If already B2: skip to Phase 3\n- If A2/B1: need intensive preparation (Phase 2)\n\nPHASE 2 – Intensive preparation (4-12 weeks depending on starting level):\n- BEST: Englisches Institut Köln intensive crash course or ongoing B2 course (€159-297/month) + self-study\n- ALTERNATIVE: VHS B2 course + Cambridge prep materials (free from Cambridge website)\n- SELF-STUDY: Cambridge free preparation materials + practice tests + Grammar in Use + online platforms (GlobalExam, IELTS Liz, BBC Learning English)\n- If starting from zero (A0): NOT possible in 1 month; need 6-12 months minimum to reach B2\n\nPHASE 3 – Choose and book exam (Week 1-2 of final month):\n- FASTEST: IELTS computer-based at British Council Köln – €276, results in 3-5 working days, multiple test dates per month, book online instantly\n- ALTERNATIVE: Cambridge B2 First digital at Englisches Institut Köln – €275, results in 5-10 working days, need to book by deadline\n- SLOWEST: TOEFL iBT – must travel to Düsseldorf/Dortmund (~34-70km), $280 USD (~€260), results in 4-8 days\n\nPHASE 4 – Receive certificate and apply:\n- IELTS: 3-5 days after exam\n- Cambridge B2 First: 5-10 working days after exam (digital)\n- TOEFL iBT: 4-8 days\n\nFASTEST TOTAL TIMELINE (from B2 level):\n1. Book IELTS computer-based at British Council Köln: ~1 week to secure slot\n2. Take exam: 1 day\n3. Receive results: 3-5 working days\n4. Total: ~2 weeks from booking to valid certificate\n\nFASTEST FROM ZERO (absolute beginner):\n- Not possible in 1 month. Realistic minimum: 3-6 months intensive study to reach B2, then 2 weeks for IELTS. Total: ~3-6.5 months.\n\nRECOMMENDED FAST TRACK (if at B1/B2 level):\n1. Take free level test today\n2. Book IELTS computer-based at British Council Köln for 2-3 weeks from now\n3. Use those 2-3 weeks for intensive self-study with free Cambridge/IELTS materials + practice tests\n4. Take exam, get results in 3-5 days\n5. Submit certificate with university application\nTotal: ~4 weeks from today to valid certificate (if already B1/B2 level)",
+  "refugee_discounts": "Refugee discounts for English language exams and courses in NRW are limited and mostly apply to German language (not English):\n\n1. BAMF Integration Courses (Deutsch für Zuwanderer): Free or heavily subsidized for recognized refugees, asylum seekers, and tolerated persons. Covers German up to B1, NOT English. Administered through VHS. Contact BAMF or local Ausländerbehörde for eligibility.\n\n2. Bildungsgutschein (Agentur für Arbeit / Arbeitsagentur): 100% funding for eligible unemployed or soon-to-be-unemployed individuals. Covers approved AZAV-certified courses including English at providers like ILS (100% förderungsfähig for their Cambridge FCE Fernkurs), some Berlitz courses (AVGS training voucher eligible for individual English instruction A2-C1). Must be referred by Agentur für Arbeit. Not specifically for refugees but refugees with employment status may qualify.\n\n3. VHS course fees: Standard VHS English courses are already relatively affordable (~€120-180 for a course). No specific refugee discount for English courses found at VHS Köln. Some VHS locations offer reduced fees for those with 'Bildungsurlaub' status or low-income concessions.\n\n4. University refugee programs (German language only): TH Köln offers German preparatory courses for refugees (German C1 with DSH exam); TU Dortmund, Uni Siegen, HS Niederrhein, HAWK offer free/subsidized German courses for refugees aiming for university entrance. These are for German language, NOT English.\n\n5. Cambridge exam fees: No refugee discount for Cambridge B2 First exam fees. Standard fee €275 at Englisches Institut Köln; €259 via VHS NRW. School project discount (€211) only for school students.\n\n6. IELTS: No refugee discount; standard €276.\n\n7. Practical advice: If you have refugee status and receive benefits (BAföG, Bürgergeld, etc.), check with your case worker whether language courses for university admission can be covered as part of integration or education support. The Agentur für Arbeit 'Bildungsgutschein' is the most likely funding route for English courses if you're registered as jobseeking.",
+  "self_study_1month_realistic": "Self-study for B2 certificate in 1 month from ZERO is NOT realistic.\n\nRealistic assessment by starting level:\n- From ZERO (A0/A1): Absolutely not possible in 1 month. CEFR B2 requires 500-600 guided learning hours from scratch. 1 month at 4h/day = 120 hours → maybe A2.\n- From A2: Not realistic for B2 in 1 month. Need ~200-300 hours to reach B2 from A2. 1 month intensive (4h/day = 120h) → B1.\n- From B1: Possible to solidify B1 and progress toward B2 with intensive study (120h in 1 month), but passing a B2 exam requires exam-specific preparation. Might be borderline.\n- From solid B2: 1 month of focused exam prep (practice tests, format training) IS realistic to pass B2 First or IELTS.\n\nFor university admission (B2 required):\n- If you already have B1/B2 level: 1 month self-study + exam is feasible, especially with IELTS (computer-based, fast results).\n- If you're below B1: Need minimum 2-3 months intensive study before attempting any B2-level exam.\n\nBest self-study resources:\n- Cambridge free preparation materials (cambridgeenglish.org/de/learning-english/exam-preparation/)\n- IELTS Liz (ieltsliz.com) – free IELTS prep\n- BBC Learning English (bbc.co.uk/learningenglish)\n- GlobalExam (global-exam.com) – 유료 but has free trial\n- English Grammar in Use (Raymond Murphy) – intermediate/upper-intermediate\n- British Council LearnEnglish (learnenglish.britishcouncil.org)\n- YouTube: Englisches Institut Köln, Cambridge English channel\n\nSelf-study can work for reaching B2 from B1 in 2-3 months with daily 3-4h study. For exam-specific prep, 1 month is realistic if you already have the language level.",
+  "recommendation": "RECOMMENDATION: IELTS computer-based at British Council / Englisches Institut Köln.\n\nWHY IELTS is the best choice for your situation:\n1. FASTEST: Results in 3-5 working days (vs. 5-10 for Cambridge digital, 4-8 for TOEFL)\n2. MOST ACCESSIBLE: Test center in Cologne city (Gertrudenstr. 24-28), no travel needed\n3. BEST ACCEPTANCE: Accepted by Uni Köln (IELTS 5.5 = B2) and TH Köln (IELTS 6.0 for most CS-related programs). More widely accepted than DET and more flexible than Cambridge.\n4. BOOKING SPEED: Multiple test dates per month, book online instantly, no registration deadlines like Cambridge\n5. PREPARATION: Abundant free self-study materials online (IELTS Liz, British Council, YouTube)\n6. COST: €276 – similar to Cambridge €275, cheaper than TOEFL ($280 USD ~ €260)\n\nWHEN TO CHOOSE CAMBRIDGE B2 FIRST INSTEAD:\n- If the specific university program explicitly requires 'Cambridge B2 First' (some do)\n- If you want a lifelong certificate (IELTS expires after 2 years, Cambridge is valid for life, though universities may require recent results)\n- If you're already enrolled in a Cambridge prep course (e.g., at Englisches Institut Köln)\n- If you want recognition beyond university (employer recognition of Cambridge is strong in Europe)\n\nWHEN TO CHOOSE TOEFL iBT:\n- If your target program specifically requires TOEFL (check program page)\n- If you're already in the US system / comfortable with American English\n- NOT recommended for Cologne region: no local test center, must travel to Düsseldorf/Dortmund\n\nWHEN TO CONSIDER DUOLINGO:\n- NOT recommended for Uni Köln / TH Köln: not accepted\n- Only if applying to private German universities (IU, Constructor, etc.) that accept DET\n\nEXAM ORDER OF PREFERENCE FOR COLOGNE REGION UNIVERSITY ADMISSION:\n1. IELTS computer-based (British Council Köln) – fastest, in-city, best acceptance\n2. Cambridge B2 First digital (Englisches Institut Köln) – same location, similar cost, lifelong certificate\n3. TOEFL iBT (Düsseldorf) – travel required, more expensive\n4. Duolingo DET – NOT accepted by public universities in Cologne\n\nTOTAL ESTIMATED BUDGET (IELTS path):\n- IELTS exam: €276\n- Self-study materials: €0 (free online) to €50 (books/practice tests)\n- Optional prep course (Englisches Institut, 1 month): €159-297\n- TOTAL (exam only, self-study): ~€276-326\n- TOTAL (exam + prep course): ~€435-573",
+  "action_plan": [
+    {
+      "step": 1,
+      "action": "Take a free English level assessment today",
+      "details": "Use Cambridge English free online test (cambridgeenglish.org/de/test-your-english) or VHS placement test (sprachtest.de). Determine if you are A2, B1, B2, or above.",
+      "timing": "Day 1"
+    },
+    {
+      "step": 2,
+      "action": "Check your target university program's exact English requirements",
+      "details": "Go to the specific program page at Uni Köln (studieninteressierte.uni-koeln.de) or TH Köln (th-koeln.de/en/academics/programs) and check the 'How to Apply' section for exact English certificate requirements. Note the minimum IELTS/TOEFL/Cambridge scores.",
+      "timing": "Day 1-2"
+    },
+    {
+      "step": 3,
+      "action": "If at B1/B2 level: book IELTS computer-based at British Council Köln",
+      "details": "Go to ieltsregistration.britishcouncil.org, select Germany > Köln, choose a date 3-4 weeks from now. Pay €276. This gives you 3-4 weeks to prepare intensively.",
+      "timing": "Day 2-3 (book ASAP – slots fill fast)"
+    },
+    {
+      "step": 4,
+      "action": "If below B1: enroll in an intensive English course immediately",
+      "details": "Options: Englisches Institut Köln (ongoing B2 course from €159/month, entry anytime); VHS Köln (English B2 standard course); ILS distance learning (if you prefer self-paced). Target: reach B2 within 2-3 months, then take IELTS.",
+      "timing": "Enroll this week; exam in 2-3 months"
+    },
+    {
+      "step": 5,
+      "action": "Prepare for IELTS using free + low-cost resources (3-4 weeks)",
+      "details": "Free: IELTS Liz (ieltsliz.com), British Council LearnEnglish, Cambridge IELTS practice tests (free samples). Paid: Cambridge IELTS practice test books (~€30), IELTS Official Practice (£), GlobalExam (subscription). Focus on: listening (British accents), reading (academic texts), writing (Task 1 + Task 2), speaking (practice with partner/tutor).",
+      "timing": "Weeks 1-4 before exam"
+    },
+    {
+      "step": 6,
+      "action": "Take the IELTS exam",
+      "details": "Bring valid passport/ID. Arrive on time. Computer-based test: Listening, Reading, Writing on computer in one session (~2h 45min). Speaking test scheduled separately (same day or within a few days) – one-on-one with examiner.",
+      "timing": "Scheduled test date"
+    },
+    {
+      "step": 7,
+      "action": "Receive results and submit to university",
+      "details": "IELTS computer-based results: 3-5 working days via SMS/email. Download Test Report Form (TRF). Submit with university application via uni-assist or directly. Copy of TRF is usually accepted; keep original safe.",
+      "timing": "3-5 days after exam"
+    },
+    {
+      "step": 8,
+      "action": "If IELTS score is below required minimum: consider retake or Cambridge B2 First",
+      "details": "If you scored e.g., IELTS 5.0 but need 5.5 or 6.0: book another IELTS (can retake anytime) OR switch to Cambridge B2 First (register at Englisches Institut Köln, more 준비 time available). Alternatively: check if the university offers a 'probationary' English test or interview (TH Köln International Business offers faculty interview if no certificate at enrollment time).",
+      "timing": "After receiving results"
+    },
+    {
+      "step": 9,
+      "action": "Explore financial support options",
+      "details": "If you have refugee status or receive Bürgergeld/BAföG: inquire at Agentur für Arbeit about Bildungsgutschein for English courses. Check with your case worker (Sozialamt, Jobcenter) if language exam costs can be covered as part of integration support. For ILS distance learning: 100% förderungsfähig with Bildungsgutschein.",
+      "timing": "Parallel to preparation"
+    },
+    {
+      "step": 10,
+      "action": "Alternative: If you prefer a lifelong certificate or the program requires Cambridge",
+      "details": "Register for B2 First digital at Englisches Institut Köln (€275, register by deadline). Attend their prep course (€159/month ongoing) or self-study using Cambridge free materials. Digital exam: results in 5-10 working days. Next available dates: 01 Oct, 05 Nov, 21 Nov, 05 Dec, 18 Dec 2026.",
+      "timing": "If IELTS doesn't fit your needs"
+    }
+  ],
+  "urls": [
+    "https://www.cambridgeenglish.org/de/cmp/individual-candidates-dates/",
+    "https://englisches-institut-koeln.de/de/b2-first-cambridge-english-qualifikation/",
+    "https://englisches-institut-koeln.de/de/vorbereitungskurse-cambridge-english-qualifikationen/b2-first/",
+    "https://www.eloquia.com/en/examinations/language-examinations/english/cambridge-b2-first-fce/",
+    "https://ielts.org/test-centres/british-council-englisches-institut-koln",
+    "https://www.britishcouncil.de/en/exam/ielts/dates-fees-locations",
+    "https://admissiontestportal.com/ielts/germany/north-rhine-westphalia/koeln",
+    "https://www.th-koeln.de/en/academics/international-business-bachelor--how-to-apply_5823.php",
+    "https://www.th-koeln.de/en/academics/digital-sciences-masters-program--how-to-apply_84162.php",
+    "https://www.th-koeln.de/en/academics/automation--it-master--how-to-apply_6812.php",
+    "https://studieninteressierte.uni-koeln.de/range_of_courses/index_eng.html?app=true&id=148",
+    "https://computationalsciences.uni-koeln.de/info/faq",
+    "https://phil-fak.uni-koeln.de/en/studium/masterbewerbung/application-procedure/faq-before-the-application",
+    "https://www.vhs-nrw.de/sprachenzertifikate/cambridge-english-zertifikate/",
+    "https://vhs.duesseldorf.de/programm/sprachen/englisch/pruefungsangebote-cambridge-englisch-qualifikations",
+    "https://www.ils.de/fernkurse/cambridge-first-certificate-english-2/",
+    "https://www.berlitz.com/en-de/language-centers/cologne",
+    "https://www.inlingua-koeln.de/en/language-exams/toefl-itp.html",
+    "https://global-exam.com/blog/en/taking-toefl-in-cologne/",
+    "https://blog.englishtest.duolingo.com/is-the-duolingo-english-test-accepted-in-germany/",
+    "https://blog.detstudy.com/universities-in-germany-accepting-duolingo-2025/",
+    "https://www.bamf.de/EN/Themen/MigrationAufenthalt/ZuwandererDrittstaaten/Bildung/Sprachkurs/sprachkurs-node.html",
+    "https://www.th-koeln.de/en/international_office/german-course-c1-with-dsh-exam_73871.php",
+    "https://www.unipage.net/en/667/university_of_cologne",
+    "https://www.yocket.com/universities/technical-university-of-cologne-3917",
+    "https://cambridgeenglish.org/de/test-your-english/",
+    "https://ieltsregistration.britishcouncil.org/ors/book-test?country=DE&location=1115&examType=ac&examFormat=cd",
+    "https://www.vhs-nrw.de/wp-content/uploads/2026/05/Cambridge-Abgabepreise-ab-August-2026.pdf"
+  ],
+  "confidence": "HIGH confidence for: IELTS test center in Cologne (British Council / Englisches Institut Köln, Gertrudenstr. 24-28, €276, computer-based) – confirmed from multiple sources. Cambridge B2 First exam at Englisches Institut Köln (Gertrudenstr. 24-28, €275, multiple 2026 dates) – confirmed from official Cambridge site and EI website. Uni Köln admission requirements (B2, IELTS 5.5, TOEFL iBT 72, Cambridge B2 First accepted) – confirmed from official Uni Köln program pages. TH Köln admission requirements (B2, IELTS 6.0, Cambridge FCE accepted, new TOEFL scoring from Jan 2026) – confirmed from official TH Köln pages. VHS NRW Cambridge pricing (B2 First €259 from Aug 2026) – confirmed from VHS NRW PDF. Duolingo NOT accepted at Uni Köln/TH Köln – inferred from absence on official admission pages and Duolingo's own blog listing only private German universities. MEDIUM confidence for: VHS Köln specific B2 First prep course availability (their website shows the category exists but no current course listed – subject to change each semester). Berlitz Cologne specific B2 First exam administration (they list Cambridge as certified partner but no exam dates shown – must confirm by phone). Refugee discounts for English specifically (BAMF and Bildungsgutschein pathways are real but English coverage varies; most refugee language support is for German, not English). Lowest confidence: Stevens English Training in Essen as a Cambridge B2 First exam center (listed on Cambridge site for B1 Preliminary but B2 First not confirmed)."
+}
