@@ -152,9 +152,22 @@ function ensurePreviewMap() {
   container.innerHTML = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><div id="leaflet-map" style="width:100%;height:100%"></div><div id="preview-layer-control" style="display:none;position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.95);border:1px solid var(--color-divider);border-radius:2px;padding:8px;z-index:1000;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-height:80%;overflow-y:auto;min-width:140px;"><div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:6px;border-bottom:1px solid var(--color-divider);padding-bottom:4px;">Map Layers</div><div id="preview-layer-list" style="display:flex;flex-direction:column;gap:4px;"></div></div>';
   previewMap = L.map('leaflet-map', { zoomControl: false }).setView([48.3794, 31.1656], 6);
   L.control.zoom({ position: 'bottomright' }).addTo(previewMap);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+
+  // Base map toggle — satellite imagery by default (shows real terrain,
+  // useful for checking parcel boundaries), streets still available via the
+  // control below.
+  const streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+  });
+  const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
   }).addTo(previewMap);
+  L.control.layers(
+    { 'Streets (OSM)': streetsLayer, 'Satellite (Esri)': satelliteLayer },
+    null,
+    { position: 'topleft', collapsed: false }
+  ).addTo(previewMap);
+
   return previewMap;
 }
 
@@ -279,6 +292,143 @@ async function showMapPreview(kmzPath) {
     appendLog(`❌ Map Preview failed: ${res ? res.error : 'Unknown error'}`);
   }
 }
+
+// ── Draw a custom boundary directly on the preview map ──────────────────────
+// Google-Earth-style polygon tool: click to place vertices, click the first
+// vertex again (or press Finish) to close the shape. Reuses the same
+// createBoundaryKmz + readKmlBbox pipeline that Full-area parcels mode
+// already uses to turn a computed bbox into a real boundary file, so the
+// drawn shape becomes a normal boundaryFiles entry.
+let drawingBoundary = false;
+let drawPoints = [];
+let drawPreviewShape = null;
+let drawVertexMarkers = [];
+let drawToolbar = null;
+
+function updateDrawPreview() {
+  if (drawPreviewShape) { previewMap.removeLayer(drawPreviewShape); drawPreviewShape = null; }
+  if (drawPoints.length >= 2) {
+    drawPreviewShape = L.polygon(drawPoints, { color: '#e05', weight: 2, dashArray: '5,5', fillOpacity: 0.08 }).addTo(previewMap);
+  }
+}
+
+function updateDrawToolbar() {
+  if (!drawToolbar) return;
+  const hint = drawToolbar.querySelector('[data-draw-hint]');
+  const finishBtn = drawToolbar.querySelector('[data-draw-finish]');
+  if (hint) {
+    hint.textContent = drawPoints.length < 3
+      ? `Click to add points (${drawPoints.length} so far, need 3+)`
+      : `${drawPoints.length} points — click the first point again, or press Finish`;
+  }
+  if (finishBtn) finishBtn.disabled = drawPoints.length < 3;
+}
+
+function cleanupDrawLayers() {
+  if (drawPreviewShape) { previewMap.removeLayer(drawPreviewShape); drawPreviewShape = null; }
+  drawVertexMarkers.forEach((m) => previewMap.removeLayer(m));
+  drawVertexMarkers = [];
+  drawPoints = [];
+}
+
+function onDrawMapClick(e) {
+  drawPoints.push(e.latlng);
+  const isFirst = drawPoints.length === 1;
+  const marker = L.circleMarker(e.latlng, {
+    radius: isFirst ? 6 : 5, color: '#fff', weight: 2, fillColor: '#e05', fillOpacity: 1,
+  }).addTo(previewMap);
+  if (isFirst) {
+    marker.on('click', (ev) => {
+      L.DomEvent.stopPropagation(ev);
+      if (drawPoints.length >= 3) finishDrawingBoundary();
+    });
+  }
+  drawVertexMarkers.push(marker);
+  updateDrawPreview();
+  updateDrawToolbar();
+}
+
+function stopDrawingBoundary() {
+  drawingBoundary = false;
+  previewMap.off('click', onDrawMapClick);
+  const mapEl = document.getElementById('leaflet-map');
+  if (mapEl) mapEl.style.cursor = '';
+  if (drawToolbar) { drawToolbar.remove(); drawToolbar = null; }
+  cleanupDrawLayers();
+}
+
+async function finishDrawingBoundary() {
+  if (drawPoints.length < 3) return;
+  const ring = drawPoints.map((p) => [p.lng, p.lat]);
+  ring.push(ring[0]);
+  const geometry = { type: 'Polygon', coordinates: [ring] };
+
+  if (!outputFolder) {
+    appendLog('⚠ Choose an output folder (Step 2) before drawing a boundary.');
+    stopDrawingBoundary();
+    return;
+  }
+
+  const name = `drawn_boundary_${Date.now()}`;
+  const filePath = `${outputFolder}/_${name}.kmz`;
+  const kmzRes = await window.api.createBoundaryKmz(geometry, filePath);
+  if (!kmzRes || !kmzRes.success) {
+    appendLog(`⚠ Could not save drawn boundary: ${kmzRes ? kmzRes.error : 'unknown error'}`);
+    stopDrawingBoundary();
+    return;
+  }
+  const bbox = await window.api.readKmlBbox(filePath);
+  if (!bbox || bbox.error) {
+    appendLog(`⚠ Could not read bbox from drawn boundary: ${bbox ? bbox.error : 'unknown error'}`);
+    stopDrawingBoundary();
+    return;
+  }
+  const url = makeParcelUrlForBbox(bbox);
+  boundaryFiles.push({
+    path: filePath,
+    url,
+    bbox: {
+      west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north,
+      centerLat: bbox.centerLat, centerLng: bbox.centerLng, zoom: bbox.zoom,
+    },
+    name: `${name}.kmz`,
+  });
+  appendLog(`✏️ Drawn boundary added: zoom=${bbox.zoom}, center=${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}`);
+  renderBoundaryList();
+  checkStartReady();
+  stopDrawingBoundary();
+}
+
+function startDrawingBoundary() {
+  ensurePreviewMap();
+  if (drawingBoundary) return;
+  drawingBoundary = true;
+  cleanupDrawLayers();
+
+  const mapEl = document.getElementById('leaflet-map');
+  if (mapEl) mapEl.style.cursor = 'crosshair';
+
+  drawToolbar = document.createElement('div');
+  drawToolbar.style.cssText = 'position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:1200;background:rgba(255,255,255,0.97);border:1px solid var(--color-divider);border-radius:3px;padding:8px 10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);display:flex;align-items:center;gap:10px;font-size:11.5px;';
+  drawToolbar.innerHTML = `
+    <span data-draw-hint>Click to add points (0 so far, need 3+)</span>
+    <button type="button" data-draw-finish class="btn btn-primary" style="height:24px;padding:0 10px;font-size:11px;" disabled>Finish</button>
+    <button type="button" data-draw-cancel class="btn btn-secondary" style="height:24px;padding:0 10px;font-size:11px;">Cancel</button>
+  `;
+  document.getElementById('map-container').appendChild(drawToolbar);
+  drawToolbar.querySelector('[data-draw-finish]').addEventListener('click', () => finishDrawingBoundary());
+  drawToolbar.querySelector('[data-draw-cancel]').addEventListener('click', () => stopDrawingBoundary());
+
+  previewMap.on('click', onDrawMapClick);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (drawingBoundary && e.key === 'Escape') stopDrawingBoundary();
+});
+
+document.getElementById('btn-draw-boundary')?.addEventListener('click', () => {
+  startDrawingBoundary();
+});
 
 function renderResults() {
   const list = document.getElementById('results-list');
