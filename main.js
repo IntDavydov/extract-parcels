@@ -287,14 +287,6 @@ function downloadAssetStream(fileUrl, targetPath, onProgress, redirectsLeft = 5)
   });
 }
 
-// When packaged, script.js is in app.asar.unpacked — not inside the asar archive
-function getUnpackedPath(...parts) {
-  const base = app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked')
-    : __dirname;
-  return path.join(base, ...parts);
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
