@@ -521,6 +521,7 @@ window.api.onDownloadProgress((data) => {
 });
 
 document.getElementById('tab-btn-log').addEventListener('click', () => {
+  expandBottomPanel();
   document.getElementById('tab-log').style.display = 'block';
   document.getElementById('tab-results').style.display = 'none';
   document.getElementById('tab-btn-log').querySelector('.active-bg').style.display = 'block';
@@ -531,12 +532,53 @@ document.getElementById('tab-btn-log').addEventListener('click', () => {
 });
 
 document.getElementById('tab-btn-results').addEventListener('click', () => {
+  expandBottomPanel();
   document.getElementById('tab-log').style.display = 'none';
   document.getElementById('tab-results').style.display = 'flex';
   document.getElementById('tab-btn-log').querySelector('.active-bg').style.display = 'none';
   document.getElementById('tab-btn-log').style.color = 'var(--color-neutral-600)';
   document.getElementById('tab-btn-results').querySelector('.active-bg').style.display = 'block';
   document.getElementById('tab-btn-results').style.color = 'inherit';
+});
+
+// ── Collapse the Log/Files panel so the map preview can use its space ──────
+const BOTTOM_PANEL_HEIGHT = '246px';
+const BOTTOM_PANEL_COLLAPSED_HEIGHT = '37px';
+let bottomPanelCollapsed = false;
+
+function expandBottomPanel() {
+  if (!bottomPanelCollapsed) return;
+  bottomPanelCollapsed = false;
+  const panel = document.getElementById('bottom-panel');
+  const icon = document.getElementById('toggle-bottom-panel-icon');
+  const btn = document.getElementById('btn-toggle-bottom-panel');
+  if (panel) panel.style.height = BOTTOM_PANEL_HEIGHT;
+  if (icon) icon.style.transform = '';
+  if (btn) btn.title = 'Collapse';
+  // Restore whichever tab was active before collapsing.
+  const logActive = document.getElementById('tab-btn-log').querySelector('.active-bg').style.display !== 'none';
+  document.getElementById('tab-log').style.display = logActive ? 'block' : 'none';
+  document.getElementById('tab-results').style.display = logActive ? 'none' : 'flex';
+  setTimeout(() => previewMap && previewMap.invalidateSize(), 160);
+}
+
+function collapseBottomPanel() {
+  if (bottomPanelCollapsed) return;
+  bottomPanelCollapsed = true;
+  const panel = document.getElementById('bottom-panel');
+  const icon = document.getElementById('toggle-bottom-panel-icon');
+  const btn = document.getElementById('btn-toggle-bottom-panel');
+  if (panel) panel.style.height = BOTTOM_PANEL_COLLAPSED_HEIGHT;
+  if (icon) icon.style.transform = 'rotate(180deg)';
+  if (btn) btn.title = 'Expand';
+  document.getElementById('tab-log').style.display = 'none';
+  document.getElementById('tab-results').style.display = 'none';
+  setTimeout(() => previewMap && previewMap.invalidateSize(), 160);
+}
+
+document.getElementById('btn-toggle-bottom-panel')?.addEventListener('click', () => {
+  if (bottomPanelCollapsed) expandBottomPanel();
+  else collapseBottomPanel();
 });
 resetRunProgress();
 renderResults();

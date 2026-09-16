@@ -115,7 +115,7 @@
         </div>
       </section>
 
-      <section style="height:246px;flex:none;border-top:1px solid var(--color-divider);background:var(--color-neutral-100);display:flex;flex-direction:column;min-height:0;">
+      <section id="bottom-panel" style="height:246px;flex:none;border-top:1px solid var(--color-divider);background:var(--color-neutral-100);display:flex;flex-direction:column;min-height:0;">
         <div style="height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 0;border-bottom:1px solid var(--color-divider);">
           <div style="display:flex;align-items:stretch;height:100%;">
             <button id="tab-btn-log" type="button" style="position:relative;display:flex;align-items:center;gap:7px;padding:0 14px;border:0;background:transparent;cursor:pointer;font-family:var(--font-heading);font-size:13.5px;letter-spacing:0.04em;text-transform:uppercase;color:inherit;">
@@ -137,6 +137,9 @@
             <button id="btn-results-clear" class="btn btn-secondary" type="button" style="height:26px;padding:0 9px;font-size:11.5px;gap:6px;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
               Clear
+            </button>
+            <button id="btn-toggle-bottom-panel" type="button" title="Collapse" style="height:26px;width:26px;display:flex;align-items:center;justify-content:center;border:1px solid var(--color-divider);background:var(--color-neutral-200);cursor:pointer;color:inherit;padding:0;">
+              <svg id="toggle-bottom-panel-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="transition:transform 0.15s;"><path d="m6 9 6 6 6-6" /></svg>
             </button>
           </div>
         </div>
@@ -328,15 +331,6 @@
       </div>
     </aside>
   </div>
-
-  <footer style="height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-top:1px solid var(--color-divider);background:var(--color-neutral-200);font-size:10.5px;color:var(--color-neutral-700);">
-    <div style="display:flex;align-items:center;gap:14px;">
-      <span id="footer-status-left">Idle</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:14px;font-variant-numeric:tabular-nums;">
-      <span>Land Management Tool</span>
-    </div>
-  </footer>
 </div>
 
 <script src="app.js"></script>
