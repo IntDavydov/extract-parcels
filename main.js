@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -56,6 +56,30 @@ async function ensurePuppeteerChrome() {
 
 let mainWindow;
 let scrapingProcess = null;
+
+// ── Keep the system awake during long unattended operations ──────────────────
+// A real macOS *sleep* (not just screen lock — that alone doesn't pause
+// anything) suspends the whole process: network sockets drop, timers freeze,
+// and the Puppeteer-driven browser used for scraping/e-land lookups can end
+// up on a stale/logged-out page after waking. Reference-counted so scraping
+// and an e-land lookup running around the same time don't stomp on each other.
+let sleepBlockerId = null;
+let sleepBlockerRefs = 0;
+function preventSystemSleep(reason) {
+  sleepBlockerRefs++;
+  if (sleepBlockerId === null || !powerSaveBlocker.isStarted(sleepBlockerId)) {
+    sleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    console.log(`🔒 Preventing system sleep (${reason})`);
+  }
+}
+function allowSystemSleep() {
+  sleepBlockerRefs = Math.max(0, sleepBlockerRefs - 1);
+  if (sleepBlockerRefs === 0 && sleepBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(sleepBlockerId)) powerSaveBlocker.stop(sleepBlockerId);
+    sleepBlockerId = null;
+    console.log('🔓 System sleep re-allowed');
+  }
+}
 const OFFLINE_CACHE_DIR = path.join(os.homedir(), '.land-management-cache');
 const DEFAULT_OFFLINE_DATASETS = [
   {
@@ -416,6 +440,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   const args = [getUnpackedPath('script.js')];
   if (url) args.push(url);
 
+  preventSystemSleep('scraping');
   scrapingProcess = spawn(process.execPath, args, {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -445,6 +470,7 @@ ipcMain.handle('start-scraping', async (event, { url, outputPath, headless, boun
   return new Promise((resolve) => {
     scrapingProcess.on('close', (code) => {
       scrapingProcess = null;
+      allowSystemSleep();
       resolve({ code, tiles: tilesProcessed, parcels: parcelsFound });
     });
   });
@@ -1053,6 +1079,7 @@ ipcMain.handle('read-kml-bbox', async (_event, filePath) => {
 });
 
 ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, outputXlsx, format }) => {
+  preventSystemSleep('e-land lookup');
   try {
     const onProgress = msg => event.sender.send('log', msg);
     onProgress('🔍 Checking Chrome availability...');
@@ -1068,6 +1095,8 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, output
   } catch (err) {
     event.sender.send('log', `❌ e.land lookup failed: ${err.message}`);
     return { success: false, error: err.message };
+  } finally {
+    allowSystemSleep();
   }
 });
 

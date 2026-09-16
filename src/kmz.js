@@ -102,6 +102,12 @@ function featureToKml(f, styleId) {
     const cadnum = f.properties['Кадастровий номер земельної ділянки'] || f.properties.cadnum || '';
     let html = `<table style="font-family:Arial,sans-serif;font-size:12px;border-collapse:collapse;width:100%;">`;
     html += `<tr><td colspan="2" style="font-weight:bold;font-size:14px;padding-bottom:10px;">Кадастровий номер: ${escXml(String(cadnum))}</td></tr>`;
+    if (f.properties.tenantName || f.properties.ownerName) {
+      html += `<tr><td colspan="2" style="padding-bottom:8px;">`;
+      if (f.properties.tenantName) html += `<div><b>Орендар:</b> ${escXml(String(f.properties.tenantName))}</div>`;
+      if (f.properties.ownerName) html += `<div><b>Власник:</b> ${escXml(String(f.properties.ownerName))}</div>`;
+      html += `</td></tr>`;
+    }
     for (const section of f.properties.sections) {
       for (const row of section.rows) {
         if (row.label.toLowerCase().includes('кадастровий номер')) continue;
@@ -115,7 +121,7 @@ function featureToKml(f, styleId) {
     desc = `<![CDATA[${html}]]>`;
   } else {
     desc = Object.entries(f.properties || {})
-      .filter(([k]) => !k.startsWith('_') && k !== 'name' && k !== 'sections' && k !== 'fieldOrder' && k !== 'error')
+      .filter(([k]) => !k.startsWith('_') && k !== 'name' && k !== 'sections' && k !== 'fieldOrder' && k !== 'error' && k !== 'colorKey')
       .map(([k, v]) => `${escXml(String(k))}: ${escXml(String(v))}`)
       .join('&#10;');
   }
@@ -162,6 +168,39 @@ function featureToKml(f, styleId) {
 
 function escXml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Deterministic per-name colors (for coloring parcels by owner/tenant) ─────
+// Same name always maps to the same color, run to run, regardless of the
+// order names are first encountered in — a plain string hash into HSL space.
+function hashString(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+// Returns a KML color string (aabbggrr) deterministically derived from `name`.
+function nameToKmlColor(name, alpha = 'cc') {
+  const h = hashString(String(name));
+  const hue = h % 360;
+  const sat = 0.55 + ((h >>> 8) % 30) / 100;   // 0.55–0.84
+  const light = 0.40 + ((h >>> 16) % 25) / 100; // 0.40–0.64
+  const [r, g, b] = hslToRgb(hue, sat, light);
+  const hex = (n) => n.toString(16).padStart(2, '0');
+  return `${alpha}${hex(b)}${hex(g)}${hex(r)}`; // KML order is aabbggrr
+}
+
+function colorKeyStyleId(name) {
+  return `by_name_${hashString(String(name)).toString(36)}`;
 }
 
 // Map OSM voltage tag (volts or kV string) to a tower style ID
@@ -307,17 +346,33 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
 
   ws.write(`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n  <name>${escXml(docName)}</name>\n  ${styles}\n`);
 
+  // Parcels carrying properties.colorKey (e.g. tenant/owner name) get their
+  // own per-name Style, declared the first time that name is seen, instead
+  // of the layer's shared style — this is how per-owner/tenant coloring works.
+  const declaredNameStyles = new Set();
+  function resolveStyleId(f, defaultStyleId) {
+    const colorKey = f?.properties?.colorKey;
+    if (!colorKey) return defaultStyleId;
+    const id = colorKeyStyleId(colorKey);
+    if (!declaredNameStyles.has(id)) {
+      declaredNameStyles.add(id);
+      const color = nameToKmlColor(colorKey);
+      ws.write(`<Style id="${id}"><LineStyle><color>ff333333</color><width>1</width></LineStyle><PolyStyle><color>${color}</color></PolyStyle></Style>\n`);
+    }
+    return id;
+  }
+
   function writeLayerFolder(layerName) {
     const styleId = LAYER_STYLES[layerName]
       ? layerName.replace(/[^a-zA-Z0-9]/g, '_')
       : 'Land_Parcels';
     const features = layerMap[layerName];
     if (!features || features.length === 0) return;
-    
+
     ws.write(`  <Folder><name>${escXml(layerName)}</name>\n`);
     let count = 0;
     for (const f of features) {
-      const p = featureToKml(f, styleId);
+      const p = featureToKml(f, resolveStyleId(f, styleId));
       if (p) {
         ws.write(p + '\n');
         count++;

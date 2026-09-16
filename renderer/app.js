@@ -143,19 +143,24 @@ async function copyTextToClipboard(text) {
 let previewMap = null;
 let previewLayer = null;
 
+// Creates the empty base map (just tiles, no data) the first time it's
+// needed — called on startup so the preview panel never sits blank, and
+// reused by showMapPreview so loading a KMZ doesn't recreate it.
+function ensurePreviewMap() {
+  if (previewMap) return previewMap;
+  const container = document.getElementById('map-container');
+  container.innerHTML = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><div id="leaflet-map" style="width:100%;height:100%"></div><div id="preview-layer-control" style="display:none;position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.95);border:1px solid var(--color-divider);border-radius:2px;padding:8px;z-index:1000;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-height:80%;overflow-y:auto;min-width:140px;"><div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:6px;border-bottom:1px solid var(--color-divider);padding-bottom:4px;">Map Layers</div><div id="preview-layer-list" style="display:flex;flex-direction:column;gap:4px;"></div></div>';
+  previewMap = L.map('leaflet-map', { zoomControl: false }).setView([48.3794, 31.1656], 6);
+  L.control.zoom({ position: 'bottomright' }).addTo(previewMap);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(previewMap);
+  return previewMap;
+}
+
 async function showMapPreview(kmzPath) {
   document.getElementById('map-summary').textContent = kmzPath.split(/[\\/\\\\]/).pop();
-  
-  if (!previewMap) {
-    const container = document.getElementById('map-container');
-    container.innerHTML = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><div id="leaflet-map" style="width:100%;height:100%"></div><div id="preview-layer-control" style="display:none;position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.95);border:1px solid var(--color-divider);border-radius:2px;padding:8px;z-index:1000;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-height:80%;overflow-y:auto;min-width:140px;"><div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:6px;border-bottom:1px solid var(--color-divider);padding-bottom:4px;">Map Layers</div><div id="preview-layer-list" style="display:flex;flex-direction:column;gap:4px;"></div></div>';
-    previewMap = L.map('leaflet-map', { zoomControl: false }).setView([48.3794, 31.1656], 6);
-    L.control.zoom({ position: 'bottomright' }).addTo(previewMap);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(previewMap);
-  }
-  
+  ensurePreviewMap();
   setTimeout(() => previewMap.invalidateSize(), 100);
 
   if (previewLayer) {
@@ -204,6 +209,29 @@ async function showMapPreview(kmzPath) {
               opacity: 1,
               fillOpacity: feature.properties['fill-opacity'] !== undefined ? feature.properties['fill-opacity'] : 0.8
             });
+          },
+          onEachFeature: function (feature, layer) {
+            // Same info Google Earth shows in its placemark balloon — the
+            // KML <name>/<description> survive into these GeoJSON properties
+            // via togeojson, description included (our own HTML tables too).
+            const props = feature.properties || {};
+            const name = props.name || props.Name || '';
+            const desc = props.description || props.Description || '';
+            if (!name && !desc) return;
+            const container = document.createElement('div');
+            container.style.cssText = 'max-width:300px;max-height:340px;overflow:auto;font-size:12px;';
+            if (name) {
+              const title = document.createElement('div');
+              title.style.cssText = 'font-weight:700;font-size:13px;margin-bottom:6px;';
+              title.textContent = name;
+              container.appendChild(title);
+            }
+            if (desc) {
+              const body = document.createElement('div');
+              body.innerHTML = desc;
+              container.appendChild(body);
+            }
+            layer.bindPopup(container, { maxWidth: 320 });
           }
         }).addTo(previewMap);
         
@@ -316,12 +344,13 @@ function addResultEntry(path, label = 'Output') {
   if (resultEntries.length > MAX_RESULT_ENTRIES) resultEntries.length = MAX_RESULT_ENTRIES;
   renderResults();
   
-  const chkAutoOpen = document.getElementById('chk-auto-open');
-  if (chkAutoOpen && chkAutoOpen.checked) {
-    // Only auto-open actual result files, not caches
-    if (label.includes('KMZ') || label.includes('KML') || label.includes('XLSX') || label.includes('DOCX') || label.includes('CSV')) {
-      window.api.openPath(p);
-    }
+  // Always auto-open KMZ/KML into the in-app preview — not user-configurable.
+  // Only KMZ/KML, since only those have an in-app viewer — show it in our
+  // own preview map instead of handing it off to whatever the OS has
+  // associated with .kmz (usually Google Earth). Everything else (XLSX,
+  // DOCX, CSV) is left for the user to open manually via the result list.
+  if (/\.(kmz|kml)$/i.test(p)) {
+    showMapPreview(p);
   }
 }
 
@@ -361,6 +390,8 @@ document.getElementById('tab-btn-results').addEventListener('click', () => {
 });
 resetRunProgress();
 renderResults();
+ensurePreviewMap();
+setTimeout(() => previewMap && previewMap.invalidateSize(), 100);
 document.getElementById('btn-results-clear')?.addEventListener('click', () => {
   resultEntries.length = 0;
   renderResults();
@@ -542,6 +573,7 @@ function makeParcelUrlForBoundary(boundaryFile, source = getParcelSource()) {
 function renderBoundaryList() {
   const display = document.getElementById('boundary-file-display');
   const btnClear = document.getElementById('btn-clear-boundary');
+  const list = document.getElementById('boundary-file-list');
   if (!display) return;
   if (boundaryFiles.length === 0) {
     display.textContent = 'not selected';
@@ -553,13 +585,47 @@ function renderBoundaryList() {
     display.textContent = boundaryFiles.length + ' files selected';
     if(btnClear) btnClear.style.display = '';
   }
-  
+
+  // Per-file rows, each with its own × button to remove just that one file.
+  if (list) {
+    list.innerHTML = '';
+    boundaryFiles.forEach((f, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:var(--color-neutral-700);background:var(--color-neutral-200);border-radius:2px;padding:3px 6px;';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = f.name;
+      nameSpan.style.cssText = 'word-break:break-all;';
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.title = `Remove ${f.name}`;
+      removeBtn.setAttribute('data-remove-boundary', String(idx));
+      removeBtn.style.cssText = 'flex:none;border:none;background:none;cursor:pointer;color:var(--color-neutral-700);font-size:14px;line-height:1;padding:0 2px;';
+      row.appendChild(nameSpan);
+      row.appendChild(removeBtn);
+      list.appendChild(row);
+    });
+  }
+
   const isMultiKmz  = boundaryFiles.length > 1;
   const isKadastrMode = currentMode === 'kadastr';
   if (isKadastrMode && isMultiKmz) {
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
   }
 }
+
+// Remove one specific boundary file via its row's × button (event delegation
+// so this keeps working across re-renders without piling up listeners).
+document.getElementById('boundary-file-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-remove-boundary]');
+  if (!btn) return;
+  const idx = parseInt(btn.getAttribute('data-remove-boundary'), 10);
+  if (Number.isInteger(idx) && idx >= 0 && idx < boundaryFiles.length) {
+    boundaryFiles.splice(idx, 1);
+    renderBoundaryList();
+    checkStartReady();
+  }
+});
 
 // ── Boundary picker ────────────────────────────────────────
 document.getElementById('btn-pick-boundary')?.addEventListener('click', async (e) => {
@@ -1388,6 +1454,15 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
       addResultEntry(finalOutput, 'KMZ');
+      if (fetchDetailedRegistry) {
+        // NOTE: each boundary in this loop reuses the same fixed filename
+        // (land_plots_eland_partial.*), so only the LAST boundary's e.land
+        // files survive here — unlike the KMZ/CSV, they aren't copied to a
+        // per-boundary temp name and merged. Fine for a single boundary; for
+        // several, only the last one's e.land data ends up on disk.
+        addResultEntry(`${outputFolder}/land_plots_eland_partial.xlsx`, 'e.land XLSX');
+        addResultEntry(`${outputFolder}/land_plots_eland_partial.docx`, 'e.land DOCX');
+      }
       window.api.showInFolder(finalOutput);
     } else {
       appendLog(`[ERROR] Merge failed: ${mergeResult.error}`);
@@ -1412,6 +1487,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
       addResultEntry(finalOutput, 'KMZ');
+      if (fetchDetailedRegistry) {
+        // Written by script.js next to land_plots.kmz — see CONFIG.kmzPath
+        // derivation in the FETCH_DETAILED_REGISTRY step.
+        addResultEntry(`${outputFolder}/land_plots_eland_partial.xlsx`, 'e.land XLSX');
+        addResultEntry(`${outputFolder}/land_plots_eland_partial.docx`, 'e.land DOCX');
+      }
       window.api.showInFolder(finalOutput);
       tickRunProgress(true, 'Kadastr scrape done');
     } else {

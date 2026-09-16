@@ -13,6 +13,37 @@ const SNAP_BUFFER_KM = 0.000005; // first-pass seam snap (~5mm)
 const SNAP_BUFFER_STEPS_KM = [SNAP_BUFFER_KM, 0.0002, 0.001, 0.002]; // up to 2m for stubborn tile seams
 const MAX_SNAP_FRAGMENTS = 40; // parcels with more fragments than this skip the buffer-snap dissolve (too costly) and go straight to MultiPolygon combine
 
+// ── Owner / tenant extraction from e.land detailed registry sections ─────────
+// eland.js returns each parcel's registry data as { sections: [{ title, rows: [{label, value}] }] }.
+// "Відомості про суб'єктів права власності…" sections hold the registered owner;
+// "Відомості про суб'єкта речового права…" sections hold other rights (leases etc.) —
+// a lease is identified by "Вид речового права" containing "оренд" (rent/lease).
+function rightHolderName(section) {
+  const rows = section?.rows || [];
+  const person = rows.find(r => r.label === "Прізвище, ім'я та по батькові фізичної особи");
+  if (person && person.value) return person.value;
+  const org = rows.find(r => r.label === 'Найменування юридичної особи');
+  if (org && org.value) return org.value;
+  return null;
+}
+
+function deriveOwnerTenant(sections) {
+  let ownerName = null;
+  let tenantName = null;
+  for (const section of (Array.isArray(sections) ? sections : [])) {
+    const title = String(section?.title || '');
+    if (!ownerName && title.startsWith("Відомості про суб'єктів права власності")) {
+      ownerName = rightHolderName(section);
+    } else if (title.startsWith("Відомості про суб'єкта речового права")) {
+      const rightType = (section.rows || []).find(r => r.label === 'Вид речового права');
+      if (!tenantName && rightType && /оренд/i.test(rightType.value || '')) {
+        tenantName = rightHolderName(section);
+      }
+    }
+  }
+  return { ownerName, tenantName };
+}
+
 // ── Geoserver enrichment (kadastrova-karta.com.ua source only) ───────────────
 // After tile scraping we only have cadnum + geometry. This fetches rich metadata
 // from the REST API and merges it into each feature's properties.
@@ -27,40 +58,49 @@ async function enrichFeaturesFromGeoserver(features, concurrency = 5, timeoutMs 
 
   let done = 0;
   let enriched = 0;
+  // Every failure used to collapse into the same silent "null" — timeout,
+  // rate-limit, bad status, parse error, dropped connection all looked
+  // identical. Track *why* each one failed so a low success rate is
+  // diagnosable instead of a mystery.
+  const failReasons = new Map();
+  const noteFailure = (reason) => failReasons.set(reason, (failReasons.get(reason) || 0) + 1);
 
   async function fetchMeta(cadnum) {
     return new Promise((resolve) => {
       let settled = false;
       const finish = (val) => { if (!settled) { settled = true; clearTimeout(timer); resolve(val); } };
-      const timer = setTimeout(() => finish(null), timeoutMs);
+      const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
       const url = `https://back.geoserver.click/api/landuse/${encodeURIComponent(cadnum)}`;
       const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }, (res) => {
         const chunks = [];
         res.on('data', c => chunks.push(c));
         res.on('end', () => {
-          if (res.statusCode !== 200) return finish(null);
-          try { finish(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-          catch (_) { finish(null); }
+          if (res.statusCode !== 200) return finish({ ok: false, reason: `status:${res.statusCode}` });
+          try { finish({ ok: true, data: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); }
+          catch (_) { finish({ ok: false, reason: 'parse-error' }); }
         });
-        res.on('error', () => finish(null));
+        res.on('error', (e) => finish({ ok: false, reason: `res-error:${e.code || e.message}` }));
       });
-      req.on('error', () => finish(null));
+      req.on('error', (e) => finish({ ok: false, reason: `req-error:${e.code || e.message}` }));
     });
   }
 
   // Run with a concurrency pool
   async function processFeature(feature) {
     const cadnum = String(feature.properties?.cadnum || feature.properties?.cad_num || '').trim();
-    const data = await fetchMeta(cadnum);
+    const result = await fetchMeta(cadnum);
     done++;
-    if (data) {
+    if (result.ok) {
       const p = feature.properties;
+      const data = result.data;
       if (data.category)    p.category    = data.category;
       if (data.purpose)     p.purpose     = data.purpose;
       if (data.area != null) p.area       = `${data.area} ${data.unit_area || ''}`.trim();
       if (data.ownership)   p.ownership   = data.ownership;
       if (data.address)     p.address     = data.address;
       enriched++;
+    } else {
+      noteFailure(result.reason);
     }
     if (done % 10 === 0 || done === toEnrich.length) {
       console.log(`  Enriched ${done}/${toEnrich.length} (${enriched} successful)`);
@@ -73,6 +113,10 @@ async function enrichFeaturesFromGeoserver(features, concurrency = 5, timeoutMs 
   }
 
   console.log(`✅ Geoserver enrichment done: ${enriched}/${toEnrich.length} parcels enriched`);
+  if (failReasons.size > 0) {
+    const breakdown = [...failReasons.entries()].sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r}: ${n}`).join(', ');
+    console.log(`   Failure breakdown: ${breakdown}`);
+  }
   return features;
 }
 
@@ -742,8 +786,14 @@ function setupGracefulShutdown(browser) {
         console.log(`========================================\n`);
         const { lookupEland } = require(path.join(__dirname, 'src', 'eland.js'));
         const cadnums = features.map(f => String(f.properties?.cadnum || f.properties?.cad_num || f.properties?.cadastral_number || '').trim()).filter(Boolean);
+        // Same partial-Excel schema (with the info/ → ~/Downloads → built-in
+        // default fallback chain) and Word doc that e.land's own UI produces
+        // — written alongside the KMZ, not just merged into its properties.
+        const elandXlsxPath = CONFIG.kmzPath.replace(/\.kmz$/i, '_eland_partial.xlsx');
         try {
-          const elandResult = await lookupEland(cadnums, '', (msg) => console.log(msg), process.env.CHROME_PATH, { format: 'json' });
+          const elandResult = await lookupEland(cadnums, elandXlsxPath, (msg) => console.log(msg), process.env.CHROME_PATH, { format: 'xlsx_partial' });
+          if (elandResult && elandResult.outputPath) console.log(`📊 e.land partial Excel → ${elandResult.outputPath}`);
+          if (elandResult && elandResult.docxOutputPath) console.log(`📄 e.land Word doc → ${elandResult.docxOutputPath}`);
           if (elandResult && elandResult.data) {
             const elandMap = new Map();
             for (const row of elandResult.data) {
@@ -752,7 +802,14 @@ function setupGracefulShutdown(browser) {
             for (const f of features) {
               const c = String(f.properties?.cadnum || f.properties?.cad_num || f.properties?.cadastral_number || '').trim();
               if (elandMap.has(c)) {
-                f.properties = { ...f.properties, ...elandMap.get(c) };
+                const row = elandMap.get(c);
+                f.properties = { ...f.properties, ...row };
+                const { ownerName, tenantName } = deriveOwnerTenant(row.sections);
+                if (ownerName) f.properties.ownerName = ownerName;
+                if (tenantName) f.properties.tenantName = tenantName;
+                // Color-by-name key: tenant takes priority (who's actually
+                // working the land), falls back to owner when no lease record.
+                f.properties.colorKey = tenantName || ownerName || '';
               }
             }
           }
