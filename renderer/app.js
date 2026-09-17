@@ -312,14 +312,56 @@ function updateDrawPreview() {
   }
 }
 
+// Vertex marker icon — plain divIcon so we control the look fully (no default
+// leaflet-div-icon white-square styling). The first/closing point is drawn
+// slightly larger so it stays visually distinct even after other points move.
+function vertexIcon(isFirst) {
+  const size = isFirst ? 16 : 14;
+  return L.divIcon({
+    className: 'draw-vertex-marker',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#e05;border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,0.5);cursor:move;"></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+// Re-attaches the "click first point to finish" handler to whichever marker
+// is currently first (indices shift as points get removed), and keeps the
+// first-point icon visually distinct.
+function rebindDrawVertexHandlers() {
+  drawVertexMarkers.forEach((m, i) => {
+    m.off('click');
+    m.setIcon(vertexIcon(i === 0));
+    if (i === 0) {
+      m.on('click', (ev) => {
+        L.DomEvent.stopPropagation(ev);
+        if (drawPoints.length >= 3) finishDrawingBoundary();
+      });
+    }
+  });
+}
+
+// Right-click (or long-press-equivalent contextmenu) on a vertex removes it,
+// like Google Earth's polygon tool.
+function removeDrawPoint(marker) {
+  const idx = drawVertexMarkers.indexOf(marker);
+  if (idx === -1) return;
+  previewMap.removeLayer(marker);
+  drawVertexMarkers.splice(idx, 1);
+  drawPoints.splice(idx, 1);
+  rebindDrawVertexHandlers();
+  updateDrawPreview();
+  updateDrawToolbar();
+}
+
 function updateDrawToolbar() {
   if (!drawToolbar) return;
   const hint = drawToolbar.querySelector('[data-draw-hint]');
   const finishBtn = drawToolbar.querySelector('[data-draw-finish]');
   if (hint) {
     hint.textContent = drawPoints.length < 3
-      ? `Click to add points (${drawPoints.length} so far, need 3+)`
-      : `${drawPoints.length} points — click the first point again, or press Finish`;
+      ? `Click to add points (${drawPoints.length} so far, need 3+) · drag to move · right-click to remove`
+      : `${drawPoints.length} points — click the first point again, or press Finish · drag to move · right-click to remove`;
   }
   if (finishBtn) finishBtn.disabled = drawPoints.length < 3;
 }
@@ -334,16 +376,27 @@ function cleanupDrawLayers() {
 function onDrawMapClick(e) {
   drawPoints.push(e.latlng);
   const isFirst = drawPoints.length === 1;
-  const marker = L.circleMarker(e.latlng, {
-    radius: isFirst ? 6 : 5, color: '#fff', weight: 2, fillColor: '#e05', fillOpacity: 1,
+  const marker = L.marker(e.latlng, {
+    icon: vertexIcon(isFirst), draggable: true, autoPan: true, zIndexOffset: 1000,
   }).addTo(previewMap);
-  if (isFirst) {
-    marker.on('click', (ev) => {
-      L.DomEvent.stopPropagation(ev);
-      if (drawPoints.length >= 3) finishDrawingBoundary();
-    });
-  }
+
+  // Drag to reposition a misplaced point — keep drawPoints in sync live so
+  // the dashed preview polygon follows the marker as it moves.
+  marker.on('drag', (ev) => {
+    const idx = drawVertexMarkers.indexOf(marker);
+    if (idx === -1) return;
+    drawPoints[idx] = ev.target.getLatLng();
+    updateDrawPreview();
+  });
+
+  // Right-click to remove this point, like Google Earth's polygon tool.
+  marker.on('contextmenu', (ev) => {
+    L.DomEvent.stop(ev);
+    removeDrawPoint(marker);
+  });
+
   drawVertexMarkers.push(marker);
+  rebindDrawVertexHandlers();
   updateDrawPreview();
   updateDrawToolbar();
 }
@@ -978,7 +1031,7 @@ const MODES = {
   boundary: { title: 'Boundary + OSM', ua: 'Межа + шари OSM', show: ['sect-parcel-flow', 'sect-area', 'sect-boundary', 'sect-layers', 'sect-folder'], optBoundary: true },
   kadastr: { title: 'Parcels by KMZ/KML', ua: 'Ділянки за KMZ/KML', show: ['sect-parcel-flow', 'sect-boundary', 'sect-source', 'sect-kadastropts', 'sect-folder'], reqBoundary: true },
   eland: { title: 'e.land Lookup', ua: 'Пошук в e.land.gov.ua', show: ['sect-parcel-flow', 'sect-csv', 'sect-format', 'sect-folder'] },
-  cadnum: { title: 'By cadastral numbers', ua: 'За кадастровими номерами', show: ['sect-parcel-flow', 'sect-cadnum', 'sect-source', 'sect-folder'] },
+  cadnum: { title: 'By cadastral numbers', ua: 'За кадастровими номерами', show: ['sect-parcel-flow', 'sect-cadnum', 'sect-source', 'sect-kadastropts', 'sect-folder'] },
   custom: { title: 'Settlement boundary', ua: 'Межа населеного пункту', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
   coords: { title: 'Polygon coordinates', ua: 'Координати полігону', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
   research: { title: 'Pre-Research XLSX', ua: 'Перед-дослідження', show: ['sect-research', 'sect-folder'] },
@@ -1242,14 +1295,87 @@ function checkStartReady() {
 document.getElementById('btn-start').disabled = !ready;
 }
 
-function setBusy(busy) {
-  if (busy) {
-    document.getElementById('btn-start').disabled = true;
-    return;
-  }
-  checkStartReady();
+// ── Busy state: Start↔Stop swap, tab lock, run-cleanup on Stop ──────────
+let appBusy = false;
+let runBaselineFiles = null; // filenames present in outputFolder before this run started
+
+function setNavLocked(locked) {
+  document.querySelectorAll('.nav-link').forEach((btn) => { btn.disabled = locked; });
 }
 
+async function cleanupStoppedRun() {
+  if (!outputFolder || !runBaselineFiles) return;
+  appendLog('🗑 Removing files created by this run…');
+  try {
+    const res = await window.api.deleteNewOutputFiles(outputFolder, runBaselineFiles);
+    if (res && res.success) {
+      const deleted = (res.deleted || []).map(p => String(p).replace(/\\/g, '/'));
+      for (let i = resultEntries.length - 1; i >= 0; i--) {
+        const p = String(resultEntries[i].path || '').replace(/\\/g, '/');
+        if (deleted.some(d => p === d || p.startsWith(d + '/'))) resultEntries.splice(i, 1);
+      }
+      renderResults();
+      appendLog(`🗑 Removed ${deleted.length} item(s) — run discarded.`);
+    } else {
+      appendLog(`⚠ Cleanup failed: ${res?.error || 'unknown error'}`);
+    }
+  } catch (err) {
+    appendLog(`⚠ Cleanup error: ${err.message}`);
+  }
+}
+
+function setBusy(busy) {
+  appBusy = busy;
+  const startBtn = document.getElementById('btn-start');
+  const stopBtn  = document.getElementById('btn-stop');
+  if (busy) {
+    if (startBtn) { startBtn.style.display = 'none'; startBtn.disabled = true; }
+    if (stopBtn)  {
+      stopBtn.style.display = '';
+      stopBtn.disabled = false;
+      const stopLabel = document.getElementById('stop-btn-label');
+      if (stopLabel) stopLabel.textContent = 'Stop';
+    }
+    setNavLocked(true);
+    runBaselineFiles = null;
+    if (outputFolder) {
+      window.api.listOutputFolder(outputFolder).then((snap) => {
+        runBaselineFiles = (snap && snap.success) ? snap.files : [];
+      });
+    }
+    return;
+  }
+  if (startBtn) startBtn.style.display = '';
+  if (stopBtn)  stopBtn.style.display = 'none';
+  setNavLocked(false);
+  const wasStopped = userStopped;
+  userStopped = false;
+  checkStartReady();
+  if (wasStopped) {
+    cleanupStoppedRun().finally(() => { runBaselineFiles = null; resetRunProgress('Idle'); });
+  } else {
+    runBaselineFiles = null;
+  }
+}
+
+document.getElementById('btn-stop')?.addEventListener('click', () => {
+  const stopBtn = document.getElementById('btn-stop');
+  if (!appBusy || (stopBtn && stopBtn.disabled)) return;
+  const ok = window.confirm(
+    'Stop this run now?\n\nThis ends the process immediately and permanently deletes every file it has produced so far in this run. This cannot be undone.'
+  );
+  if (!ok) return;
+  userStopped = true;
+  if (stopBtn) stopBtn.disabled = true; // one shot — can't be pressed again until the next run starts
+  const stopLabel = document.getElementById('stop-btn-label');
+  if (stopLabel) stopLabel.textContent = 'Stopping…';
+  appendLog('\n⛔ Stop requested by user — ending run…');
+  if (currentMode === 'eland') {
+    window.api.stopElandLookup();
+  } else {
+    window.api.stopScraping();
+  }
+});
 
 document.getElementById('btn-start').addEventListener('click', async () => {
   document.getElementById('tab-btn-log')?.click();
@@ -1271,7 +1397,9 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     const sep = outputFolder.endsWith('/') || outputFolder.endsWith('\\') ? '' : '/';
     const outputPath = `${outputFolder}${sep}${baseName}_eland.xlsx`;
     const result = await window.api.startElandLookup(elandCsvPath, outputPath, { format: elandOutputFormat });
-    if (result && result.success) {
+    if (userStopped) {
+      appendLog('⛔ Stopped by user.');
+    } else if (result && result.success) {
       appendLog(`✅ Done → ${result.outputPath}`);
       addResultEntry(result.outputPath, 'e.land XLSX');
       if (result.docxOutputPath) addResultEntry(result.docxOutputPath, 'e.land DOCX');
@@ -1332,6 +1460,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     const activeSource = getParcelSource();
     const isUaSource   = activeSource === 'kadastrova_karta_ua';
+    const fetchDetailedRegistry = !!document.getElementById('chk-detailed-registry')?.checked;
     appendLog(`🔍 Fetching ${cadnums.length} cadastral number(s) via ${getParcelSourceLabel(activeSource)}...\n`);
 
     const allResults = [];
@@ -1347,6 +1476,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       }
 
       for (let i = 0; i < cadnums.length; i++) {
+        if (userStopped) { appendLog('\n⛔ Stopped by user.'); break; }
         const cadnum = cadnums[i];
         setRunProgressLabel(`Cadnum ${i + 1}/${cadnums.length}: ${cadnum}`);
         appendLog(`\n[${i + 1}/${cadnums.length}] Processing: ${cadnum}`);
@@ -1413,6 +1543,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           let parcelsGot = 0;
           try {
             for (let attempt = 1; attempt <= 3; attempt++) {
+              if (userStopped) break;
               const res = await window.api.startScraping(startUrl, tempDir, {
                 headless: true,
                 boundaryFilter: null,
@@ -1455,7 +1586,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       appendLog(`  Successful: ${successful}`);
       appendLog(`  Total parcels: ${totalParcels}`);
 
-      if (successful > 0) {
+      if (successful > 0 && !userStopped) {
         appendLog(`\n📦 Merging ${successful} KMZ file(s)...`);
         try {
           const finalKmz = `${outputFolder.replace(/[\\\/]+$/, '')}/land_plots.kmz`;
@@ -1467,6 +1598,32 @@ document.getElementById('btn-start').addEventListener('click', async () => {
           appendLog(`⚠ Merge error: ${err.message}`);
           appendLog(`  Individual files available in: ${tempDir}`);
           keepTempDir = true;
+        }
+
+        if (fetchDetailedRegistry) {
+          const foundCadnums = allResults.filter(r => r.success).map(r => r.cadnum);
+          appendLog(`\n========================================`);
+          appendLog(`Fetching Detailed Registry Data for ${foundCadnums.length} parcel(s)...`);
+          appendLog(`========================================\n`);
+          try {
+            const cadCsvPath = `${outputFolder.replace(/[\\\/]+$/, '')}/land_plots_cadnums.csv`;
+            const csvWrite = await window.api.writeCadnumsCsv(foundCadnums, cadCsvPath);
+            if (!csvWrite || !csvWrite.success) {
+              appendLog(`⚠ Could not write cadnums CSV: ${csvWrite?.error || 'unknown error'}`);
+            } else {
+              addResultEntry(cadCsvPath, 'Cadnums CSV');
+              const elandXlsxPath = `${outputFolder.replace(/[\\\/]+$/, '')}/land_plots_eland_partial.xlsx`;
+              const elandResult = await window.api.startElandLookup(cadCsvPath, elandXlsxPath, { format: 'xlsx_partial' });
+              if (elandResult && elandResult.success !== false) {
+                if (elandResult.outputPath) { appendLog(`📊 e.land partial Excel → ${elandResult.outputPath}`); addResultEntry(elandResult.outputPath, 'e.land XLSX'); }
+                if (elandResult.docxOutputPath) { appendLog(`📄 e.land Word doc → ${elandResult.docxOutputPath}`); addResultEntry(elandResult.docxOutputPath, 'e.land DOCX'); }
+              } else {
+                appendLog(`⚠ Detailed registry lookup failed: ${elandResult?.error || 'unknown error'}`);
+              }
+            }
+          } catch (err) {
+            appendLog(`⚠ Detailed registry lookup error: ${err.message}`);
+          }
         }
       }
     } catch (outerErr) {
@@ -1569,13 +1726,16 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     let tilesGot = 0;
     let parcelsGot = 0;
     for (let round = 1; round <= 2 && tilesGot === 0; round++) {
+      if (userStopped) break;
       for (let attempt = 1; attempt <= 3; attempt++) {
+        if (userStopped) break;
         const res = await window.api.startScraping(startUrl, outputFolder,
           { headless: true, boundaryFilter: boundaryPath, parcelSource: source, fetchDetailedRegistry });
         appendLog(`Scraper exited (code ${res.code})`);
         tilesGot = res.tiles || 0;
         parcelsGot = res.parcels || 0;
         if (parcelsGot > 0) break;
+        if (userStopped) break;
         if (attempt < 3) appendLog(`⚠ No parcels yet — retrying (${attempt + 1}/3)…`);
       }
     }
@@ -1605,6 +1765,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     initRunProgress(boundaryFiles.length, 'Kadastr multi-KMZ');
 
     for (let i = 0; i < boundaryFiles.length; i++) {
+      if (userStopped) { appendLog('\n⛔ Stopped by user.'); break; }
       const bf = boundaryFiles[i];
       setRunProgressLabel(`Boundary ${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
@@ -1631,6 +1792,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       tickRunProgress(true);
     }
 
+    if (userStopped) { setBusy(false); return; }
     if (!kmzPaths.length) { appendLog('❌ All files failed.'); setBusy(false); return; }
 
     appendLog('\n📦 Merging into kadastr.kmz…');
@@ -1732,7 +1894,9 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     let tilesGot = 0;
     let parcelsGot = 0;
     for (let round = 1; round <= 2 && parcelsGot === 0; round++) {
+      if (userStopped) break;
       for (let attempt = 1; attempt <= 3; attempt++) {
+        if (userStopped) break;
         const source = parcelSource;
         const baseUrl = getParcelSourceBaseUrl(source);
         const res = await window.api.startScraping(cells[0] ? `${baseUrl}/#14/${cells[0].lat}/${cells[0].lng}` : '', outputFolder, {
@@ -1745,10 +1909,12 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         tilesGot = res.tiles || 0;
         parcelsGot = res.parcels || 0;
         if (parcelsGot > 0) break;
+        if (userStopped) break;
         if (attempt < 3) appendLog(`⚠ No parcels yet — retrying (${attempt + 1}/3)…`);
       }
     }
 
+    if (userStopped) { appendLog('\n⛔ Stopped by user.'); setBusy(false); return; }
     if (parcelsGot === 0) {
       appendLog('❌ No parcels found in area.');
       tickRunProgress(false, 'No parcels found');
@@ -1781,6 +1947,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     initRunProgress(boundaryFiles.length, 'Boundary batch');
 
     for (let i = 0; i < boundaryFiles.length; i++) {
+      if (userStopped) { appendLog('\n⛔ Stopped by user.'); break; }
       const bf = boundaryFiles[i];
       setRunProgressLabel(`Boundary ${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       // Folder name = coordinates portion of kadastr URL (after #)
@@ -1800,6 +1967,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       tickRunProgress(true);
     }
 
+    if (userStopped) { setBusy(false); return; }
     if (!kmzPaths.length) { appendLog('❌ All files failed.'); setBusy(false); return; }
 
     appendLog('\n📦 Merging into Parcels.kmz…');
@@ -1825,6 +1993,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 
     let successCount = 0;
     for (let i = 0; i < areas.length; i++) {
+      if (userStopped) { appendLog('\n⛔ Stopped by user.'); break; }
       const area = areas[i];
       setRunProgressLabel(`Area ${i + 1}/${areas.length}: ${area}`);
       appendLog(`\n━━━ Area ${i + 1}/${areas.length}: ${area} ━━━`);
@@ -1840,6 +2009,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       successCount++;
       tickRunProgress(true);
     }
+    if (userStopped) { setBusy(false); return; }
     if (!successCount) { appendLog('❌ All areas failed.'); setBusy(false); return; }
     appendLog(`\n✅ Done — ${successCount}/${areas.length} areas saved to ${outputFolder}`);
     window.api.copyIcons(outputFolder);

@@ -710,6 +710,60 @@ ipcMain.handle('merge-cadnum-csvs', (_event, { paths, outputPath, cleanup = true
   }
 });
 
+// IPC: write a plain list of cadastral numbers to a CSV (same format merge-cadnum-csvs
+// produces) — used by the "By cadastral numbers" tab to feed its typed-in list into
+// the e.land detailed-registry lookup, which expects a CSV path.
+ipcMain.handle('write-cadnums-csv', (_event, { cadnums, outputPath }) => {
+  const fs = require('fs');
+  try {
+    const list = (cadnums || []).map(c => String(c || '').trim()).filter(Boolean);
+    const rows = ['#,cadnum', ...list.map((cadnum, idx) => `${idx + 1},${cadnum}`)];
+    fs.writeFileSync(outputPath, '﻿' + rows.join('\r\n'), 'utf8');
+    return { success: true, outputPath, count: list.length };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: list top-level entries of the output folder — used to snapshot it right
+// before a run starts, so a later Stop can tell "produced by this run" apart
+// from files that were already there.
+ipcMain.handle('list-output-folder', (_event, folderPath) => {
+  const fs = require('fs');
+  try {
+    if (!folderPath || !fs.existsSync(folderPath)) return { success: true, files: [] };
+    return { success: true, files: fs.readdirSync(folderPath) };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: delete every top-level entry of the output folder that wasn't present
+// in `baseline` (the snapshot taken at run start) — the "Stop" button's
+// cleanup: wipe everything this run produced, leave everything else alone.
+ipcMain.handle('delete-new-output-files', (_event, { folderPath, baseline }) => {
+  const fs = require('fs');
+  const path = require('path');
+  const deleted = [];
+  try {
+    if (!folderPath || !fs.existsSync(folderPath)) return { success: true, deleted };
+    const baselineSet = new Set(baseline || []);
+    for (const name of fs.readdirSync(folderPath)) {
+      if (baselineSet.has(name)) continue;
+      const full = path.join(folderPath, name);
+      try {
+        const st = fs.statSync(full);
+        if (st.isDirectory()) fs.rmSync(full, { recursive: true, force: true });
+        else fs.unlinkSync(full);
+        deleted.push(full);
+      } catch (_) {}
+    }
+    return { success: true, deleted };
+  } catch (err) {
+    return { success: false, error: err.message, deleted };
+  }
+});
+
 // IPC: save dialog
 ipcMain.handle('save-dialog', async (_event, options) => {
   const result = await dialog.showSaveDialog(mainWindow, options);

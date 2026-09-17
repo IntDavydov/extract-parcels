@@ -144,6 +144,14 @@ a, a:hover { color: var(--color-accent-700); }
   background: var(--color-neutral-200);
 }
 
+.btn-danger {
+  background: #dc2626;
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
 /* Tags */
 .tag {
   display: inline-block;
@@ -221,7 +229,12 @@ a, a:hover { color: var(--color-accent-700); }
   transition: background 0.15s;
 }
 
-.nav-link:hover {
+.nav-link:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nav-link:hover:not(:disabled) {
   background: var(--color-neutral-200);
 }
 

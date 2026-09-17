@@ -17,6 +17,15 @@ contextBridge.exposeInMainWorld('api', {
   mergeKmz: (paths, outputPath, cleanup = true, areaNames, docName) =>
     ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames, docName }),
 
+  writeCadnumsCsv: (cadnums, outputPath) =>
+    ipcRenderer.invoke('write-cadnums-csv', { cadnums, outputPath }),
+
+  listOutputFolder: (folderPath) =>
+    ipcRenderer.invoke('list-output-folder', folderPath),
+
+  deleteNewOutputFiles: (folderPath, baseline) =>
+    ipcRenderer.invoke('delete-new-output-files', { folderPath, baseline }),
+
   mergeCadnumCsvs: (paths, outputPath, cleanup = true) =>
     ipcRenderer.invoke('merge-cadnum-csvs', { paths, outputPath, cleanup }),
 
