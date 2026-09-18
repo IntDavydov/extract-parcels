@@ -142,6 +142,47 @@ async function copyTextToClipboard(text) {
 
 let previewMap = null;
 let previewLayer = null;
+let boundaryOverlayLayers = []; // shapes drawn for the currently-attached boundaryFiles
+
+// Shows every attached/drawn boundary on the preview map — the KMZ/KML the
+// user picked, or a shape finished with the draw tool — as a dashed blue
+// outline, so it's visible before a run ever starts. Since the same
+// boundaryFiles list is also used to clip OSM layers, this doubles as a
+// preview of "where the OSM restriction is applied" too. Called any time
+// renderBoundaryList() is, i.e. every add/remove/clear.
+async function refreshBoundaryOverlay() {
+  if (!previewMap) return;
+  boundaryOverlayLayers.forEach((l) => previewMap.removeLayer(l));
+  boundaryOverlayLayers = [];
+  if (!boundaryFiles.length) return;
+
+  const allBounds = L.latLngBounds();
+  for (const f of boundaryFiles) {
+    try {
+      const res = await window.api.parseKmz(f.path);
+      if (!res || !res.success) continue;
+      const layersData = res.layers || (res.geojson ? [{ name: 'Boundary', geojson: res.geojson }] : []);
+      for (const layerInfo of layersData) {
+        const layer = L.geoJSON(layerInfo.geojson, {
+          style: { color: '#2563eb', weight: 2, dashArray: '6,4', fillColor: '#2563eb', fillOpacity: 0.06 },
+          pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 4, color: '#2563eb', weight: 2, fillOpacity: 0.3 }),
+        });
+        layer.bindTooltip(f.name, { sticky: true });
+        layer.addTo(previewMap);
+        boundaryOverlayLayers.push(layer);
+        try { allBounds.extend(layer.getBounds()); } catch (_) {}
+      }
+    } catch (err) {
+      console.warn('Boundary preview failed for', f.path, err);
+    }
+  }
+
+  // Don't yank the view if a generated KMZ is already being inspected —
+  // only auto-fit when the map would otherwise still be showing nothing new.
+  if (allBounds.isValid() && !previewLayer) {
+    previewMap.fitBounds(allBounds, { padding: [30, 30], maxZoom: 15 });
+  }
+}
 
 // Creates the empty base map (just tiles, no data) the first time it's
 // needed — called on startup so the preview panel never sits blank, and
@@ -204,7 +245,19 @@ async function showMapPreview(kmzPath) {
       const allBounds = L.latLngBounds();
       
       layersData.forEach((layerInfo, idx) => {
+        // Give every layer its own Leaflet pane with a z-index fixed by its
+        // position in the KML document (the same order Google Earth stacks
+        // these folders in — later folder = drawn on top). A pane's z-index
+        // is independent of DOM add/remove order, so toggling a layer off
+        // and back on via the checkboxes below can never bump it above a
+        // layer that's supposed to stay more "important"/on top of it —
+        // plain map.addLayer()/removeLayer() on a shared pane would.
+        const paneName = `preview-layer-${idx}`;
+        if (!previewMap.getPane(paneName)) {
+          previewMap.createPane(paneName).style.zIndex = String(410 + idx);
+        }
         const leafletLayer = L.geoJSON(layerInfo.geojson, {
+          pane: paneName,
           style: function(feature) {
             return {
               color: feature.properties.stroke || '#e05',
@@ -215,6 +268,7 @@ async function showMapPreview(kmzPath) {
           },
           pointToLayer: function (feature, latlng) {
             return L.circleMarker(latlng, {
+              pane: paneName,
               radius: 4,
               fillColor: feature.properties.fill || feature.properties.stroke || "#e05",
               color: feature.properties.stroke || "#fff",
@@ -857,6 +911,8 @@ function renderBoundaryList() {
   if (isKadastrMode && isMultiKmz) {
     document.querySelectorAll('input[name="layer"]').forEach(cb => { cb.checked = false; });
   }
+
+  refreshBoundaryOverlay();
 }
 
 // Remove one specific boundary file via its row's × button (event delegation

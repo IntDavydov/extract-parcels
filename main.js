@@ -340,16 +340,24 @@ ipcMain.handle('parse-kmz', async (event, kmzPath) => {
     const JSZip = require('jszip');
     const toGeoJSON = require('@mapbox/togeojson');
     const { DOMParser } = require('@xmldom/xmldom');
-    
+
     if (!fs.existsSync(kmzPath)) throw new Error('File not found');
-    
-    const kmzData = fs.readFileSync(kmzPath);
-    const unzipped = await JSZip.loadAsync(kmzData);
-    const kmlFile = unzipped.file('doc.kml') || unzipped.file('doc.kml'.toLowerCase());
-    
-    if (!kmlFile) throw new Error('No doc.kml found inside KMZ');
-    
-    const kmlText = await kmlFile.async('string');
+
+    // Plain .kml (uncompressed XML) — read directly, no zip involved. This
+    // also covers boundary files the user attaches from other GIS tools,
+    // which aren't guaranteed to be zipped, or to name their entry doc.kml.
+    let kmlText;
+    if (kmzPath.toLowerCase().endsWith('.kml')) {
+      kmlText = fs.readFileSync(kmzPath, 'utf8');
+    } else {
+      const kmzData = fs.readFileSync(kmzPath);
+      const unzipped = await JSZip.loadAsync(kmzData);
+      const kmlFile = unzipped.file('doc.kml')
+        || Object.values(unzipped.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.kml'));
+      if (!kmlFile) throw new Error('No .kml found inside KMZ');
+      kmlText = await kmlFile.async('string');
+    }
+
     const { XMLSerializer } = require('@xmldom/xmldom');
     const dom = new DOMParser().parseFromString(kmlText, 'text/xml');
     
