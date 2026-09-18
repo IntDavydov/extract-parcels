@@ -209,8 +209,65 @@ function ensurePreviewMap() {
     { position: 'topleft', collapsed: false }
   ).addTo(previewMap);
 
+  previewMap.on('contextmenu', showMapContextMenu);
+  previewMap.on('click movestart zoomstart', hideMapContextMenu);
+
   return previewMap;
 }
+
+// Right-click on the map → small "Directions here" menu, like the one
+// Google Maps itself shows. Leaflet automatically suppresses the native
+// browser context menu as soon as anything listens for 'contextmenu' here.
+let mapContextMenuEl = null;
+let mapContextMenuLatLng = null;
+
+function hideMapContextMenu() {
+  if (mapContextMenuEl) mapContextMenuEl.style.display = 'none';
+}
+
+function showMapContextMenu(e) {
+  mapContextMenuLatLng = e.latlng;
+  if (!mapContextMenuEl) {
+    mapContextMenuEl = document.createElement('div');
+    mapContextMenuEl.style.cssText = 'position:absolute;z-index:1300;background:rgba(255,255,255,0.98);border:1px solid var(--color-divider);border-radius:3px;box-shadow:0 2px 8px rgba(0,0,0,0.2);padding:4px;font-size:12.5px;min-width:190px;';
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.textContent = '🧭 Directions here (Google Maps)';
+    item.style.cssText = 'display:block;width:100%;text-align:left;border:none;background:none;padding:7px 9px;cursor:pointer;border-radius:2px;color:inherit;font-size:inherit;font-family:inherit;';
+    item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-neutral-200)'; });
+    item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+    item.addEventListener('click', async () => {
+      hideMapContextMenu();
+      if (!mapContextMenuLatLng) return;
+      const { lat, lng } = mapContextMenuLatLng;
+      // No origin param on purpose — Google Maps then asks the browser for
+      // the current location itself and routes from there, exactly like
+      // right-clicking a point in Google Maps and choosing "Directions to here".
+      const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+      const res = await window.api.openExternal(url);
+      if (!res || !res.success) appendLog(`⚠ Could not open Google Maps: ${res?.error || 'unknown error'}`);
+    });
+    mapContextMenuEl.appendChild(item);
+    document.getElementById('map-container').appendChild(mapContextMenuEl);
+  }
+  const container = document.getElementById('map-container');
+  const rect = container.getBoundingClientRect();
+  let left = e.containerPoint.x;
+  let top = e.containerPoint.y;
+  // Keep it on-screen if the click lands near the right/bottom edge.
+  if (left + 200 > rect.width) left = Math.max(0, rect.width - 200);
+  if (top + 44 > rect.height) top = Math.max(0, rect.height - 44);
+  mapContextMenuEl.style.left = `${left}px`;
+  mapContextMenuEl.style.top = `${top}px`;
+  mapContextMenuEl.style.display = 'block';
+}
+
+document.addEventListener('click', (e) => {
+  if (mapContextMenuEl && mapContextMenuEl.style.display !== 'none' && !mapContextMenuEl.contains(e.target)) {
+    hideMapContextMenu();
+  }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMapContextMenu(); });
 
 async function showMapPreview(kmzPath) {
   document.getElementById('map-summary').textContent = kmzPath.split(/[\\/\\\\]/).pop();

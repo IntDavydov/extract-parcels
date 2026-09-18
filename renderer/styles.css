@@ -54,6 +54,13 @@ input, textarea, select, .log-area {
   user-select: text;
 }
 
+/* Parcel info popup (map click) — the app-wide user-select:none above would
+   otherwise block selecting/copying the owner/tenant/cadnum text shown here. */
+.leaflet-popup-content, .leaflet-popup-content * {
+  user-select: text;
+  cursor: text;
+}
+
 body {
   margin: 0;
   background: var(--color-surface);

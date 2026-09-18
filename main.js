@@ -884,6 +884,22 @@ ipcMain.handle('open-path', async (_event, targetPath) => {
   return shell.openPath(targetPath);
 });
 
+// IPC: open a URL in the system's default browser — used by the map's
+// right-click "Directions here" menu. Restricted to http(s) so a renderer
+// bug (or a malicious KML description) can never hand this a custom
+// protocol / file: URL.
+ipcMain.handle('open-external', async (_event, url) => {
+  try {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+      return { success: false, error: 'Only http(s) URLs are allowed.' };
+    }
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('resolve-bbox', async (_event, territory) => {
   try {
     const { fetchOSM, getBboxExport } = require(getUnpackedPath('src', 'osm.js'));

@@ -203,6 +203,32 @@ function colorKeyStyleId(name) {
   return `by_name_${hashString(String(name)).toString(36)}`;
 }
 
+// Normalizes a registry name for GROUPING/coloring only — never used for
+// display text, which keeps the raw registry wording. The same owner/tenant
+// can show up spelled several different ways across parcels: different
+// letter case, a name e.land wraps onto several lines (so it arrives with
+// embedded newlines), inconsistent spacing around hyphens, curly vs.
+// straight quotes/apostrophes, and a legal-form abbreviation in one record
+// ("ПОСП") spelled out in full in another ("Приватно-орендне
+// сільськогосподарське підприємство"). Without this, each variant hashes to
+// its own color and the same real-world tenant gets split across several.
+function normalizeEntityName(name) {
+  let s = String(name || '')
+    .replace(/[‘’ʼ`´]/g, "'") // ‘ ’ ʼ ` ´ → '
+    .replace(/[«»“”]/g, '"')        // « » " " → "
+    .replace(/\s+/g, ' ')                                // collapse whitespace/newlines
+    .replace(/\s*-\s*/g, '-')                            // unify hyphen spacing
+    .trim();
+  if (!s) return '';
+  s = s.toLocaleUpperCase('uk-UA');
+
+  // Most organization records read `<legal form words> "<Distinct Name>"` —
+  // the legal form varies (spelled out vs. abbreviated like "ПОСП"/"ТОВ")
+  // but the quoted name is the actual identity, so group by that when present.
+  const quoted = s.match(/["']([^"']{2,})["']/);
+  return quoted ? quoted[1].trim() : s;
+}
+
 // Map OSM voltage tag (volts or kV string) to a tower style ID
 function towerStyleId(voltageTag) {
   if (!voltageTag) return 'Towers';
@@ -351,7 +377,9 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   // of the layer's shared style — this is how per-owner/tenant coloring works.
   const declaredNameStyles = new Set();
   function resolveStyleId(f, defaultStyleId) {
-    const colorKey = f?.properties?.colorKey;
+    const rawColorKey = f?.properties?.colorKey;
+    if (!rawColorKey) return defaultStyleId;
+    const colorKey = normalizeEntityName(rawColorKey);
     if (!colorKey) return defaultStyleId;
     const id = colorKeyStyleId(colorKey);
     if (!declaredNameStyles.has(id)) {

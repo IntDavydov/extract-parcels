@@ -68,6 +68,9 @@ contextBridge.exposeInMainWorld('api', {
   openPath: (targetPath) =>
     ipcRenderer.invoke('open-path', targetPath),
 
+  openExternal: (url) =>
+    ipcRenderer.invoke('open-external', url),
+
   copyIcons: (outputFolder) =>
     ipcRenderer.invoke('copy-icons', outputFolder),
 
