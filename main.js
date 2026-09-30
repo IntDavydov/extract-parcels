@@ -7,6 +7,8 @@ const https = require('https');
 const { spawn } = require('child_process');
 const { lookupEland, stopLookup } = require('./src/eland');
 const { generateResearchXlsx, stopResearch } = require('./src/research');
+const { generatePresentation, stopPresentationGenerate: stopPresentationGenerateJob } = require('./src/pptx');
+const appConfig = require('./src/config');
 
 function getUnpackedPath(...parts) {
   return path.join(__dirname, ...parts);
@@ -802,6 +804,22 @@ ipcMain.handle('open-csv-dialog', async () => {
   return result;
 });
 
+ipcMain.handle('open-pptx-template-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'PowerPoint template', extensions: ['pptx'] }],
+  });
+  return result;
+});
+
+ipcMain.handle('open-data-files-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Word / Excel data files', extensions: ['docx', 'xlsx'] }],
+  });
+  return result;
+});
+
 ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFolder }) => {
   const JSZip = require('jszip');
   try {
@@ -1171,6 +1189,46 @@ ipcMain.handle('start-eland-lookup', async (event, { csvPath, outputPath, output
 });
 
 ipcMain.on('stop-eland-lookup', () => stopLookup());
+
+ipcMain.handle('get-ai-config', async () => {
+  const primary = appConfig.getPrimaryAiConfig();
+  const fallback = appConfig.getFallbackAiConfig();
+  return {
+    primary: {
+      hasApiKey: !!primary.apiKey,
+      apiKeyMasked: appConfig.maskKey(primary.apiKey),
+      baseUrl: primary.baseUrl,
+      model: primary.model,
+    },
+    fallback: {
+      hasApiKey: !!fallback.apiKey,
+      apiKeyMasked: appConfig.maskKey(fallback.apiKey),
+      baseUrl: fallback.baseUrl,
+      model: fallback.model,
+    },
+  };
+});
+
+ipcMain.handle('save-ai-config', async (_event, { primary, fallback } = {}) => {
+  appConfig.saveAiConfig({ primary, fallback });
+  return { success: true };
+});
+
+ipcMain.handle('start-presentation-generate', async (event, { templatePath, dataFilePaths, topic, outputPath }) => {
+  preventSystemSleep('presentation generate');
+  try {
+    const onProgress = (msg) => event.sender.send('log', msg);
+    const result = await generatePresentation({ templatePath, dataFilePaths, topic, outputPath }, onProgress);
+    return result;
+  } catch (err) {
+    event.sender.send('log', `❌ Presentation generation failed: ${err.message}`);
+    return { success: false, error: err.message };
+  } finally {
+    allowSystemSleep();
+  }
+});
+
+ipcMain.on('stop-presentation-generate', () => stopPresentationGenerateJob());
 
 ipcMain.handle('download-offline-data', async (event, { worldcoverUrl = '', geologyUrl = '', forceUpdate = false, forceUpdateAws = false } = {}) => {
   try {

@@ -104,6 +104,24 @@ contextBridge.exposeInMainWorld('api', {
   downloadOfflineData: (options = {}) =>
     ipcRenderer.invoke('download-offline-data', options),
 
+  openPptxTemplateDialog: () =>
+    ipcRenderer.invoke('open-pptx-template-dialog'),
+
+  openDataFilesDialog: () =>
+    ipcRenderer.invoke('open-data-files-dialog'),
+
+  getAiConfig: () =>
+    ipcRenderer.invoke('get-ai-config'),
+
+  saveAiConfig: (config) =>
+    ipcRenderer.invoke('save-ai-config', config),
+
+  startPresentationGenerate: (options) =>
+    ipcRenderer.invoke('start-presentation-generate', options),
+
+  stopPresentationGenerate: () =>
+    ipcRenderer.send('stop-presentation-generate'),
+
   onLog: (callback) =>
     ipcRenderer.on('log', (_event, msg) => callback(msg)),
 

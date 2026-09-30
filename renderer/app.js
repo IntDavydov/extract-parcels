@@ -765,6 +765,9 @@ let elandOutputFormat = 'xlsx_partial';
 let researchBusy   = false;
 let offlineDownloadBusy = false;
 let parcelSource = 'kadastrova_karta_ua';
+let pptxTemplatePath = '';
+let presentationDataFiles = []; // [{path, name}]
+let presentationBusy = false;
 const appRole = String(window.api.getAppRole?.() || 'user');
 const isAdminRole = appRole === 'admin';
 const USER_VISIBLE_MODES = new Set(['kadastr', 'eland']);
@@ -785,6 +788,7 @@ const MODE_BUTTON_LABELS = {
   cadnum: '▶ Start Parcels by cadastral numbers',
   coords: '▶ Extract polygon coordinates',
   eland: '🔍 Lookup on e.land',
+  presentation: '✨ Generate presentation',
 };
 
 function setFieldError(id, message) {
@@ -1020,6 +1024,107 @@ document.getElementById('btn-clear-boundary')?.addEventListener('click', () => {
   checkStartReady();
 });
 
+// ── Presentation generator ──────────────────────────────────
+function renderPresentationDataFileList() {
+  const list = document.getElementById('presentation-data-file-list');
+  if (!list) return;
+  list.innerHTML = '';
+  presentationDataFiles.forEach((f, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:var(--color-neutral-700);background:var(--color-neutral-200);border-radius:2px;padding:3px 6px;';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = f.name;
+    nameSpan.style.cssText = 'word-break:break-all;';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '×';
+    removeBtn.title = `Remove ${f.name}`;
+    removeBtn.setAttribute('data-remove-presentation-file', String(idx));
+    removeBtn.style.cssText = 'flex:none;border:none;background:none;cursor:pointer;color:var(--color-neutral-700);font-size:14px;line-height:1;padding:0 2px;';
+    row.appendChild(nameSpan);
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('presentation-data-file-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-remove-presentation-file]');
+  if (!btn) return;
+  const idx = parseInt(btn.getAttribute('data-remove-presentation-file'), 10);
+  if (Number.isInteger(idx) && idx >= 0 && idx < presentationDataFiles.length) {
+    presentationDataFiles.splice(idx, 1);
+    renderPresentationDataFileList();
+    checkStartReady();
+  }
+});
+
+document.getElementById('btn-pick-pptx-template')?.addEventListener('click', async () => {
+  const result = await window.api.openPptxTemplateDialog();
+  if (!result.canceled && result.filePaths.length) {
+    pptxTemplatePath = result.filePaths[0];
+    const display = document.getElementById('pptx-template-display');
+    if (display) display.textContent = pptxTemplatePath.split(/[\\/]/).pop();
+    checkStartReady();
+  }
+});
+
+document.getElementById('btn-pick-presentation-data')?.addEventListener('click', async () => {
+  const result = await window.api.openDataFilesDialog();
+  if (!result.canceled && result.filePaths.length) {
+    for (const filePath of result.filePaths) {
+      const name = filePath.split(/[\\/]/).pop();
+      if (!presentationDataFiles.some(f => f.path === filePath)) {
+        presentationDataFiles.push({ path: filePath, name });
+      }
+    }
+    renderPresentationDataFileList();
+    checkStartReady();
+  }
+});
+
+async function loadAiConfigIntoUI() {
+  try {
+    const config = await window.api.getAiConfig();
+    if (!config) return;
+    const setField = (baseId, providerCfg) => {
+      const baseUrlEl = document.getElementById(`${baseId}-baseurl`);
+      const apiKeyEl = document.getElementById(`${baseId}-apikey`);
+      const modelEl = document.getElementById(`${baseId}-model`);
+      if (baseUrlEl && providerCfg.baseUrl) baseUrlEl.value = providerCfg.baseUrl;
+      if (apiKeyEl) {
+        apiKeyEl.value = '';
+        apiKeyEl.placeholder = providerCfg.hasApiKey ? `saved: ${providerCfg.apiKeyMasked}` : 'not set';
+      }
+      if (modelEl && providerCfg.model) modelEl.value = providerCfg.model;
+    };
+    if (config.primary) setField('ai-primary', config.primary);
+    if (config.fallback) setField('ai-fallback', config.fallback);
+  } catch (err) {
+    appendLog(`⚠ Could not load AI settings: ${err.message}`);
+  }
+}
+
+document.getElementById('btn-save-ai-config')?.addEventListener('click', async () => {
+  const status = document.getElementById('ai-config-status');
+  const primary = {
+    baseUrl: document.getElementById('ai-primary-baseurl')?.value.trim() || '',
+    apiKey: document.getElementById('ai-primary-apikey')?.value.trim() || '',
+    model: document.getElementById('ai-primary-model')?.value.trim() || '',
+  };
+  const fallback = {
+    baseUrl: document.getElementById('ai-fallback-baseurl')?.value.trim() || '',
+    apiKey: document.getElementById('ai-fallback-apikey')?.value.trim() || '',
+    model: document.getElementById('ai-fallback-model')?.value.trim() || '',
+  };
+  try {
+    await window.api.saveAiConfig({ primary, fallback });
+    if (status) status.textContent = '✅ Saved.';
+    await loadAiConfigIntoUI();
+  } catch (err) {
+    if (status) status.textContent = `❌ Failed: ${err.message}`;
+  }
+});
+
 // ── Drag & drop ────────────────────────────────────────────
 // Prevent Electron from navigating to dropped files
 document.addEventListener('dragover',  (e) => e.preventDefault());
@@ -1148,7 +1253,8 @@ const MODES = {
   custom: { title: 'Settlement boundary', ua: 'Межа населеного пункту', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
   coords: { title: 'Polygon coordinates', ua: 'Координати полігону', show: ['sect-parcel-flow', 'sect-boundary', 'sect-folder'], reqBoundary: true },
   research: { title: 'Pre-Research XLSX', ua: 'Перед-дослідження', show: ['sect-research', 'sect-folder'] },
-  offline: { title: 'Offline data', ua: 'Офлайн-дані', show: ['sect-offline'] }
+  offline: { title: 'Offline data', ua: 'Офлайн-дані', show: ['sect-offline'] },
+  presentation: { title: 'Presentation', ua: 'Презентація', show: ['sect-presentation', 'sect-folder'] }
 };
 
 let currentMode = 'boundary';
@@ -1180,7 +1286,7 @@ function setMode(mode) {
   });
   
   // Hide all sections first
-  ['sect-parcel-flow', 'sect-area', 'sect-cadnum', 'sect-csv', 'sect-boundary', 'sect-source', 'sect-folder', 'sect-format', 'sect-layers', 'sect-kadastropts', 'sect-research', 'sect-offline'].forEach(id => {
+  ['sect-parcel-flow', 'sect-area', 'sect-cadnum', 'sect-csv', 'sect-boundary', 'sect-source', 'sect-folder', 'sect-format', 'sect-layers', 'sect-kadastropts', 'sect-research', 'sect-offline', 'sect-presentation'].forEach(id => {
     const el = document.getElementById(id);
     if(el) el.style.display = 'none';
   });
@@ -1212,6 +1318,8 @@ function setMode(mode) {
     else lbl.textContent = 'Boundary KMZ/KML · Межа';
   }
   
+  if (mode === 'presentation') loadAiConfigIntoUI();
+
   updateStartButtonLabel(mode);
   checkStartReady();
 }
@@ -1347,6 +1455,8 @@ function updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoun
     else if (boundaryCount > 1) setFieldError('err-boundary', 'Attach only one file for coordinate extraction.');
   } else if (fetchMode === 'kadastr' || fetchMode === 'custom') {
     if (!hasBoundary) setFieldError('err-boundary', 'Attach at least one KMZ/KML boundary file.');
+  } else if (fetchMode === 'presentation') {
+    // No boundary/territory/layer requirements for this mode.
   } else {
     if (!territory && !hasBoundary && !isFullParcels) {
       setFieldError('err-area-name', 'Add at least one area name or attach a boundary file.');
@@ -1363,7 +1473,7 @@ function updateInlineValidation(fetchMode, territory, cadnum, hasOutput, hasBoun
     ? !!elandCsvPath
     : (fetchMode === 'cadnum'
       ? !!cadnum
-      : ((fetchMode === 'coords') ? boundaryCount === 1 : ((fetchMode === 'kadastr' || fetchMode === 'custom') ? hasBoundary : (!!territory || hasBoundary))));
+      : ((fetchMode === 'coords') ? boundaryCount === 1 : ((fetchMode === 'kadastr' || fetchMode === 'custom') ? hasBoundary : (fetchMode === 'presentation' ? (!!pptxTemplatePath && presentationDataFiles.length > 0) : (!!territory || hasBoundary)))));
   const outputDone = hasOutput;
   const optionsDone = fetchMode === 'boundary' ? hasLayers || hasBoundary : true;
   setStepStatus('step-input-status', sourceDone);
@@ -1394,6 +1504,8 @@ function checkStartReady() {
     ready = hasOutput && hasBoundary;
   } else if (fetchMode === 'custom') {
     ready = hasOutput && hasBoundary;
+  } else if (fetchMode === 'presentation') {
+    ready = hasOutput && !!pptxTemplatePath && presentationDataFiles.length > 0 && !presentationBusy;
   } else {
     ready = hasOutput && (
       isMultiKmz  ? true :
@@ -1485,6 +1597,8 @@ document.getElementById('btn-stop')?.addEventListener('click', () => {
   appendLog('\n⛔ Stop requested by user — ending run…');
   if (currentMode === 'eland') {
     window.api.stopElandLookup();
+  } else if (currentMode === 'presentation') {
+    window.api.stopPresentationGenerate();
   } else {
     window.api.stopScraping();
   }
@@ -1525,6 +1639,49 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     elandBusy = false;
     checkElandReady();
     setBusy(false);
+    return;
+  }
+
+  // ── Presentation generator mode ──
+  if (fetchMode === 'presentation') {
+    if (!pptxTemplatePath) { appendLog('⚠ Please select a PowerPoint template.'); return; }
+    if (presentationDataFiles.length === 0) { appendLog('⚠ Please attach at least one .docx/.xlsx data file.'); return; }
+    if (presentationBusy) { appendLog('⚠ Presentation generation is already running.'); return; }
+
+    clearLogs();
+    setBusy(true);
+    presentationBusy = true;
+    initRunProgress(1, 'Presentation generation');
+
+    const topic = document.getElementById('presentation-topic')?.value.trim() || 'presentation';
+    const safeName = topic.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) || 'presentation';
+    const sep = outputFolder.endsWith('/') || outputFolder.endsWith('\\') ? '' : '/';
+    const outputPath = `${outputFolder}${sep}${safeName}.pptx`;
+    try {
+      const result = await window.api.startPresentationGenerate({
+        templatePath: pptxTemplatePath,
+        dataFilePaths: presentationDataFiles.map(f => f.path),
+        topic,
+        outputPath,
+      });
+      if (userStopped) {
+        appendLog('⛔ Stopped by user.');
+      } else if (result && result.success) {
+        appendLog(`✅ Done → ${result.outputPath}`);
+        addResultEntry(result.outputPath, 'Presentation PPTX');
+        window.api.showInFolder(result.outputPath);
+        tickRunProgress(true, 'Presentation generation done');
+      } else {
+        appendLog(`❌ Failed: ${result?.error || 'unknown error'}`);
+        tickRunProgress(false, 'Presentation generation failed');
+      }
+    } catch (err) {
+      appendLog(`❌ Failed: ${err?.message || err}`);
+      tickRunProgress(false, 'Presentation generation failed');
+    } finally {
+      presentationBusy = false;
+      setBusy(false);
+    }
     return;
   }
 
