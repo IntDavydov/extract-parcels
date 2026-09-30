@@ -349,11 +349,12 @@ ipcMain.handle('parse-kmz', async (event, kmzPath) => {
     // also covers boundary files the user attaches from other GIS tools,
     // which aren't guaranteed to be zipped, or to name their entry doc.kml.
     let kmlText;
+    let unzipped = null;
     if (kmzPath.toLowerCase().endsWith('.kml')) {
       kmlText = fs.readFileSync(kmzPath, 'utf8');
     } else {
       const kmzData = fs.readFileSync(kmzPath);
-      const unzipped = await JSZip.loadAsync(kmzData);
+      unzipped = await JSZip.loadAsync(kmzData);
       const kmlFile = unzipped.file('doc.kml')
         || Object.values(unzipped.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.kml'));
       if (!kmlFile) throw new Error('No .kml found inside KMZ');
@@ -362,7 +363,37 @@ ipcMain.handle('parse-kmz', async (event, kmzPath) => {
 
     const { XMLSerializer } = require('@xmldom/xmldom');
     const dom = new DOMParser().parseFromString(kmlText, 'text/xml');
-    
+
+    // GroundOverlays (e.g. wind/elevation heatmap PNGs) aren't understood by
+    // @mapbox/togeojson, so extract them separately before the folder-stripping
+    // pass below mutates the tree.
+    const groundOverlays = [];
+    if (unzipped) {
+      for (const el of Array.from(dom.getElementsByTagName('GroundOverlay'))) {
+        try {
+          const nameNode = el.getElementsByTagName('name')[0];
+          const hrefNode = el.getElementsByTagName('href')[0];
+          const boxNode = el.getElementsByTagName('LatLonBox')[0];
+          if (!hrefNode || !boxNode) continue;
+          const href = hrefNode.textContent.trim();
+          const imgFile = unzipped.file(href);
+          if (!imgFile) continue;
+          const imgBuf = await imgFile.async('nodebuffer');
+          const north = parseFloat(boxNode.getElementsByTagName('north')[0].textContent);
+          const south = parseFloat(boxNode.getElementsByTagName('south')[0].textContent);
+          const east = parseFloat(boxNode.getElementsByTagName('east')[0].textContent);
+          const west = parseFloat(boxNode.getElementsByTagName('west')[0].textContent);
+          groundOverlays.push({
+            name: nameNode ? nameNode.textContent : 'Overlay',
+            dataUrl: `data:image/png;base64,${imgBuf.toString('base64')}`,
+            bounds: [[south, west], [north, east]],
+          });
+        } catch (ovErr) {
+          console.error('Failed to extract GroundOverlay', ovErr);
+        }
+      }
+    }
+
     const folders = Array.from(dom.getElementsByTagName('Folder'));
     const layers = [];
     
@@ -389,7 +420,7 @@ ipcMain.handle('parse-kmz', async (event, kmzPath) => {
       }
     }
     
-    return { success: true, layers };
+    return { success: true, layers, groundOverlays };
   } catch (err) {
     console.error('parse-kmz failed', err);
     return { success: false, error: err.message };

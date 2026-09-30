@@ -573,12 +573,14 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     writeLayerFolder(layerName);
   }
 
+  const windOverlays = groundOverlays.filter(ov => ov.tileKey === 'wind_heatmap');
+  const otherOverlays = groundOverlays.filter(ov => ov.tileKey !== 'wind_heatmap');
   const hasWindPoints = !!(layerMap['Wind Speed'] && layerMap['Wind Speed'].length);
-  const hasWindOverlays = groundOverlays.length > 0;
+  const hasWindOverlays = windOverlays.length > 0;
   if (hasWindPoints || hasWindOverlays) {
-    const hubHeight = hasWindOverlays ? (groundOverlays[0].hubHeight || '') : '';
+    const hubHeight = hasWindOverlays ? (windOverlays[0].hubHeight || '') : '';
     ws.write(`  <Folder><name>Wind Speed${hubHeight ? ` ${hubHeight}m` : ''}</name>\n`);
-    
+
     if (hasWindPoints) {
       ws.write(`    <Folder><name>Average Pins</name>\n`);
       writeLayerFolder('Wind Speed');
@@ -586,10 +588,19 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
     }
 
     if (hasWindOverlays) {
-      for (const ov of groundOverlays) {
-        const fname = `files/wind_tile_${ov.tileKey || '0'}.png`;
+      for (const ov of windOverlays) {
+        const fname = `files/overlay_${ov.tileKey || '0'}.png`;
         ws.write(`    <GroundOverlay><name>Wind Heatmap ${hubHeight}m</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>\n`);
       }
+    }
+    ws.write(`  </Folder>\n`);
+  }
+
+  if (otherOverlays.length) {
+    ws.write(`  <Folder><name>Elevation</name>\n`);
+    for (const ov of otherOverlays) {
+      const fname = `files/overlay_${ov.tileKey || '0'}.png`;
+      ws.write(`    <GroundOverlay><name>${escXml(ov.label || 'Elevation Heatmap')}</name><altitudeMode>clampToSeaFloor</altitudeMode><Icon><href>${fname}</href></Icon><LatLonBox><north>${ov.north}</north><south>${ov.south}</south><east>${ov.east}</east><west>${ov.west}</west></LatLonBox></GroundOverlay>\n`);
     }
     ws.write(`  </Folder>\n`);
   }
@@ -647,7 +658,7 @@ async function exportKMZ(layerMap, outputPath, onProgress, groundOverlays = [], 
   }
 
   for (const ov of groundOverlays) {
-    zip.file(`files/wind_tile_${ov.tileKey || '0'}.png`, ov.imageBuffer);
+    zip.file(`files/overlay_${ov.tileKey || '0'}.png`, ov.imageBuffer);
   }
 
   await new Promise((resolve, reject) => {

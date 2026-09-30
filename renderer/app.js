@@ -292,16 +292,45 @@ async function showMapPreview(kmzPath) {
   
   if (res && res.success) {
     let layersData = res.layers;
+    const groundOverlays = res.groundOverlays || [];
     // Fallback for older parse-kmz that returns a single geojson
     if (!layersData && res.geojson) {
       layersData = [{ name: 'Data', geojson: res.geojson }];
     }
-    
-    if (layersData && layersData.length > 0) {
+
+    const hasContent = (layersData && layersData.length > 0) || groundOverlays.length > 0;
+    if (hasContent) {
       previewLayer = [];
       const allBounds = L.latLngBounds();
-      
-      layersData.forEach((layerInfo, idx) => {
+
+      groundOverlays.forEach((ov, idx) => {
+        const overlayLayer = L.imageOverlay(ov.dataUrl, ov.bounds, { opacity: 0.7 }).addTo(previewMap);
+        previewLayer.push(overlayLayer);
+        if (ov.bounds) allBounds.extend(ov.bounds);
+
+        if (layerList) {
+          const lbl = document.createElement('label');
+          lbl.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;word-break:break-word;';
+
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = true;
+          cb.style.cssText = 'width:12px;height:12px;accent-color:#5980a6;flex:none;';
+          cb.addEventListener('change', (e) => {
+            if (e.target.checked) previewMap.addLayer(overlayLayer);
+            else previewMap.removeLayer(overlayLayer);
+          });
+
+          const text = document.createElement('span');
+          text.textContent = ov.name || `Overlay ${idx + 1}`;
+
+          lbl.appendChild(cb);
+          lbl.appendChild(text);
+          layerList.appendChild(lbl);
+        }
+      });
+
+      if (layersData) layersData.forEach((layerInfo, idx) => {
         // Give every layer its own Leaflet pane with a z-index fixed by its
         // position in the KML document (the same order Google Earth stacks
         // these folders in — later folder = drawn on top). A pane's z-index
@@ -389,10 +418,10 @@ async function showMapPreview(kmzPath) {
         }
       });
       
-      if (layerControl && layersData.length > 0) {
+      if (layerControl) {
         layerControl.style.display = 'block';
       }
-      
+
       if (allBounds.isValid()) {
         previewMap.fitBounds(allBounds, { maxZoom: 16, padding: [20, 20] });
       }
@@ -1350,6 +1379,7 @@ const LAYERS = [
   ['nuclear_plants', 'Nuclear plants +30 km', 'АЕС +30 км', false],
   ['nature_reserves', 'Nature reserves (PZF)', 'ПЗФ', false],
   ['wind', 'Wind speed (GWA)', 'Швидкість вітру', false],
+  ['elevation', 'Elevation / height', 'Висота рельєфу', false],
 ];
 
 setTimeout(() => {

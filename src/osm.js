@@ -1969,6 +1969,247 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   };
 }
 
+// ── Elevation: fetch terrain height from AWS "Terrain Tiles" (free, no API key) ──
+// https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif — 512×512
+// Int16 GeoTIFF tiles on the standard XYZ slippy-map grid, worldwide coverage.
+const ELEVATION_TILE_URL_TEMPLATE = 'https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif';
+const ELEVATION_TILE_SIZE = 512;
+const ELEVATION_MAX_TILES = 25; // 5×5 cap on how many tiles a single request may fetch
+
+function lonLatToTileXY(lon, lat, z) {
+  const n = Math.pow(2, z);
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { x: Math.min(Math.max(x, 0), n - 1), y: Math.min(Math.max(y, 0), n - 1) };
+}
+
+function tileXYToLonLatBounds(x, y, z) {
+  const n = Math.pow(2, z);
+  const lonAt = (tx) => (tx / n) * 360 - 180;
+  const latAt = (ty) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * ty) / n))) * 180) / Math.PI;
+  return { west: lonAt(x), east: lonAt(x + 1), north: latAt(y), south: latAt(y + 1) };
+}
+
+// Hypsometric tint, normalized to the fetched area's own min/max elevation (meters).
+function elevationToColor(t) {
+  const stops = [
+    [0.0,  [0x1a, 0x9b, 0x50]],  // lowland green
+    [0.35, [0xa9, 0xc4, 0x4c]],  // yellow-green
+    [0.6,  [0xd9, 0xb0, 0x5b]],  // tan
+    [0.8,  [0xa9, 0x6a, 0x3f]],  // brown
+    [1.0,  [0xf5, 0xf5, 0xf0]],  // near-white peaks
+  ];
+  if (t <= stops[0][0]) return stops[0][1];
+  if (t >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const span = stops[i][0] - stops[i - 1][0];
+      const local = span > 0 ? (t - stops[i - 1][0]) / span : 0;
+      return stops[i - 1][1].map((c, j) => Math.round(c + local * (stops[i][1][j] - c)));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+// Build a PNG from a 2D array of elevations (meters), colorized relative to min/max.
+function elevationArrayToPng(data, width, height, min, max) {
+  const zlib = require('zlib');
+  const range = max - min;
+  const raw = Buffer.alloc(height * (1 + width * 4));
+  for (let row = 0; row < height; row++) {
+    raw[row * (1 + width * 4)] = 0; // filter byte
+    for (let col = 0; col < width; col++) {
+      const v = data[row * width + col];
+      const valid = isFinite(v) && v > -1000 && v < 8000;
+      const t = valid && range > 0 ? (v - min) / range : 0;
+      const [r, g, b] = valid ? elevationToColor(t) : [0, 0, 0];
+      const a = valid ? 200 : 0;
+      const off = row * (1 + width * 4) + 1 + col * 4;
+      raw[off] = r; raw[off + 1] = g; raw[off + 2] = b; raw[off + 3] = a;
+    }
+  }
+  const compressed = zlib.deflateSync(raw);
+
+  function crc32(buf) {
+    let crc = 0xFFFFFFFF;
+    for (const b of buf) {
+      crc ^= b;
+      for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function chunk(type, chunkData) {
+    const len = Buffer.alloc(4); len.writeUInt32BE(chunkData.length);
+    const typeB = Buffer.from(type);
+    const crcBuf = Buffer.concat([typeB, chunkData]);
+    const crcVal = Buffer.alloc(4); crcVal.writeUInt32BE(crc32(crcBuf));
+    return Buffer.concat([len, typeB, chunkData, crcVal]);
+  }
+
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(width, 0); ihdrData.writeUInt32BE(height, 4);
+  ihdrData[8] = 8; ihdrData[9] = 6; // 8-bit RGBA
+  return Buffer.concat([sig, chunk('IHDR', ihdrData), chunk('IDAT', compressed), chunk('IEND', Buffer.alloc(0))]);
+}
+
+async function fetchElevationHeatmap(bbox, onProgress) {
+  const { west, south, east, north } = bbox;
+  onProgress('🏔 Fetching elevation from AWS Terrain Tiles…');
+
+  let geotiff;
+  try {
+    geotiff = require('geotiff');
+  } catch (e) {
+    throw new Error('geotiff module not available: ' + e.message);
+  }
+
+  // Pick the highest zoom whose tile-range for this bbox stays within the cap.
+  let z = 12, minX, maxX, minY, maxY;
+  for (let zz = 12; zz >= 4; zz--) {
+    const t1 = lonLatToTileXY(west, north, zz);
+    const t2 = lonLatToTileXY(east, south, zz);
+    const mnX = Math.min(t1.x, t2.x), mxX = Math.max(t1.x, t2.x);
+    const mnY = Math.min(t1.y, t2.y), mxY = Math.max(t1.y, t2.y);
+    const count = (mxX - mnX + 1) * (mxY - mnY + 1);
+    z = zz; minX = mnX; maxX = mxX; minY = mnY; maxY = mxY;
+    if (count <= ELEVATION_MAX_TILES) break;
+  }
+  const tilesX = maxX - minX + 1;
+  const tilesY = maxY - minY + 1;
+  onProgress(`  → Fetching ${tilesX}×${tilesY} elevation tile(s) at zoom ${z}…`);
+
+  const mosaicW = tilesX * ELEVATION_TILE_SIZE;
+  const mosaicH = tilesY * ELEVATION_TILE_SIZE;
+  const mosaic = new Float32Array(mosaicW * mosaicH).fill(NaN);
+
+  let fetched = 0;
+  for (let tx = minX; tx <= maxX; tx++) {
+    for (let ty = minY; ty <= maxY; ty++) {
+      const url = ELEVATION_TILE_URL_TEMPLATE
+        .replace('{z}', z).replace('{x}', tx).replace('{y}', ty);
+      try {
+        const tiff = await geotiff.fromUrl(url);
+        const image = await tiff.getImage(0);
+        const rasters = await image.readRasters();
+        const tileData = rasters[0];
+        const tw = image.getWidth(), th = image.getHeight();
+        const offCol = (tx - minX) * ELEVATION_TILE_SIZE;
+        const offRow = (ty - minY) * ELEVATION_TILE_SIZE;
+        for (let row = 0; row < th; row++) {
+          for (let col = 0; col < tw; col++) {
+            mosaic[(offRow + row) * mosaicW + (offCol + col)] = tileData[row * tw + col];
+          }
+        }
+        fetched++;
+      } catch (e) {
+        onProgress(`  ⚠ Tile ${z}/${tx}/${ty} failed: ${e.message}`);
+      }
+    }
+  }
+  if (!fetched) throw new Error('No elevation tiles could be fetched for this area');
+
+  const mosaicBounds = {
+    ...tileXYToLonLatBounds(minX, minY, z),
+    ...{ east: tileXYToLonLatBounds(maxX, minY, z).east, south: tileXYToLonLatBounds(minX, maxY, z).south },
+  };
+
+  // Crop the mosaic down to the exact requested bbox.
+  const w = Math.max(west, mosaicBounds.west);
+  const s = Math.max(south, mosaicBounds.south);
+  const e = Math.min(east, mosaicBounds.east);
+  const n = Math.min(north, mosaicBounds.north);
+  const scaleX = mosaicW / (mosaicBounds.east - mosaicBounds.west);
+  const scaleY = mosaicH / (mosaicBounds.north - mosaicBounds.south);
+  const left = Math.max(0, Math.round((w - mosaicBounds.west) * scaleX));
+  const right = Math.min(mosaicW, Math.round((e - mosaicBounds.west) * scaleX));
+  const top = Math.max(0, Math.round((mosaicBounds.north - n) * scaleY));
+  const bottom = Math.min(mosaicH, Math.round((mosaicBounds.north - s) * scaleY));
+  const cropW = Math.max(1, right - left);
+  const cropH = Math.max(1, bottom - top);
+
+  const cropped = new Float32Array(cropW * cropH);
+  let rawMin = Infinity, rawMax = -Infinity, sum = 0, count = 0;
+  const valid = [];
+  for (let row = 0; row < cropH; row++) {
+    for (let col = 0; col < cropW; col++) {
+      const v = mosaic[(top + row) * mosaicW + (left + col)];
+      cropped[row * cropW + col] = v;
+      if (isFinite(v) && v > -1000 && v < 8000) {
+        if (v < rawMin) rawMin = v;
+        if (v > rawMax) rawMax = v;
+        sum += v; count++;
+        valid.push(v);
+      }
+    }
+  }
+  if (!count) throw new Error('No valid elevation pixels in this area');
+  const avgElevation = Math.round((sum / count) * 10) / 10;
+
+  // This dataset's lower-zoom (downsampled) tiles occasionally carry resampling
+  // ringing artifacts at data-void/coastline edges — isolated pixels far outside
+  // the area's real terrain (e.g. a lone -160m or +700m spike in flat steppe).
+  // Clip to the 1st–99th percentile so a handful of bad pixels don't wash out
+  // the color scale or get reported as the area's "highest"/"lowest" point.
+  const sorted = Float32Array.from(valid).sort();
+  const p1 = sorted[Math.floor(0.01 * (sorted.length - 1))];
+  const p99 = sorted[Math.floor(0.99 * (sorted.length - 1))];
+
+  // Locate the actual highest/lowest pixel within the trusted [p1, p99] band.
+  let lowest = null, highest = null;
+  for (let row = 0; row < cropH; row++) {
+    for (let col = 0; col < cropW; col++) {
+      const v = cropped[row * cropW + col];
+      if (!isFinite(v) || v < p1 || v > p99) continue;
+      if (!lowest || v < lowest.v) lowest = { v, row, col };
+      if (!highest || v > highest.v) highest = { v, row, col };
+    }
+  }
+  const pixelToLonLat = (row, col) => ({
+    lon: w + (col + 0.5) / cropW * (e - w),
+    lat: n - (row + 0.5) / cropH * (n - s),
+  });
+  const points = [];
+  if (lowest) {
+    const { lon, lat } = pixelToLonLat(lowest.row, lowest.col);
+    points.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: { name: `Lowest point: ${Math.round(lowest.v)}m`, elevation_m: Math.round(lowest.v), source: 'AWS Terrain Tiles', _layer: 'Elevation' },
+    });
+  }
+  if (highest) {
+    const { lon, lat } = pixelToLonLat(highest.row, highest.col);
+    points.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: { name: `Highest point: ${Math.round(highest.v)}m`, elevation_m: Math.round(highest.v), source: 'AWS Terrain Tiles', _layer: 'Elevation' },
+    });
+  }
+  const minElevation = lowest ? Math.round(lowest.v) : Math.round(p1);
+  const maxElevation = highest ? Math.round(highest.v) : Math.round(p99);
+
+  onProgress(`  🏔 Elevation: ${minElevation}m to ${maxElevation}m, avg ${avgElevation}m over ${count} pixels`
+    + (Math.round(rawMin) < minElevation || Math.round(rawMax) > maxElevation
+      ? ` (raw range ${Math.round(rawMin)}m–${Math.round(rawMax)}m had outlier pixels, excluded from display)` : ''));
+
+  onProgress(`  → Raster ${cropW}×${cropH} px, building PNG…`);
+  const png = elevationArrayToPng(cropped, cropW, cropH, minElevation, maxElevation);
+  onProgress(`  → Elevation PNG generated (${png.length} bytes)`);
+
+  return {
+    overlays: [{
+      imageBuffer: png, west: w, south: s, east: e, north: n, tileKey: 'elevation_heatmap',
+      label: `Elevation Heatmap (${minElevation}m to ${maxElevation}m)`,
+    }],
+    points,
+    minElevation,
+    maxElevation,
+    avgElevation,
+  };
+}
+
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox, customBoundaryInput = null) {
   const layerMap = {};
   const osmSettlementPolygons = [];
@@ -2053,7 +2294,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   }
 
   // 2. Build + run Overpass query (only for non-wind, non-nuclear vector layers)
-  const osmLayers = layers.filter(l => l !== 'wind' && l !== 'nuclear_plants');
+  const osmLayers = layers.filter(l => l !== 'wind' && l !== 'elevation' && l !== 'nuclear_plants');
   if (osmLayers.length > 0) {
     const query = buildQuery(osmLayers, bbox);
     onProgress('📡 Sending query to Overpass API…');
@@ -2599,6 +2840,17 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
+  // Fetch elevation heatmap from AWS Terrain Tiles
+  if (layers.includes('elevation')) {
+    try {
+      const result = await fetchElevationHeatmap(bbox, onProgress);
+      groundOverlays.push(...result.overlays);
+      if (result.points.length) layerMap['Elevation Points'] = result.points;
+    } catch (err) {
+      onProgress(`  ⚠ Elevation fetch failed: ${err.message}`);
+    }
+  }
+
   // 8. Print summary
   for (const [name, features] of Object.entries(layerMap)) {
     onProgress(`  ${name}: ${features.length} features`);
@@ -2620,4 +2872,4 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   return outputPath;
 }
 
-module.exports = { fetchOSM, getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, httpGet, httpPost, polygonAreaM2 };
+module.exports = { fetchOSM, getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, fetchElevationHeatmap, httpGet, httpPost, polygonAreaM2 };
