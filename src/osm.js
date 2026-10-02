@@ -808,10 +808,17 @@ function scoreNominatimResult(territory, result) {
     if (!matched) missing += 1;
   }
   let score = missing * 8;
-  if ((result.class || '') === 'boundary') score -= 2;
-  if ((result.type || '') === 'administrative') score -= 2;
-  if ((result.addresstype || '') === 'administrative') score -= 1;
-  if ((result.display_name || '').toLowerCase().includes('громада')) score -= 1;
+  // A real administrative boundary relation must win decisively over any POI
+  // that merely sits inside the right hromada/raion — nearly every address in
+  // Ukraine contains the enclosing hromada's name, so plain token overlap
+  // alone can't tell a village council building from the hromada boundary
+  // itself (see: a query for "<stale raion> район <hromada> громада" matching
+  // a random school whose full address happens to repeat both words).
+  if ((result.class || '') === 'boundary' && (result.type || '') === 'administrative') {
+    score -= 20;
+  } else if ((result.addresstype || '') === 'administrative') {
+    score -= 3;
+  }
   const importance = Number(result.importance || 0);
   if (Number.isFinite(importance)) score -= Math.min(3, importance * 3);
   return score;
@@ -854,12 +861,27 @@ function featureBbox(f) {
 }
 
 async function getBbox(territory, onProgress, fallbackBbox) {
+  // Many users still prefix the hromada name with its pre-2020-reform raion
+  // (e.g. "Овідіопольський район Овідіопольська громада") — that raion was
+  // abolished in the 2020 reform and no longer exists as an entity Nominatim
+  // can geocode, so the combined string often fails to surface the real
+  // administrative boundary at all and instead free-text-matches some
+  // unrelated building inside the hromada. Also try the string with any
+  // leading "<...> район" segment stripped. (Split on whitespace rather than
+  // a \b-based regex — \word-boundary is defined against ASCII \w, so it
+  // never matches around Cyrillic text.)
+  const raionWords = territory.trim().split(/\s+/);
+  const raionIdx = raionWords.findIndex(w => w.replace(/,$/, '').toLowerCase() === 'район');
+  const withoutRaionPrefix = raionIdx === -1 ? territory : raionWords.slice(raionIdx + 1).join(' ').trim();
+
   // 1. Try Nominatim exact + short form
   const attempts = [
     territory,
     territory.replace(/\s+громада$/i, '').trim(),
     `${territory}, Україна`,
-  ];
+    withoutRaionPrefix,
+    `${withoutRaionPrefix}, Україна`,
+  ].filter(Boolean);
   let bestNominatim = null;
   let bestNominatimScore = Infinity;
   for (const q of [...new Set(attempts)]) {
