@@ -851,6 +851,18 @@ ipcMain.handle('open-data-files-dialog', async () => {
   return result;
 });
 
+// Decimal degrees → "D M S,ffffff" (space-separated, comma decimal — matches
+// the DMS format used in Ukrainian land-act coordinate tables). Ukraine sits
+// entirely in the N/E hemispheres, so no N/S/E/W suffix is needed here.
+function decimalToDMS(value) {
+  const abs = Math.abs(value);
+  const deg = Math.floor(abs);
+  const minFloat = (abs - deg) * 60;
+  const min = Math.floor(minFloat);
+  const secFloat = (minFloat - min) * 60;
+  return `${deg} ${min} ${secFloat.toFixed(6).replace('.', ',')}`;
+}
+
 ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFolder }) => {
   const JSZip = require('jszip');
   try {
@@ -878,6 +890,7 @@ ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFol
     const rows = ['polygon_index,ring_index,point_index,latitude,longitude,combined_coordinates'];
     let pointCount = 0;
     let usedPolygonCount = 0;
+    const dmsPoints = [];
 
     for (let polygonIdx = 0; polygonIdx < polygonBlocks.length; polygonIdx++) {
       const polygonXml = polygonBlocks[polygonIdx];
@@ -888,6 +901,7 @@ ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFol
         const coordText = String(ringMatches[ringIdx][1] || '').trim();
         if (!coordText) continue;
         const coordParts = coordText.split(/\s+/).filter(Boolean);
+        const ringPoints = [];
         for (let pointIdx = 0; pointIdx < coordParts.length; pointIdx++) {
           const [lonRaw, latRaw] = coordParts[pointIdx].split(',');
           const lon = Number(lonRaw);
@@ -896,7 +910,16 @@ ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFol
           rows.push(`${polygonIdx + 1},${ringIdx + 1},${pointIdx + 1},${lat},${lon},"${lat}, ${lon}"`);
           pointCount++;
           polygonHadPoints = true;
+          ringPoints.push({ lat, lon });
         }
+        // A closed ring repeats its first vertex as the last — drop that
+        // duplicate for the vertex table (only the CSV above keeps every
+        // raw coordinate, matching its existing output exactly).
+        if (ringPoints.length > 1) {
+          const f = ringPoints[0], l = ringPoints[ringPoints.length - 1];
+          if (f.lat === l.lat && f.lon === l.lon) ringPoints.pop();
+        }
+        dmsPoints.push(...ringPoints);
       }
       if (polygonHadPoints) usedPolygonCount++;
     }
@@ -919,7 +942,34 @@ ipcMain.handle('extract-kml-coordinates', async (_event, { sourcePath, outputFol
     }
 
     fs.writeFileSync(outputPath, rows.join('\n'), 'utf8');
-    return { success: true, outputPath, pointCount, polygonCount: usedPolygonCount };
+
+    // DMS coordinate table (.xlsx) — Широта/Довгота columns, one row per
+    // polygon vertex, alongside the decimal-degree CSV above.
+    let dmsOutputPath = path.join(outputFolder, `${safeBase}_coordinates_dms.xlsx`);
+    if (fs.existsSync(dmsOutputPath)) {
+      for (let i = 1; i < 1000; i++) {
+        const candidate = path.join(outputFolder, `${safeBase}_coordinates_dms_${i}.xlsx`);
+        if (!fs.existsSync(candidate)) {
+          dmsOutputPath = candidate;
+          break;
+        }
+      }
+    }
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Координати');
+    sheet.columns = [
+      { header: '', key: 'label', width: 12 },
+      { header: 'Широта', key: 'lat', width: 24 },
+      { header: 'Довгота', key: 'lon', width: 24 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+    dmsPoints.forEach((p, i) => {
+      sheet.addRow({ label: `Точка ${i + 1}`, lat: decimalToDMS(p.lat), lon: decimalToDMS(p.lon) });
+    });
+    await workbook.xlsx.writeFile(dmsOutputPath);
+
+    return { success: true, outputPath, dmsOutputPath, pointCount, polygonCount: usedPolygonCount };
   } catch (err) {
     return { success: false, error: err.message };
   }

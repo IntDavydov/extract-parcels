@@ -1731,6 +1731,10 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       appendLog(`✅ Done → ${result.outputPath}`);
       appendLog(`   Polygons: ${result.polygonCount}, points: ${result.pointCount}`);
       addResultEntry(result.outputPath, 'Polygon coordinates CSV');
+      if (result.dmsOutputPath) {
+        appendLog(`✅ DMS coordinate table → ${result.dmsOutputPath}`);
+        addResultEntry(result.dmsOutputPath, 'Coordinates (DMS) XLSX');
+      }
       window.api.showInFolder(result.outputPath);
       tickRunProgress(true, 'Coordinate extraction done');
     } else {
