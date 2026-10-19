@@ -1174,7 +1174,6 @@ out skel qt;`;
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass.osm.ch/api/interpreter',
   ];
 
   const startedAt = Date.now();
@@ -2326,7 +2325,6 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     let lastOverpassError = '';
     const overpassEndpoints = [
       'https://overpass.kumi.systems/api/interpreter',
-      'https://overpass.osm.ch/api/interpreter',
       'https://overpass-api.de/api/interpreter',
     ];
     const maxRetryRounds = 5;
