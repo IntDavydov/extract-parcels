@@ -861,18 +861,21 @@ function featureBbox(f) {
 }
 
 async function getBbox(territory, onProgress, fallbackBbox) {
-  // Many users still prefix the hromada name with its pre-2020-reform raion
-  // (e.g. "Овідіопольський район Овідіопольська громада") — that raion was
-  // abolished in the 2020 reform and no longer exists as an entity Nominatim
-  // can geocode, so the combined string often fails to surface the real
-  // administrative boundary at all and instead free-text-matches some
-  // unrelated building inside the hromada. Also try the string with any
-  // leading "<...> район" segment stripped. (Split on whitespace rather than
-  // a \b-based regex — \word-boundary is defined against ASCII \w, so it
-  // never matches around Cyrillic text.)
+  // Many users still qualify the hromada name with its pre-2020-reform raion
+  // — either before it ("Овідіопольський район Овідіопольська громада") or
+  // after it ("Корецька Рівненський район") — that raion was abolished in
+  // the 2020 reform and no longer exists as an entity Nominatim can geocode,
+  // so the combined string often fails to surface the real administrative
+  // boundary at all and instead free-text-matches some unrelated building
+  // inside the hromada. A Ukrainian raion name is always the two-word phrase
+  // "<adjective> район", so strip that pair from wherever it occurs — not
+  // just as a leading prefix — and also try the remainder. (Split on
+  // whitespace rather than a \b-based regex — \b is defined against ASCII
+  // \w, so it never matches around Cyrillic text.)
   const raionWords = territory.trim().split(/\s+/);
   const raionIdx = raionWords.findIndex(w => w.replace(/,$/, '').toLowerCase() === 'район');
-  const withoutRaionPrefix = raionIdx === -1 ? territory : raionWords.slice(raionIdx + 1).join(' ').trim();
+  const withoutRaionPrefix = raionIdx === -1 ? territory
+    : [...raionWords.slice(0, Math.max(0, raionIdx - 1)), ...raionWords.slice(raionIdx + 1)].join(' ').trim();
 
   // 1. Try Nominatim exact + short form
   const attempts = [
