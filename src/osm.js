@@ -2322,6 +2322,14 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
 
     let rawResponse;
     let osmData = null;
+    // The public Overpass servers sometimes end a request early under load
+    // and return a fully valid, parseable response with an empty elements[]
+    // (no error, no timeout — occasionally even without a "remark" field
+    // explaining why) instead of the real result. A query covering roads
+    // across an entire inhabited hromada can never legitimately be empty, so
+    // treat a 0-element response as a soft failure and keep trying other
+    // mirrors/rounds — only fall back to it if nothing better ever arrives.
+    let emptyFallback = null;
     let lastOverpassError = '';
     const overpassEndpoints = [
       'https://overpass.kumi.systems/api/interpreter',
@@ -2349,13 +2357,23 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
             onProgress(`  ⚠ ${endpoint} returned non-JSON (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
             continue;
           }
+          let parsed;
           try {
-            osmData = JSON.parse(rawResponse);
-            break;
+            parsed = JSON.parse(rawResponse);
           } catch (parseErr) {
             lastOverpassError = `JSON parse error: ${parseErr.message}`;
             onProgress(`  ⚠ ${endpoint} returned invalid JSON (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
+            continue;
           }
+          const elementCount = Array.isArray(parsed.elements) ? parsed.elements.length : 0;
+          if (elementCount === 0) {
+            lastOverpassError = parsed.remark || 'returned 0 elements (likely truncated under load)';
+            onProgress(`  ⚠ ${endpoint} returned 0 elements${parsed.remark ? ` (${parsed.remark})` : ''} (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
+            if (!emptyFallback) emptyFallback = parsed;
+            continue;
+          }
+          osmData = parsed;
+          break;
         } catch (e) {
           lastOverpassError = e.message;
           onProgress(`  ⚠ ${endpoint} failed (${e.message}) (attempt ${round}/${maxRetryRounds}), trying next mirror…`);
@@ -2366,6 +2384,11 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
         onProgress(`  ↻ Overpass retry round ${round + 1}/${maxRetryRounds} in ${Math.round(waitMs / 1000)}s…`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
+    }
+
+    if (!osmData && emptyFallback) {
+      onProgress(`  ⚠ Every attempt returned 0 elements — using the empty result rather than failing the whole run.`);
+      osmData = emptyFallback;
     }
 
     if (!osmData) {
