@@ -223,6 +223,8 @@ let mapContextMenuLatLng = null;
 
 // Mirrors main.js's decimalToDMS() used by the coordinate-table xlsx export,
 // so a value checked via right-click matches one pulled from that export.
+// Duplicated here (not imported) because the renderer has no access to
+// main.js's Node-side module scope across the Electron process boundary.
 function decimalToDMS(value) {
   const abs = Math.abs(value);
   const deg = Math.floor(abs);
