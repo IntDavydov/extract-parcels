@@ -221,6 +221,17 @@ function ensurePreviewMap() {
 let mapContextMenuEl = null;
 let mapContextMenuLatLng = null;
 
+// Mirrors main.js's decimalToDMS() used by the coordinate-table xlsx export,
+// so a value checked via right-click matches one pulled from that export.
+function decimalToDMS(value) {
+  const abs = Math.abs(value);
+  const deg = Math.floor(abs);
+  const minFloat = (abs - deg) * 60;
+  const min = Math.floor(minFloat);
+  const secFloat = (minFloat - min) * 60;
+  return `${deg} ${min} ${secFloat.toFixed(6).replace('.', ',')}`;
+}
+
 function hideMapContextMenu() {
   if (mapContextMenuEl) mapContextMenuEl.style.display = 'none';
 }
@@ -272,6 +283,24 @@ function showMapContextMenu(e) {
       const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
       const res = await window.api.openExternal(url);
       if (!res || !res.success) appendLog(`⚠ Could not open Google Maps: ${res?.error || 'unknown error'}`);
+    });
+
+    addMenuItem('📍 Coordinates here', () => {
+      hideMapContextMenu();
+      if (!mapContextMenuLatLng) return;
+      const { lat, lng } = mapContextMenuLatLng;
+      // Same "deg min sec,ssssss" DMS format as the coordinate-table xlsx
+      // export in "Extract polygon coordinates" mode, so a value checked
+      // here matches one pulled from that export byte-for-byte.
+      const content = document.createElement('div');
+      content.style.cssText = 'font-size:12.5px;min-width:200px;';
+      content.innerHTML = `
+        <div style="font-weight:600;margin-bottom:6px;">📍 Coordinates</div>
+        <div style="margin-bottom:4px;"><span style="color:#888;">Decimal:</span> ${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
+        <div><span style="color:#888;">DMS (Широта):</span> ${decimalToDMS(lat)}</div>
+        <div><span style="color:#888;">DMS (Довгота):</span> ${decimalToDMS(lng)}</div>
+      `;
+      L.popup({ closeButton: true }).setLatLng([lat, lng]).setContent(content).openOn(previewMap);
     });
 
     addMenuItem('🌬 Wind speed here', () => {
