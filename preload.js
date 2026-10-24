@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('api', {
   fetchOSM: (options) =>
     ipcRenderer.invoke('fetch-osm', options),
 
+  getWindAtPoint: (lat, lon, hubHeight = 100) =>
+    ipcRenderer.invoke('get-wind-at-point', { lat, lon, hubHeight }),
+
+  getElevationAtPoint: (lat, lon) =>
+    ipcRenderer.invoke('get-elevation-at-point', { lat, lon }),
+
   mergeKmz: (paths, outputPath, cleanup = true, areaNames, docName) =>
     ipcRenderer.invoke('merge-kmz', { paths, outputPath, cleanup, areaNames, docName }),
 

@@ -547,6 +547,27 @@ ipcMain.handle('fetch-osm', async (event, options) => {
   }
 });
 
+// IPC: wind speed / elevation at a single clicked point (map right-click menu)
+ipcMain.handle('get-wind-at-point', async (_event, { lat, lon, hubHeight }) => {
+  const { getWindSpeedAtPoint } = require(getUnpackedPath('src', 'osm.js'));
+  try {
+    const result = await getWindSpeedAtPoint(lat, lon, hubHeight || 100);
+    return { success: true, ...result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-elevation-at-point', async (_event, { lat, lon }) => {
+  const { getElevationAtPoint } = require(getUnpackedPath('src', 'osm.js'));
+  try {
+    const result = await getElevationAtPoint(lat, lon);
+    return { success: true, ...result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // IPC: merge two KMZ files into one
 ipcMain.handle('merge-kmz', async (_event, { paths, outputPath, cleanup, areaNames, docName }) => {
   const JSZip  = require('jszip');

@@ -1993,26 +1993,51 @@ async function fetchWindHeatmap(bbox, hubHeight, onProgress) {
   };
 }
 
-// ── Elevation: fetch terrain height from AWS "Terrain Tiles" (free, no API key) ──
-// https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif — 512×512
-// Int16 GeoTIFF tiles on the standard XYZ slippy-map grid, worldwide coverage.
-const ELEVATION_TILE_URL_TEMPLATE = 'https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif';
-const ELEVATION_TILE_SIZE = 512;
-const ELEVATION_MAX_TILES = 25; // 5×5 cap on how many tiles a single request may fetch
+// ── Elevation: Copernicus DEM GLO-30 (ESA, free public AWS Open Data bucket) ──
+// https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_<NS><lat>_00_<EW><lon>_00_DEM/...DEM.tif
+// 1°×1° COG tiles, ~30m ground sampling, TanDEM-X radar-derived — newer and
+// more accurate (~4m vertical accuracy, less tree-canopy bias) than the
+// SRTM-based "AWS Terrain Tiles" product used before. Tile naming/URL
+// pattern and live availability verified directly against the bucket.
+const COPDEM_BASE = 'https://copernicus-dem-30m.s3.amazonaws.com';
 
-function lonLatToTileXY(lon, lat, z) {
-  const n = Math.pow(2, z);
-  const x = Math.floor(((lon + 180) / 360) * n);
-  const latRad = (lat * Math.PI) / 180;
-  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
-  return { x: Math.min(Math.max(x, 0), n - 1), y: Math.min(Math.max(y, 0), n - 1) };
+function copDemTileId(lonTile, latTile) {
+  const ns = latTile >= 0 ? 'N' : 'S';
+  const ew = lonTile >= 0 ? 'E' : 'W';
+  const latAbs = String(Math.abs(latTile)).padStart(2, '0');
+  const lonAbs = String(Math.abs(lonTile)).padStart(3, '0');
+  return `Copernicus_DSM_COG_10_${ns}${latAbs}_00_${ew}${lonAbs}_00_DEM`;
 }
 
-function tileXYToLonLatBounds(x, y, z) {
-  const n = Math.pow(2, z);
-  const lonAt = (tx) => (tx / n) * 360 - 180;
-  const latAt = (ty) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * ty) / n))) * 180) / Math.PI;
-  return { west: lonAt(x), east: lonAt(x + 1), north: latAt(y), south: latAt(y + 1) };
+function copDemTileUrl(lonTile, latTile) {
+  const id = copDemTileId(lonTile, latTile);
+  return `${COPDEM_BASE}/${id}/${id}.tif`;
+}
+
+// Fetches one 1° tile fully into memory. Tiles at different latitudes have
+// different pixel widths (fewer columns per degree of longitude near the
+// poles), so every lookup against a loaded tile is done in lon/lat space
+// against that tile's own bounding box — never by assuming a shared pixel
+// grid across tiles, which is what made the old XYZ-tile mosaic approach
+// work but doesn't apply to this 1°-tile dataset.
+async function loadCopDemTile(geotiff, lonTile, latTile) {
+  const url = copDemTileUrl(lonTile, latTile);
+  const tiff = await geotiff.fromUrl(url);
+  const image = await tiff.getImage(0);
+  const tileBbox = image.getBoundingBox(); // [west, south, east, north]
+  const rasters = await image.readRasters();
+  return { data: rasters[0], width: rasters.width, height: rasters.height, bbox: tileBbox };
+}
+
+function sampleCopDemTile(tile, lon, lat) {
+  const [w, s, e, n] = tile.bbox;
+  const px = Math.min(Math.max(Math.floor(((lon - w) / (e - w)) * tile.width), 0), tile.width - 1);
+  const py = Math.min(Math.max(Math.floor(((n - lat) / (n - s)) * tile.height), 0), tile.height - 1);
+  return tile.data[py * tile.width + px];
+}
+
+function isValidElevation(v) {
+  return isFinite(v) && v > -1000 && v < 8000;
 }
 
 // Hypsometric tint, normalized to the fetched area's own min/max elevation (meters).
@@ -2080,7 +2105,8 @@ function elevationArrayToPng(data, width, height, min, max) {
 
 async function fetchElevationHeatmap(bbox, onProgress) {
   const { west, south, east, north } = bbox;
-  onProgress('🏔 Fetching elevation from AWS Terrain Tiles…');
+  const w = west, s = south, e = east, n = north;
+  onProgress('🏔 Fetching elevation from Copernicus DEM GLO-30…');
 
   let geotiff;
   try {
@@ -2089,78 +2115,51 @@ async function fetchElevationHeatmap(bbox, onProgress) {
     throw new Error('geotiff module not available: ' + e.message);
   }
 
-  // Pick the highest zoom whose tile-range for this bbox stays within the cap.
-  let z = 12, minX, maxX, minY, maxY;
-  for (let zz = 12; zz >= 4; zz--) {
-    const t1 = lonLatToTileXY(west, north, zz);
-    const t2 = lonLatToTileXY(east, south, zz);
-    const mnX = Math.min(t1.x, t2.x), mxX = Math.max(t1.x, t2.x);
-    const mnY = Math.min(t1.y, t2.y), mxY = Math.max(t1.y, t2.y);
-    const count = (mxX - mnX + 1) * (mxY - mnY + 1);
-    z = zz; minX = mnX; maxX = mxX; minY = mnY; maxY = mxY;
-    if (count <= ELEVATION_MAX_TILES) break;
+  // Which 1° Copernicus tiles intersect the bbox.
+  const minLonTile = Math.floor(west), maxLonTile = Math.floor(east);
+  const minLatTile = Math.floor(south), maxLatTile = Math.floor(north);
+  const tileCoords = [];
+  for (let lt = minLatTile; lt <= maxLatTile; lt++) {
+    for (let ln = minLonTile; ln <= maxLonTile; ln++) tileCoords.push([ln, lt]);
   }
-  const tilesX = maxX - minX + 1;
-  const tilesY = maxY - minY + 1;
-  onProgress(`  → Fetching ${tilesX}×${tilesY} elevation tile(s) at zoom ${z}…`);
+  onProgress(`  → Fetching ${tileCoords.length} Copernicus DEM tile(s)…`);
 
-  const mosaicW = tilesX * ELEVATION_TILE_SIZE;
-  const mosaicH = tilesY * ELEVATION_TILE_SIZE;
-  const mosaic = new Float32Array(mosaicW * mosaicH).fill(NaN);
-
-  let fetched = 0;
-  for (let tx = minX; tx <= maxX; tx++) {
-    for (let ty = minY; ty <= maxY; ty++) {
-      const url = ELEVATION_TILE_URL_TEMPLATE
-        .replace('{z}', z).replace('{x}', tx).replace('{y}', ty);
-      try {
-        const tiff = await geotiff.fromUrl(url);
-        const image = await tiff.getImage(0);
-        const rasters = await image.readRasters();
-        const tileData = rasters[0];
-        const tw = image.getWidth(), th = image.getHeight();
-        const offCol = (tx - minX) * ELEVATION_TILE_SIZE;
-        const offRow = (ty - minY) * ELEVATION_TILE_SIZE;
-        for (let row = 0; row < th; row++) {
-          for (let col = 0; col < tw; col++) {
-            mosaic[(offRow + row) * mosaicW + (offCol + col)] = tileData[row * tw + col];
-          }
-        }
-        fetched++;
-      } catch (e) {
-        onProgress(`  ⚠ Tile ${z}/${tx}/${ty} failed: ${e.message}`);
-      }
+  const tiles = [];
+  for (const [ln, lt] of tileCoords) {
+    try {
+      tiles.push(await loadCopDemTile(geotiff, ln, lt));
+    } catch (err) {
+      onProgress(`  ⚠ Tile ${copDemTileId(ln, lt)} failed: ${err.message}`);
     }
   }
-  if (!fetched) throw new Error('No elevation tiles could be fetched for this area');
+  if (!tiles.length) throw new Error('No Copernicus DEM tiles could be fetched for this area');
 
-  const mosaicBounds = {
-    ...tileXYToLonLatBounds(minX, minY, z),
-    ...{ east: tileXYToLonLatBounds(maxX, minY, z).east, south: tileXYToLonLatBounds(minX, maxY, z).south },
-  };
+  // Build the output raster directly at the exact requested bbox — no
+  // separate mosaic/crop step needed since every sample looks up its own
+  // tile by lon/lat rather than a shared pixel grid.
+  const metersPerDegLat = 111320;
+  const midLat = (south + north) / 2;
+  const metersPerDegLon = 111320 * Math.max(0.1, Math.cos((midLat * Math.PI) / 180));
+  const rawW = Math.max(1, Math.round(((east - west) * metersPerDegLon) / 30));
+  const rawH = Math.max(1, Math.round(((north - south) * metersPerDegLat) / 30));
+  const MAX_DIM = 1500; // cap output PNG size for a large area
+  const scale = Math.min(1, MAX_DIM / Math.max(rawW, rawH));
+  const cropW = Math.max(1, Math.round(rawW * scale));
+  const cropH = Math.max(1, Math.round(rawH * scale));
+  onProgress(`  → Building ${cropW}×${cropH}px raster from ${tiles.length} tile(s)…`);
 
-  // Crop the mosaic down to the exact requested bbox.
-  const w = Math.max(west, mosaicBounds.west);
-  const s = Math.max(south, mosaicBounds.south);
-  const e = Math.min(east, mosaicBounds.east);
-  const n = Math.min(north, mosaicBounds.north);
-  const scaleX = mosaicW / (mosaicBounds.east - mosaicBounds.west);
-  const scaleY = mosaicH / (mosaicBounds.north - mosaicBounds.south);
-  const left = Math.max(0, Math.round((w - mosaicBounds.west) * scaleX));
-  const right = Math.min(mosaicW, Math.round((e - mosaicBounds.west) * scaleX));
-  const top = Math.max(0, Math.round((mosaicBounds.north - n) * scaleY));
-  const bottom = Math.min(mosaicH, Math.round((mosaicBounds.north - s) * scaleY));
-  const cropW = Math.max(1, right - left);
-  const cropH = Math.max(1, bottom - top);
-
-  const cropped = new Float32Array(cropW * cropH);
+  const cropped = new Float32Array(cropW * cropH).fill(NaN);
   let rawMin = Infinity, rawMax = -Infinity, sum = 0, count = 0;
   const valid = [];
   for (let row = 0; row < cropH; row++) {
+    const lat = north - ((row + 0.5) / cropH) * (north - south);
     for (let col = 0; col < cropW; col++) {
-      const v = mosaic[(top + row) * mosaicW + (left + col)];
+      const lon = west + ((col + 0.5) / cropW) * (east - west);
+      const tile = tiles.find((t) => lon >= t.bbox[0] && lon <= t.bbox[2] && lat >= t.bbox[1] && lat <= t.bbox[3]);
+      if (!tile) continue;
+      const v = sampleCopDemTile(tile, lon, lat);
       cropped[row * cropW + col] = v;
-      if (isFinite(v) && v > -1000 && v < 8000) {
+      if (isValidElevation(v)) {
         if (v < rawMin) rawMin = v;
         if (v > rawMax) rawMax = v;
         sum += v; count++;
@@ -2171,11 +2170,9 @@ async function fetchElevationHeatmap(bbox, onProgress) {
   if (!count) throw new Error('No valid elevation pixels in this area');
   const avgElevation = Math.round((sum / count) * 10) / 10;
 
-  // This dataset's lower-zoom (downsampled) tiles occasionally carry resampling
-  // ringing artifacts at data-void/coastline edges — isolated pixels far outside
-  // the area's real terrain (e.g. a lone -160m or +700m spike in flat steppe).
-  // Clip to the 1st–99th percentile so a handful of bad pixels don't wash out
-  // the color scale or get reported as the area's "highest"/"lowest" point.
+  // Clip to the 1st–99th percentile so a handful of stray void/edge pixels
+  // can't wash out the color scale or get reported as the area's
+  // "highest"/"lowest" point.
   const sorted = Float32Array.from(valid).sort();
   const p1 = sorted[Math.floor(0.01 * (sorted.length - 1))];
   const p99 = sorted[Math.floor(0.99 * (sorted.length - 1))];
@@ -2200,7 +2197,7 @@ async function fetchElevationHeatmap(bbox, onProgress) {
     points.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lon, lat] },
-      properties: { name: `Lowest point: ${Math.round(lowest.v)}m`, elevation_m: Math.round(lowest.v), source: 'AWS Terrain Tiles', _layer: 'Elevation' },
+      properties: { name: `Lowest point: ${Math.round(lowest.v)}m`, elevation_m: Math.round(lowest.v), source: 'Copernicus DEM GLO-30', _layer: 'Elevation' },
     });
   }
   if (highest) {
@@ -2208,7 +2205,7 @@ async function fetchElevationHeatmap(bbox, onProgress) {
     points.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lon, lat] },
-      properties: { name: `Highest point: ${Math.round(highest.v)}m`, elevation_m: Math.round(highest.v), source: 'AWS Terrain Tiles', _layer: 'Elevation' },
+      properties: { name: `Highest point: ${Math.round(highest.v)}m`, elevation_m: Math.round(highest.v), source: 'Copernicus DEM GLO-30', _layer: 'Elevation' },
     });
   }
   const minElevation = lowest ? Math.round(lowest.v) : Math.round(p1);
@@ -2232,6 +2229,78 @@ async function fetchElevationHeatmap(bbox, onProgress) {
     maxElevation,
     avgElevation,
   };
+}
+
+// ── Single-point lookups (for "right-click → wind speed / elevation here") ──
+// Same COG/tile sources as the heatmap layers above, but read a single pixel
+// instead of a whole bbox window — cheap enough to run on every click.
+async function getWindSpeedAtPoint(lat, lon, hubHeight = 100) {
+  let geotiff;
+  try {
+    geotiff = require('geotiff');
+  } catch (e) {
+    throw new Error('geotiff module not available: ' + e.message);
+  }
+
+  const height = GWA_COG_URLS[hubHeight] ? hubHeight : 100;
+  const candidates = GWA_COG_URLS[height];
+  let tiff, lastErr;
+  for (const url of candidates) {
+    try {
+      tiff = await geotiff.fromUrl(url);
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!tiff) throw new Error(`No GWA source available for ${height}m: ${lastErr && lastErr.message}`);
+
+  const image = await tiff.getImage(0);
+  const cogBbox = image.getBoundingBox(); // [west, south, east, north]
+  const W = image.getWidth(), H = image.getHeight();
+  if (lon < cogBbox[0] || lon > cogBbox[2] || lat < cogBbox[1] || lat > cogBbox[3]) {
+    throw new Error('This point is outside the Ukraine wind-speed coverage area');
+  }
+
+  const scaleX = W / (cogBbox[2] - cogBbox[0]);
+  const scaleY = H / (cogBbox[3] - cogBbox[1]);
+  const px = Math.min(Math.max(Math.floor((lon - cogBbox[0]) * scaleX), 0), W - 1);
+  const py = Math.min(Math.max(Math.floor((cogBbox[3] - lat) * scaleY), 0), H - 1);
+
+  const rasters = await image.readRasters({ window: [px, py, px + 1, py + 1] });
+  const v = rasters[0][0];
+  if (!isFinite(v) || v <= 0) throw new Error('No wind-speed data available at this point');
+
+  return { speed: Math.round(v * 10) / 10, hubHeight: height };
+}
+
+async function getElevationAtPoint(lat, lon) {
+  let geotiff;
+  try {
+    geotiff = require('geotiff');
+  } catch (e) {
+    throw new Error('geotiff module not available: ' + e.message);
+  }
+
+  const lonTile = Math.floor(lon);
+  const latTile = Math.floor(lat);
+  let tiff;
+  try {
+    tiff = await geotiff.fromUrl(copDemTileUrl(lonTile, latTile));
+  } catch (e) {
+    throw new Error('No Copernicus DEM tile available at this location: ' + e.message);
+  }
+  const image = await tiff.getImage(0);
+  const tileBbox = image.getBoundingBox(); // [west, south, east, north]
+  const tw = image.getWidth(), th = image.getHeight();
+  const px = Math.min(Math.max(Math.floor(((lon - tileBbox[0]) / (tileBbox[2] - tileBbox[0])) * tw), 0), tw - 1);
+  const py = Math.min(Math.max(Math.floor(((tileBbox[3] - lat) / (tileBbox[3] - tileBbox[1])) * th), 0), th - 1);
+
+  const rasters = await image.readRasters({ window: [px, py, px + 1, py + 1] });
+  const v = rasters[0][0];
+  if (!isValidElevation(v)) throw new Error('No elevation data available at this point');
+
+  return { elevation: Math.round(v) };
 }
 
 async function fetchOSM(territory, layers, outputPath, format, onProgress, windOptions, fallbackBbox, customBoundaryInput = null) {
@@ -2886,7 +2955,7 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
     }
   }
 
-  // Fetch elevation heatmap from AWS Terrain Tiles
+  // Fetch elevation heatmap from Copernicus DEM GLO-30
   if (layers.includes('elevation')) {
     try {
       const result = await fetchElevationHeatmap(bbox, onProgress);
@@ -2918,4 +2987,4 @@ async function fetchOSM(territory, layers, outputPath, format, onProgress, windO
   return outputPath;
 }
 
-module.exports = { fetchOSM, getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, fetchElevationHeatmap, httpGet, httpPost, polygonAreaM2 };
+module.exports = { fetchOSM, getBbox, fetchNatureReservesFromPZF, fetchEmeraldFromEEA, fetchWindHeatmap, fetchElevationHeatmap, getWindSpeedAtPoint, getElevationAtPoint, httpGet, httpPost, polygonAreaM2 };

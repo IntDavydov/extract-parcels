@@ -230,13 +230,39 @@ function showMapContextMenu(e) {
   if (!mapContextMenuEl) {
     mapContextMenuEl = document.createElement('div');
     mapContextMenuEl.style.cssText = 'position:absolute;z-index:1300;background:rgba(255,255,255,0.98);border:1px solid var(--color-divider);border-radius:3px;box-shadow:0 2px 8px rgba(0,0,0,0.2);padding:4px;font-size:12.5px;min-width:190px;';
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.textContent = '🧭 Directions here (Google Maps)';
-    item.style.cssText = 'display:block;width:100%;text-align:left;border:none;background:none;padding:7px 9px;cursor:pointer;border-radius:2px;color:inherit;font-size:inherit;font-family:inherit;';
-    item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-neutral-200)'; });
-    item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
-    item.addEventListener('click', async () => {
+
+    const addMenuItem = (label, onClick) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = label;
+      item.style.cssText = 'display:block;width:100%;text-align:left;border:none;background:none;padding:7px 9px;cursor:pointer;border-radius:2px;color:inherit;font-size:inherit;font-family:inherit;';
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-neutral-200)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+      item.addEventListener('click', onClick);
+      mapContextMenuEl.appendChild(item);
+      return item;
+    };
+
+    // Opens a small popup at the clicked point, shows a loading message, then
+    // fills it in with the result (or error) once the IPC call resolves —
+    // same pattern for both wind and elevation, just a different fetcher/label.
+    const showPointLookupPopup = async (loadingText, fetchFn, formatResult) => {
+      if (!mapContextMenuLatLng) return;
+      const { lat, lng } = mapContextMenuLatLng;
+      const popup = L.popup({ closeButton: true }).setLatLng([lat, lng]).setContent(loadingText).openOn(previewMap);
+      try {
+        const res = await fetchFn(lat, lng);
+        if (res && res.success) {
+          popup.setContent(formatResult(res, lat, lng));
+        } else {
+          popup.setContent(`❌ ${res?.error || 'Lookup failed'}`);
+        }
+      } catch (err) {
+        popup.setContent(`❌ ${err.message}`);
+      }
+    };
+
+    addMenuItem('🧭 Directions here (Google Maps)', async () => {
       hideMapContextMenu();
       if (!mapContextMenuLatLng) return;
       const { lat, lng } = mapContextMenuLatLng;
@@ -247,7 +273,62 @@ function showMapContextMenu(e) {
       const res = await window.api.openExternal(url);
       if (!res || !res.success) appendLog(`⚠ Could not open Google Maps: ${res?.error || 'unknown error'}`);
     });
-    mapContextMenuEl.appendChild(item);
+
+    addMenuItem('🌬 Wind speed here', () => {
+      hideMapContextMenu();
+      if (!mapContextMenuLatLng) return;
+      const { lat, lng } = mapContextMenuLatLng;
+
+      // GWA only publishes real data at these two hub heights — ask which
+      // one rather than silently picking one, since any other height would
+      // just silently fall back to the 100m raster on the backend anyway.
+      const picker = document.createElement('div');
+      picker.style.cssText = 'font-size:12.5px;';
+      // Leaflet's own popup-click-propagation guard only covers mousedown/
+      // touchstart/dblclick/contextmenu — a plain click on a button we add
+      // ourselves still bubbles up to the map and closes the popup via its
+      // closeOnClick behavior before the height buttons can be used. Stop it
+      // explicitly on this content root.
+      L.DomEvent.disableClickPropagation(picker);
+      L.DomEvent.on(picker, 'click', L.DomEvent.stopPropagation);
+      const label = document.createElement('div');
+      label.textContent = '🌬 Hub height:';
+      label.style.cssText = 'font-weight:600;margin-bottom:6px;';
+      picker.appendChild(label);
+
+      const popup = L.popup({ closeButton: true }).setLatLng([lat, lng]).setContent(picker).openOn(previewMap);
+
+      [100, 150].forEach((hubHeight) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = `${hubHeight} m`;
+        btn.style.cssText = 'display:inline-block;margin:0 6px 0 0;padding:5px 10px;border:1px solid var(--color-divider);background:var(--color-neutral-200);border-radius:3px;cursor:pointer;font-size:12px;';
+        btn.addEventListener('click', async () => {
+          popup.setContent('🌬 Fetching wind speed…');
+          try {
+            const res = await window.api.getWindAtPoint(lat, lng, hubHeight);
+            if (res && res.success) {
+              popup.setContent(`🌬 Wind speed (${res.hubHeight}m hub height): <b>${res.speed} m/s</b><br><span style="color:#888;font-size:11px;">Global Wind Atlas (GWA3) · ${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`);
+            } else {
+              popup.setContent(`❌ ${res?.error || 'Lookup failed'}`);
+            }
+          } catch (err) {
+            popup.setContent(`❌ ${err.message}`);
+          }
+        });
+        picker.appendChild(btn);
+      });
+    });
+
+    addMenuItem('⛰ Elevation here', async () => {
+      hideMapContextMenu();
+      await showPointLookupPopup(
+        '⛰ Fetching elevation…',
+        (lat, lng) => window.api.getElevationAtPoint(lat, lng),
+        (res, lat, lng) => `⛰ Elevation: <b>${res.elevation} m</b><br><span style="color:#888;font-size:11px;">Copernicus DEM GLO-30 · ${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`
+      );
+    });
+
     document.getElementById('map-container').appendChild(mapContextMenuEl);
   }
   const container = document.getElementById('map-container');
