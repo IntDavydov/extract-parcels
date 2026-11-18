@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('api', {
   mergeCadnumCsvs: (paths, outputPath, cleanup = true) =>
     ipcRenderer.invoke('merge-cadnum-csvs', { paths, outputPath, cleanup }),
 
+  mergeElandReports: (xlsxPaths, docxPaths, outputXlsxPath, outputDocxPath, cleanup = true) =>
+    ipcRenderer.invoke('merge-eland-reports', { xlsxPaths, docxPaths, outputXlsxPath, outputDocxPath, cleanup }),
+
   mergeKmzFiles: (sourceDir, outputPath) =>
     ipcRenderer.invoke('merge-kmz-files', { sourceDir, outputPath }),
 

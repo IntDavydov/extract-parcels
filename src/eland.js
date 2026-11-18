@@ -518,6 +518,78 @@ async function writePartialExcelReport(results, outputPath, onProgress, explicit
   return { success: true, outputPath, count: results.length };
 }
 
+// ── Merging per-boundary e.land reports into one combined report ──────────
+// A multi-boundary run (several KMZ files in one go) looks up e.land for
+// each boundary separately, each producing its own partial xlsx/docx. Those
+// per-boundary files all land in the same spot in the orchestrator's temp
+// scheme, so this concatenates them into a single final report instead of
+// letting the last boundary's result silently overwrite the earlier ones.
+async function mergeElandPartialExcel(xlsxPaths, outputPath) {
+  const outWorkbook = new ExcelJS.Workbook();
+  const outSheet = outWorkbook.addWorksheet('Main');
+  let rowNum = 0;
+  let headerWritten = false;
+
+  for (const p of (xlsxPaths || [])) {
+    if (!p || !fs.existsSync(p)) continue;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(p);
+    const sheet = wb.worksheets[0];
+    if (!sheet) continue;
+    sheet.eachRow((row) => {
+      const values = (row.values || []).slice(1); // ExcelJS row.values is 1-indexed with a hole at [0]
+      if (row.number === 1) {
+        if (!headerWritten) { outSheet.addRow(values); headerWritten = true; }
+        return;
+      }
+      rowNum++;
+      outSheet.addRow([rowNum, ...values.slice(1)]); // renumber the '#' column across all files
+    });
+  }
+
+  outSheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  outSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+  outSheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }];
+  outSheet.columns.forEach((col) => {
+    let maxLen = 12;
+    col.eachCell((cell) => { if (cell.value) maxLen = Math.max(maxLen, String(cell.value).length); });
+    col.width = Math.min(maxLen + 2, 60);
+  });
+
+  await outWorkbook.xlsx.writeFile(outputPath);
+  return { success: true, outputPath, count: rowNum };
+}
+
+// docx has no reader API, only a writer — so this splices the raw OOXML
+// instead of re-parsing/rebuilding. Every per-boundary docx was produced by
+// writeDocxReport() above, so they all share the same namespaces, styles and
+// <w:sectPr> (page setup); only the <w:body> content differs. Safe to concat
+// each file's body content (minus its own trailing <w:sectPr>) into the
+// first file's body, right before that one <w:sectPr> that's kept at the end.
+async function mergeElandDocx(docxPaths, outputPath) {
+  const JSZip = require('jszip');
+  const existing = (docxPaths || []).filter((p) => p && fs.existsSync(p));
+  if (!existing.length) return { success: false, error: 'No docx files to merge' };
+
+  const baseZip = await JSZip.loadAsync(fs.readFileSync(existing[0]));
+  let baseXml = await baseZip.file('word/document.xml').async('string');
+  const sectPrAtEnd = /(<w:sectPr\b[\s\S]*?<\/w:sectPr>\s*<\/w:body>)/;
+
+  for (let i = 1; i < existing.length; i++) {
+    const zip = await JSZip.loadAsync(fs.readFileSync(existing[i]));
+    const xml = await zip.file('word/document.xml').async('string');
+    const bodyMatch = xml.match(/<w:body>([\s\S]*)<w:sectPr\b[\s\S]*?<\/w:sectPr>\s*<\/w:body>/);
+    if (!bodyMatch) continue;
+    const pageBreak = '<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>';
+    baseXml = baseXml.replace(sectPrAtEnd, `${pageBreak}${bodyMatch[1]}$1`);
+  }
+
+  baseZip.file('word/document.xml', baseXml);
+  const outBuffer = await baseZip.generateAsync({ type: 'nodebuffer' });
+  fs.writeFileSync(outputPath, outBuffer);
+  return { success: true, outputPath };
+}
+
 let _stopped = false;
 
 // ── Resume support ────────────────────────────────────────────────────────
@@ -1113,4 +1185,4 @@ async function lookupEland(csvPath, outputPath, onProgress, chromePath, options 
 
 function stopLookup() { _stopped = true; }
 
-module.exports = { lookupEland, stopLookup };
+module.exports = { lookupEland, stopLookup, mergeElandPartialExcel, mergeElandDocx };

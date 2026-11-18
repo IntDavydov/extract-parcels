@@ -2178,6 +2178,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
     const finalOutput = await window.api.resolveOutputPath(outputFolder, 'kadastr');
     const kmzPaths = [], folderNames = [];
     const cadCsvPaths = [];
+    const elandXlsxPaths = [], elandDocxPaths = [];
     initRunProgress(boundaryFiles.length, 'Kadastr multi-KMZ');
 
     for (let i = 0; i < boundaryFiles.length; i++) {
@@ -2187,6 +2188,8 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       const folderName = bf.url.includes('#') ? bf.url.split('#')[1] : bf.name.replace(/\.kmz?$/i, '');
       const tempPath   = `${outputFolder}/_kadastr_temp_${i}.kmz`;
       const tempCadCsvPath = `${outputFolder}/_kadastr_temp_${i}_cadnums.csv`;
+      const tempElandXlsxPath = `${outputFolder}/_kadastr_temp_${i}_eland.xlsx`;
+      const tempElandDocxPath = `${outputFolder}/_kadastr_temp_${i}_eland.docx`;
 
       const scrapeRes = await scrapeOne(bf, `${i + 1}/${boundaryFiles.length}: ${bf.name}`);
       if (scrapeRes.tiles === 0) { appendLog(`⚠ Skipping ${bf.name} — no tiles.`); tickRunProgress(false); continue; }
@@ -2201,6 +2204,26 @@ document.getElementById('btn-start').addEventListener('click', async () => {
         appendLog(`⚠ Could not save temp cadnums CSV for ${bf.name}: ${csvCopy.error || 'unknown error'}`);
       } else {
         cadCsvPaths.push(tempCadCsvPath);
+      }
+
+      // Same fixed-filename collision as land_plots.kmz above — each
+      // boundary's e.land lookup writes to the same land_plots_eland_partial.*,
+      // so move this boundary's copy aside before the next one overwrites it.
+      if (fetchDetailedRegistry) {
+        const scraperElandXlsx = `${outputFolder}/land_plots_eland_partial.xlsx`;
+        const scraperElandDocx = `${outputFolder}/land_plots_eland_partial.docx`;
+        const elandCopy = await window.api.mergeElandReports(
+          [scraperElandXlsx], [scraperElandDocx], tempElandXlsxPath, tempElandDocxPath, true
+        );
+        if (!elandCopy.success) {
+          appendLog(`⚠ Could not save temp e.land report for ${bf.name}: ${elandCopy.error || 'unknown error'}`);
+        } else {
+          // xlsxResult/docxResult come back null when this boundary had no
+          // e.land data to begin with (e.g. 0 matched parcels) rather than a
+          // real file being written — only queue the ones actually written.
+          if (elandCopy.xlsxResult && elandCopy.xlsxResult.success) elandXlsxPaths.push(tempElandXlsxPath);
+          if (elandCopy.docxResult && elandCopy.docxResult.success) elandDocxPaths.push(tempElandDocxPath);
+        }
       }
 
       kmzPaths.push(tempPath);
@@ -2220,16 +2243,22 @@ document.getElementById('btn-start').addEventListener('click', async () => {
       else appendLog(`⚠ Cadnums merge failed: ${cadMerge.error || 'unknown error'}`);
       if (cadMerge.success) addResultEntry(finalCadCsv, 'Cadnums CSV');
     }
+    const hasElandReports = elandXlsxPaths.length || elandDocxPaths.length;
+    if (hasElandReports) {
+      const finalElandXlsx = `${outputFolder}/land_plots_eland_partial.xlsx`;
+      const finalElandDocx = `${outputFolder}/land_plots_eland_partial.docx`;
+      const elandMerge = await window.api.mergeElandReports(elandXlsxPaths, elandDocxPaths, finalElandXlsx, finalElandDocx, true);
+      if (elandMerge.success) {
+        appendLog(`📊 e.land reports merged (${elandXlsxPaths.length} boundaries) → ${finalElandXlsx}`);
+      } else {
+        appendLog(`⚠ e.land reports merge failed: ${elandMerge.error || 'unknown error'}`);
+      }
+    }
     if (mergeResult.success) {
       appendLog(`\n✅ Done → ${finalOutput}`);
       window.api.copyIcons(outputFolder);
       addResultEntry(finalOutput, 'KMZ');
-      if (fetchDetailedRegistry) {
-        // NOTE: each boundary in this loop reuses the same fixed filename
-        // (land_plots_eland_partial.*), so only the LAST boundary's e.land
-        // files survive here — unlike the KMZ/CSV, they aren't copied to a
-        // per-boundary temp name and merged. Fine for a single boundary; for
-        // several, only the last one's e.land data ends up on disk.
+      if (fetchDetailedRegistry && hasElandReports) {
         addResultEntry(`${outputFolder}/land_plots_eland_partial.xlsx`, 'e.land XLSX');
         addResultEntry(`${outputFolder}/land_plots_eland_partial.docx`, 'e.land DOCX');
       }

@@ -772,6 +772,36 @@ ipcMain.handle('merge-cadnum-csvs', (_event, { paths, outputPath, cleanup = true
   }
 });
 
+// IPC: copy a single e.land partial report to a temp name (a "move" when
+// called with one path and cleanup:true — same dual-use trick as merge-kmz),
+// or merge several per-boundary reports into one combined report. Used by
+// the multi-KMZ Kadastr flow so each boundary's e.land xlsx/docx gets its own
+// temp name instead of all of them colliding on the same fixed filename and
+// the last boundary silently overwriting every earlier one.
+ipcMain.handle('merge-eland-reports', async (_event, { xlsxPaths, docxPaths, outputXlsxPath, outputDocxPath, cleanup = true }) => {
+  const fs = require('fs');
+  const { mergeElandPartialExcel, mergeElandDocx } = require(getUnpackedPath('src', 'eland.js'));
+  try {
+    let xlsxResult = null, docxResult = null;
+    const haveXlsx = (xlsxPaths || []).some((p) => p && fs.existsSync(p));
+    const haveDocx = (docxPaths || []).some((p) => p && fs.existsSync(p));
+    if (outputXlsxPath && haveXlsx) xlsxResult = await mergeElandPartialExcel(xlsxPaths, outputXlsxPath);
+    if (outputDocxPath && haveDocx) docxResult = await mergeElandDocx(docxPaths, outputDocxPath);
+    if (cleanup) {
+      for (const p of [...(xlsxPaths || []), ...(docxPaths || [])]) {
+        try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+      }
+    }
+    return {
+      success: (!outputXlsxPath || !haveXlsx || (xlsxResult && xlsxResult.success)) &&
+                (!outputDocxPath || !haveDocx || (docxResult && docxResult.success)),
+      xlsxResult, docxResult,
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // IPC: write a plain list of cadastral numbers to a CSV (same format merge-cadnum-csvs
 // produces) — used by the "By cadastral numbers" tab to feed its typed-in list into
 // the e.land detailed-registry lookup, which expects a CSV path.
