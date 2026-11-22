@@ -16,6 +16,11 @@
   "build": {
     "appId": "com.land-management.app",
     "productName": "Land Management",
+    "publish": {
+      "provider": "github",
+      "owner": "IntDavydov",
+      "repo": "extract-parcels"
+    },
     "files": [
       "**/*",
       "!kadastr.exe",
