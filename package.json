@@ -63,6 +63,7 @@
     "@turf/simplify": "^7.3.4",
     "@turf/union": "^7.3.4",
     "docx": "^9.6.1",
+    "electron-updater": "^6.8.11",
     "exceljs": "^4.4.0",
     "extract-zip": "^2.0.1",
     "geotiff": "^3.0.3",

@@ -139,4 +139,34 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('download-progress', handler);
     return () => ipcRenderer.removeListener('download-progress', handler);
   },
+
+  checkForUpdates: () =>
+    ipcRenderer.invoke('check-for-updates'),
+
+  startUpdateDownload: () =>
+    ipcRenderer.send('start-update-download'),
+
+  onUpdateAvailable: (callback) => {
+    const handler = (_event, info) => callback(info);
+    ipcRenderer.on('update-available', handler);
+    return () => ipcRenderer.removeListener('update-available', handler);
+  },
+
+  onUpdateDownloadProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on('update-download-progress', handler);
+    return () => ipcRenderer.removeListener('update-download-progress', handler);
+  },
+
+  onUpdateDownloaded: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('update-downloaded', handler);
+    return () => ipcRenderer.removeListener('update-downloaded', handler);
+  },
+
+  onUpdateError: (callback) => {
+    const handler = (_event, message) => callback(message);
+    ipcRenderer.on('update-error', handler);
+    return () => ipcRenderer.removeListener('update-error', handler);
+  },
 });

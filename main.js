@@ -5,6 +5,7 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
+const { autoUpdater } = require('electron-updater');
 const { lookupEland, stopLookup } = require('./src/eland');
 const { generateResearchXlsx, stopResearch } = require('./src/research');
 const { generatePresentation, stopPresentationGenerate: stopPresentationGenerateJob } = require('./src/pptx');
@@ -314,10 +315,61 @@ function createWindow() {
   });
 }
 
+function setupAutoUpdater() {
+  // Unpackaged dev runs (`npm run electron`) have no update feed - skip entirely.
+  if (!app.isPackaged) {
+    console.log('Auto-update: skipped (dev build).');
+    return;
+  }
+
+  autoUpdater.autoDownload = false;
+
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update-available', { version: info.version });
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update-download-progress', { percent: progress.percent });
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow?.webContents.send('update-downloaded');
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (err) => {
+    mainWindow?.webContents.send('update-error', err.message);
+  });
+
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('Auto-update: check failed:', err.message);
+  });
+}
+
+ipcMain.on('start-update-download', () => {
+  autoUpdater.downloadUpdate().catch((err) => {
+    mainWindow?.webContents.send('update-error', err.message);
+  });
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  if (!app.isPackaged) return { checked: false, reason: 'dev build' };
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { checked: true, updateInfo: result?.updateInfo };
+  } catch (err) {
+    return { checked: false, error: err.message };
+  }
+});
+
 app.commandLine.appendSwitch('no-sandbox');
 
 app.whenReady().then(() => {
   createWindow();
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    setupAutoUpdater();
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

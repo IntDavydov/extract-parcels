@@ -825,6 +825,47 @@ window.api.onDownloadProgress((data) => {
   status.textContent = `${data.file || 'Downloading'}: ${perFile} (overall ${overall}%)`;
 });
 
+// Auto-update toast: shown when main process finds a newer GitHub release.
+// One button does both steps the user asked for - download, then install.
+{
+  const toast = document.getElementById('update-toast');
+  const toastText = document.getElementById('update-toast-text');
+  const toastProgress = document.getElementById('update-toast-progress');
+  const toastProgressBar = document.getElementById('update-toast-progress-bar');
+  const toastBtn = document.getElementById('update-toast-btn');
+
+  window.api.onUpdateAvailable((info) => {
+    toastText.textContent = `Update to v${info.version} is available`;
+    toastBtn.textContent = 'Update now';
+    toastBtn.disabled = false;
+    toast.style.display = 'block';
+  });
+
+  toastBtn.addEventListener('click', () => {
+    toastBtn.disabled = true;
+    toastBtn.textContent = 'Downloading…';
+    toastProgress.style.display = 'block';
+    window.api.startUpdateDownload();
+  });
+
+  window.api.onUpdateDownloadProgress((progress) => {
+    const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+    toastProgressBar.style.width = `${percent}%`;
+    toastBtn.textContent = `Downloading… ${Math.round(percent)}%`;
+  });
+
+  window.api.onUpdateDownloaded(() => {
+    toastBtn.textContent = 'Restarting to install…';
+  });
+
+  window.api.onUpdateError((message) => {
+    toastText.textContent = `Update failed: ${message}`;
+    toastBtn.textContent = 'Retry';
+    toastBtn.disabled = false;
+    toastProgress.style.display = 'none';
+  });
+}
+
 document.getElementById('tab-btn-log').addEventListener('click', () => {
   expandBottomPanel();
   document.getElementById('tab-log').style.display = 'block';
