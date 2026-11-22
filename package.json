@@ -19,7 +19,8 @@
     "publish": {
       "provider": "github",
       "owner": "IntDavydov",
-      "repo": "extract-parcels"
+      "repo": "extract-parcels",
+      "releaseType": "release"
     },
     "files": [
       "**/*",
