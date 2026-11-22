@@ -22,3 +22,39 @@ jobs:
 
       - name: Build Windows installer
         run: npm run build:electron:win -- --publish never
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+          if-no-files-found: error
+
+      - name: Smoke-test the installer (silent install + launch check)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist -Filter '*.exe' | Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
+          if (-not $installer) {
+            throw "No installer .exe found in dist/"
+          }
+          Write-Host "Installing: $($installer.FullName)"
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "Installer exited with code $($proc.ExitCode)"
+          }
+
+          $installedExe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'Land Management.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installedExe) {
+            throw "Could not find installed app under $env:LOCALAPPDATA\Programs"
+          }
+          Write-Host "Found installed app: $($installedExe.FullName)"
+
+          $appProc = Start-Process -FilePath $installedExe.FullName -PassThru
+          Start-Sleep -Seconds 5
+          if ($appProc.HasExited) {
+            throw "App process exited immediately (exit code $($appProc.ExitCode)) - likely crashed on launch"
+          }
+          Write-Host "App is still running after 5s - looks healthy."
+          Stop-Process -Id $appProc.Id -Force
