@@ -1,0 +1,12 @@
+name: windows-build
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Hello
+        run: echo "runner is alive"; Get-Location
