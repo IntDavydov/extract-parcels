@@ -25,6 +25,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build:electron:win -- --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
 
+      - name: Verify and publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assetBlob = gh release view $tag --json assets --jq '.assets[].name' | Out-String
+          $assetNames = $assetBlob -split "`n" | Where-Object { $_ -ne '' }
+          Write-Host "Assets uploaded to $tag so far: $($assetNames -join ', ')"
+
+          $hasYml = $assetNames -contains 'latest.yml'
+          $hasExe = ($assetNames | Where-Object { $_ -like '*.exe' }).Count -gt 0
+          if (-not $hasYml -or -not $hasExe) {
+            throw "Release $tag is missing latest.yml and/or the installer .exe - refusing to publish it live. (electron-builder creates it as a draft; this check only un-drafts it once the real assets are confirmed present.)"
+          }
+
+          gh release edit $tag --draft=false
+          Write-Host "Release $tag verified complete and published live."
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
