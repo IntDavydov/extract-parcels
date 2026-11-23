@@ -322,6 +322,8 @@ function setupAutoUpdater() {
     return;
   }
 
+  // Download only starts when the user clicks the toast button; we then
+  // auto-restart as soon as it finishes so one click covers fetch + install.
   autoUpdater.autoDownload = false;
 
   autoUpdater.on('update-available', (info) => {
