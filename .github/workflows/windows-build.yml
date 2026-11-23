@@ -32,7 +32,9 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $assetBlob = gh release view $tag --json assets --jq '.assets[].name' | Out-String
-          $assetNames = $assetBlob -split "`n" | Where-Object { $_ -ne '' }
+          # Out-String rejoins gh's LF-only output with Windows CRLF, so split
+          # on either and trim - otherwise a stray `r` breaks exact/wildcard matches.
+          $assetNames = ($assetBlob -split "\r?\n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
           Write-Host "Assets uploaded to $tag so far: $($assetNames -join ', ')"
 
           $hasYml = $assetNames -contains 'latest.yml'
